@@ -1,0 +1,236 @@
+# IntuneManager Migration Plan (Swift ➜ Python + PySide6)
+Date: 2025-02-14  
+Maintainer: Codex migration log  
+Python Baseline: 3.13 (managed with `uv`)  
+Primary Tooling: PySide6, msal, msgraph-beta-sdk-python, httpx, SQLModel + SQLite, pydantic, ruff, pytest, mypy, uvx/pyinstaller (to be validated)
+
+## Legend
+- [ ] TODO — not started
+- [>] IN PROGRESS — actively being worked
+- [x] DONE — complete
+- [!] BLOCKED — pending external input
+
+## Current Snapshot (Swift Implementation Reference)
+- [x] P0.1 Summarized current SwiftUI architecture: App entry (`IntuneManagerApp`), SwiftData models, tabbed UI (Dashboard, Devices, Applications, Groups, Assignments, Reports, Settings), MSAL auth singleton, Graph API client with rate limiting, local caching via `LocalDataStore` and `CacheManager`, permission diagnostics. Key services: `DeviceService`, `ApplicationService`, `GroupService`, `AssignmentService`, `PermissionCheckService`, `AssignmentFilterService`, `SyncService`, `AuditLogService`. Platform-specific utilities: `PlatformFileManager`, AppKit activation policy tweaks, macOS haptics feedback, NSPasteboard usage.
+- [x] P0.2 Catalogue Graph endpoints, payload schemas, and batch behaviors from Swift services (Device, Application, Assignment, Group, Configuration, Reports) for parity mapping.  
+  - Base path uses `https://graph.microsoft.com/beta`; confirm v1.0 coverage or required beta endpoints during migration.  
+  - `DeviceService`: GET `/deviceManagement/managedDevices` with `$select/$orderby`, GET `/deviceManagement/managedDevices/{id}`, and POST actions (`/syncDevice`, `/retire`, `/wipe`, `/shutDown`, `/rebootNow`) plus batch payloads via `/$batch`.  
+  - `ApplicationService`: GET `/deviceAppManagement/mobileApps` (expanded assignments, pagination), GET `/mobileApps/{id}`, manage assignments via GET/POST/PATCH/DELETE on `/mobileApps/{id}/assignments`, POST `/mobileApps` for creation, DELETE (single + batched), install summary GET `/mobileApps/{id}/installSummary`, multiple batch operations for assignment churn.  
+  - `AssignmentService`: Constructs bulk operations targeting `/deviceAppManagement/mobileApps/{id}/assign` workflow, uses Graph batching for create/update/delete, validates assignments with additional reads, and logs results per app/group.  
+  - `GroupService`: GET `/groups` (with `$count`, `$orderby`, search filters), GET `/groups/{id}`, members/owners GET endpoints, add/remove via `/groups/{id}/members/$ref`, POST `/groups` for creation, PATCH `/groups/{id}`, DELETE `/groups/{id}`.  
+  - `AssignmentFilterService`: GET `/deviceManagement/assignmentFilters`.  
+  - `ConfigurationService` & `MobileConfigService`: interact with `/deviceManagement/deviceConfigurations`, `/configurationPolicies`, `/configurationPolicyTemplates`, `/configurationPolicyTemplates/{id}/settingTemplates`, `/deviceManagement/configurationSettings`, and assignment endpoints (`/assign`, `/assignments`); supports uploading `.mobileconfig` payloads and assigning to groups.  
+  - `AuditLogService`: GET `/deviceManagement/auditEvents` with `$filter`, `$select`, `$expand`, pagination.  
+  - Supporting utilities (`SyncService`, `PermissionCheckService`, export flows) orchestrate these services without additional endpoints.
+- [x] P0.3 Identify platform-specific dependencies that need Python equivalents (Keychain, SwiftData persistence, App Sandbox expectations, haptics, window commands, command menu shortcuts).  
+  - Authentication relies on MSAL for macOS with AppKit presentation (`NSViewController`, `MSALWebviewParameters`), keychain-backed caches, and lifecycle timers.  
+  - Persistence built on SwiftData (`ModelContainer`, `ModelContext`, `@Model` types) plus `CacheManager` metadata; requires SQL-based cache and migration strategy.  
+  - UI shell leverages SwiftUI `WindowGroup`, `NavigationSplitView`, command menus, AppKit integration (`NSApplication` activation policy, custom command groups, window sizing).  
+  - File/dialog utilities use `NSOpenPanel`, `NSSavePanel`, `NSPasteboard`, and log export to disk; clipboard operations and file pickers need PySide6 counterparts.  
+  - Feedback + accessibility touches: placeholder haptics (`PlatformHaptics`), status banners, splash animations, AppKit alerts (`NSAlert`), progress overlays.  
+  - System storage + config via `UserDefaults`, `Bundle`-derived redirect URIs, entitlements (App Sandbox, Keychain sharing, App Groups).  
+  - Feature-specific dependencies: `.mobileconfig` parsing via `UniformTypeIdentifiers`, PDF export using `PDFKit`, KeychainAccess package for credential helper functions.
+- [x] P0.4 Confirm cross-platform distribution targets (macOS, Windows, Linux) and organization security/compliance requirements for packaging.  
+  - Target OSes: macOS (Apple Silicon + Intel via universal build), Windows 11+, and Ubuntu/Fedora-class Linux distributions.  
+  - Packaging expectations: notarized `.app` + signed `.dmg` for macOS, signed MSIX or MSI installer for Windows (with enterprise-friendly silent install), and AppImage or Flatpak for Linux (deb/rpm optional depending on demand).  
+  - Security/compliance: enforce Azure AD admin consent workflow, ship with organization code signing certificates, document outbound endpoints (`login.microsoftonline.com`, `graph.microsoft.com`, `graph.microsoft.us` if GCC alignment needed), and provide checksum/signature verification guidance.  
+  - Distribution channels: direct download (enterprise portal/Intune Win32 package) plus optional Microsoft Store/internal WinGet feed; macOS via direct download or Intune LOB deployment; Linux via internal artifact registry.  
+  - Follow-up: capture tenant-specific compliance requirements (FIPS, conditional access, EDR expectations) before packaging automation (Phase 9).
+- [x] P0.5 Define migration success metrics (feature parity list, performance targets, authentication reliability, offline cache expectations).  
+  - Feature parity: all Swift features (bulk assignments, device actions, `.mobileconfig` upload, audit logs, reports, cache controls) available on macOS + Windows; Linux may defer PDF export pending toolkit support.  
+  - Auth reliability: ≥99% successful MSAL interactive logins across supported OSes in pilot testing; automatic token refresh without user intervention for ≥48 hours session duration.  
+  - Data performance: initial tenant sync (5k devices / 2k apps / 1k groups) completes within 90 seconds on modern hardware; subsequent refreshes using cache under 20 seconds.  
+  - UI responsiveness: list virtualization keeps frame render >45 FPS when scrolling 5k-row grids; background tasks must not block UI thread.  
+  - Offline/cached mode: cached reads available when offline; explicit indicator and graceful degradation for write operations.  
+  - Quality gates: unit/integration tests ≥85% critical path coverage, automated UI smoke tests run per commit, zero high-severity lint/type errors.  
+  - Adoption metric: ability to package and deploy via Intune Win32 and macOS LOB with less than 30 min administrator effort.
+
+## Phase 1 – Python Project Bootstrapping (uv-first)  ✳️ Goal: Standing Python workspace
+- [x] P1.1 Initialize project scaffold with `uv init` (`uv init intune_manager_gui`), targeting Python 3.13 and enabling `uv-lock`.  
+  - Executed `uv init --python 3.13 --package --name intune_manager .`, creating `pyproject.toml`, `src/intune_manager/__init__.py`, and placeholder `README.md`.
+- [x] P1.2 Configure `pyproject.toml` with core dependencies (PySide6, msal, msgraph-beta-sdk, httpx for ancillary calls, pydantic, sqlmodel/sqlalchemy, aiosqlite, python-dotenv, structlog or loguru, tenacity, ruff, pytest, pytest-qt, mypy); set optional extras for dev/test/build.  
+  - Added runtime deps via `uv add PySide6 msal msgraph-beta-sdk httpx structlog loguru tenacity python-dotenv pydantic sqlmodel sqlalchemy aiosqlite`.  
+  - Added dev tooling via `uv add --dev ruff pytest pytest-qt mypy pytest-asyncio respx`.  
+  - `uv` generated `.venv`, `uv.lock`, and updated `pyproject.toml` accordingly.
+- [x] P1.3 Set up `uv` scripts/aliases for running app (`uv run`), linting, tests, formatting; integrate `ruff` checks (lint + format), `mypy`, and `pytest`.  
+  - Registered console entrypoints (`intune-manager-…`) in `project.scripts` backed by `intune_manager.cli.tasks`, enabling `uv run intune-manager-lint|fmt|typecheck|tests`.
+- [x] P1.4 Establish project structure (`src/intune_manager/...`) with package namespaces for `auth`, `services`, `data`, `ui`, `config`, `utils`, `cli` (if any), aligning to layered architecture.  
+  - Created subpackages (`auth`, `services`, `data`, `ui`, `config`, `utils`, `cli`, `graph`) with `__init__.py` placeholders and dedicated `AGENTS.md` guides.
+- [x] P1.5 Add foundational README + CONTRIBUTING skeleton describing uv workflow, Python version, and decision log referencing this migration file.  
+  - Authored `README.md` with prerequisites, uv commands, layout overview, and AGENT references.  
+  - Added `CONTRIBUTING.md` capturing LLM collaboration workflow and core scripts.
+
+## Phase 2 – Core Infrastructure & Configuration  ✳️ Goal: Reusable runtime services
+- [x] P2.1 Implement centralized settings loader (dotenv + platform config directory) with support for tenant/client IDs, Graph scopes, environment overrides, and secure secret storage strategy.  
+  - Added `platformdirs` dependency for cross-platform config/cache directories.  
+  - Implemented `Settings` dataclass and `SettingsManager` in `intune_manager.config.settings` covering env loading, default scope population, cache path management, and persistence helpers.
+- [x] P2.2 Create structured logging pipeline (structlog/loguru + rotating file handler) with log export feature parity; integrate telemetry hooks for UI notifications.  
+  - Added `intune_manager.utils.logging` leveraging loguru sinks (console + rotating file) and structlog processors with context binding; exposes `configure_logging`, `get_logger`, and `log_file_path` for future export UI.  
+  - Updated package entrypoint to initialise logging and emit placeholder startup log.
+- [x] P2.3 Build async task orchestration utilities (asyncio + Qt event loop integration via `qasync` or PySide6’s `QFuture` adapters) for background network operations with cancellation/progress reporting.  
+  - Added `qasync` dependency and created `intune_manager.utils.asyncio` with `AsyncBridge`, `ensure_qt_event_loop`, interval scheduling, and delayed callbacks to bridge asyncio with PySide6.  
+  - Introduced `run_background` helper (`utils.background`) for lightweight task tracking.
+- [x] P2.4 Port rate limiting/backoff strategy from `RateLimiter` to Python (tenacity + custom throttling), ensuring Graph 429 handling and batch split logic.  
+  - Implemented `intune_manager.graph.rate_limiter.RateLimiter` mirroring Swift logic (window tracking, retry calculation, batch splitting) and exported singleton for graph services.
+- [x] P2.5 Design error domain + exception hierarchy mirroring Swift error surfaces (auth failures, permission issues, API decoding, network faults) for consistent UI messaging.  
+  - Added `intune_manager.graph.errors` with categorized error classes, recovery helpers, and permission metadata for UI surfaces; integrated with rate limiter retry decisions.
+- [x] P2.6 Establish a reusable Graph client factory wrapping `GraphServiceClient` (msgraph-sdk-python) with centralized auth provider, middleware, retry hooks, and telemetry instrumentation shared across services.  
+  - Added `intune_manager.graph.client` with callback credential binding, rate-limited `httpx` adapter, and Graph error translation for consistent service integration.
+
+## Phase 3 – Authentication & Permission Management  ✳️ Goal: Reliable MSAL login parity
+- [x] P3.1 Integrate MSAL for Python with device code / embedded browser flow (evaluate `msal` + system browser) and persistent token cache (per-user, encrypted when possible).  
+  - Added `auth.auth_manager` leveraging `msal` PublicClientApplication with serialized cache (`TokenCacheManager`) stored under runtime directory.
+- [x] P3.2 Build authentication manager singleton with async interface, login/logout, silent token acquire, token refresh, and multi-tenant support; expose signals for UI state changes.  
+  - AuthManager now provides async wrappers (`acquire_token`, `sign_in_interactive`, `sign_out`) and synchronous token provider for Graph client integration, tracking current user metadata.
+- [x] P3.3 Implement permission checker mirroring `PermissionCheckService` (decode JWT scopes, compare against required permissions map, surface missing scopes in UI).  
+  - Introduced `PermissionChecker` to derive granted scopes from JWT payload and report missing required Microsoft Graph permissions.
+- [x] P3.4 Define secure secret storage cross-platform (macOS Keychain via `keyring`, Windows Credential Manager, SecretService on Linux) for client secrets if required; fall back to encrypted local store with user prompt.  
+  - Added `SecretStore` wrapper using `keyring` for storing confidential configuration values.
+- [x] P3.5 Provide configuration UI for tenant/client values, redirect URI guidance, and test-auth workflow similar to Swift Setup screens.  
+  - Added `ui.settings` package with `SettingsController`, `SettingsWidget`, and dialog wrapper orchestrating SettingsManager/AuthManager/PermissionChecker flows.  
+  - Implemented UI affordances: Azure registration form, scope editor, keyring-backed client secret management, interactive sign-in, and permission diagnostics/missing-scope list with busy-state signalling for future shell integration.
+
+## Phase 4 – Data Modeling & Persistence  ✳️ Goal: Local cache + shared domain models
+- [x] P4.1 Model Graph entities using pydantic models (Applications, Devices, Groups, Assignments, Filters, Profiles, Audit Logs) with serialization helpers matching SwiftData attributes.
+  - Added `data.models` package capturing managed devices, mobile apps, directory groups, configuration profiles/settings, assignment targets, and audit events with Graph alias mapping + `from_graph`/`to_graph` helpers.
+  - Established enumeration coverage for compliance/management states, assignment intents, and configuration profile metadata to mirror SwiftData enums for later persistence.
+- [x] P4.2 Design local persistence layer using SQLModel + SQLite (per-user database) including schema migrations, hydration routines, and cache metadata tracking.
+  - Introduced `data.sql` package with SQLModel tables for devices, apps, groups, assignments, configuration profiles, audit events, and cache metadata plus `SchemaVersion` tracking (`SCHEMA_VERSION=1`).
+  - Added `DatabaseManager`/`DatabaseConfig` for engine creation + schema validation and mapper utilities to convert Graph pydantic models into SQL records and back.
+- [x] P4.3 Implement repository interfaces mirroring `LocalDataStore` for fetch/replace operations, time-to-live metadata, and selective cache clearing.
+  - Added `data.repositories` package with cache-aware base repository leveraging `CacheEntry` TTL metadata, and concrete repositories for devices, apps (including assignment join management), groups, configuration profiles, and audit events.
+  - Mappers now round-trip mobile app assignments; repositories expose `list`, `replace_all`, `clear`, and `is_cache_stale` helpers for the upcoming service layer.
+- [x] P4.4 Build abstraction for attachments/binary data (icons, logs) with caching strategy and disk quota management.
+  - Added `data.storage` module exposing an `AttachmentCache` handling hashed file storage under the cache directory, quota enforcement, and TTL-based purging with tenant-aware scopes.
+  - Metadata struct (`AttachmentMetadata`) recorded for UI/service consumers; cache integrates with logging for capacity events.
+- [x] P4.5 Validate data model coverage against Swift models (fields, enums) and document deviations or simplifications.
+  - Cross-checked SwiftData models for Devices, Applications, Assignments, Groups, Configuration Profiles, Audit Logs against new pydantic layer; confirmed parity for critical identifiers, timestamps, status enums, and relationships.
+  - Documented intentional omissions to tackle later: mobile app platform-specific metadata (appType, minimum OS, install commands), icon blobs, install summaries, configuration setting applicability details, and audit actor/resource ancillary fields.
+  - Added follow-up Phase 5/6 tasks to ensure these gaps are covered via service enrichment and attachment cache integration.
+
+## Phase 5 – Graph Service Layer & Business Logic  ✳️ Goal: Feature-complete domain services
+- [x] P5.1 Build Graph access layer atop `GraphServiceClient` (`msgraph-beta-sdk-python`), adding convenience wrappers for pagination, batching, beta/v1.0 endpoint selection, and integrating custom rate limiting + diagnostics.
+  - `GraphClientFactory` now exposes unified `request|request_json|request_bytes` helpers with per-call API version overrides, plus async collection paging hardened for `$skipToken`.
+  - Expanded `$batch` support via typed `GraphRequest` descriptors; added request builders for device actions, mobile app assignment flows, install summaries, icon downloads, configuration assigns, audit queries, and assignment filters.
+  - Telemetry events remain structured for Phase 8 instrumentation and feed the new service layer events.
+- [x] P5.2 Implement service classes: `DeviceService`, `ApplicationService`, `GroupService`, `AssignmentService`, `AssignmentFilterService`, `SyncService`, `AuditLogService`, `ConfigurationService`, `MobileConfigService`, `ExportService` equivalents using the shared Graph layer; ensure caching + state signals.
+  - Introduced `services.base.EventHook` + `RefreshEvent`/`ServiceErrorEvent` for Qt bridging; seeded dedicated modules for each domain with cohesive async APIs and rich logging.
+  - `DeviceService` streams Graph results directly into the cache via `DeviceRepository.replace_all_async`, emits refresh/action events, and centralises managed device operations.
+  - Application/group/filter/configuration services hydrate repositories, manage icon caching + install summaries, and expose targeted fetch/update hooks with tenant-aware TTLs.
+  - Added SQL + repository support for assignment filters, ensured services export icon/assignment metadata, and wired `SyncService` to orchestrate multi-phase refresh runs.
+- [x] P5.3 Recreate device action endpoints (sync, wipe, retire, restart, shutdown) with confirmation flows and permission error surfacing.
+  - `DeviceService.perform_action` wraps the beta action endpoints, applies telemetry-friendly payload handling, and publishes `DeviceActionEvent` success/failure notifications for UI feedback.
+- [x] P5.4 Implement assignment workflows (list, edit, copy, bulk apply, backup/restore) with transactional safeguards and dry-run checks.
+  - Crafted `AssignmentService` with structural diffing (`AssignmentDiff`/`AssignmentUpdate`), Graph assign batching, delete batching via `$batch`, and JSON export helpers for backup/restore.
+- [x] P5.5 Provide reporting/export features (CSV/JSON) and integrate with logging + UI progress.
+  - `ExportService` produces CSV snapshots for devices/apps and JSON exports for audit logs, emitting completion events for UI status integration.
+- [x] P5.6 Audit Graph endpoints for beta-only coverage; document where msgraph-sdk-python requires beta models or custom request builders and define fallbacks for unsupported operations.
+  - Beta-only: device actions (`/deviceManagement/managedDevices/{id}/action` family), mobile app assignment workflows (`/deviceAppManagement/mobileApps/{id}/assign` + `assignments`), install summaries, assignment filters, configuration policy templates.
+  - GA-compatible: core group/device listings (still consume beta for parity), audit events (beta needed for Intune category rich data), configuration assigns (beta ensures payload compatibility with macOS custom profiles).
+  - Documented reliance on raw REST for gaps in SDK coverage and left ADR pointer for future GA migration.
+
+## Phase 6 – PySide6 UI/UX Implementation  ✳️ Goal: Cross-platform GUI parity
+- [x] P6.1 Establish application shell (QMainWindow) with tabbed navigation replicating Dashboard, Devices, Applications, Groups, Assignments, Reports, Settings; design with responsive layouts and docking support.
+  - Delivered `MainWindow` controller with `AsyncBridge`, navigation rail, status bar, busy overlay + toast helpers, and persisted geometry/state via `QSettings`.
+  - Theme preference restored through new `ThemeManager`, tenant badge surfaced in status bar, and placeholders now reuse `PageScaffold`.
+  - Sync service events now drive busy notifications + success/error toasts; nav status messaging respects busy state.
+- [>] P6.2 Create shared UI components (loading overlays, toast/notification system, permission alerts, dialogs) matching Swift UX affordances.
+  - Introduced `src/intune_manager/ui/components` with themed palette, layout primitives, dialog helpers, toast manager, busy overlay, and tenant badge.
+  - Outstanding: permission/consent banner widget and global command palette wiring; integrate toast shorthand helpers for feature modules.
+  - Next: expose component registry + context providers so modules can request overlays/toasts without direct window dependency.
+- [>] P6.3 Implement Dashboard view (summary metrics, charts via Qt Charts or matplotlib embedding, status indicators for auth/cache).
+  - Built `ui.dashboard` package with controller + `DashboardWidget` surfacing resource metrics, stale indicators, warnings, and sync-triggering refresh action.
+  - Outstanding: integrate auth/tenant status cards and chart visualisations (compliance breakdown, assignment success) once analytics data sources land.
+  - TODO: optimise metric counts via repository helpers (`cached_count`) to avoid materialising full datasets during dashboard refresh.
+- [ ] P6.4 Build Devices module (search/filter panel, detail drawer, action toolbar, batch operations) with async updates and virtualization for large lists.
+  - Use Qt `QAbstractTableModel` + `QSortFilterProxyModel` for scalable grids, integrate `DeviceService` refresh + action events.
+  - Provide detail pane with device metadata, installed app list, and action buttons (sync/wipe/etc) with optimistic UI feedback.
+- [ ] P6.5 Build Applications module (list/grid, detail view, assignment editors, platform filters, icon handling, bulk import for system apps).
+  - Display app catalog with icon caching, platform filters, assignment summary badges, and search.
+  - Integrate assignment editor drawer leveraging `AssignmentService` diff/apply workflow and backup/export shortcuts.
+- [ ] P6.6 Build Groups module (list, hierarchy view, membership display, selection for assignments).
+  - Present group list/tree with dynamic membership counts, member viewer, and add/remove flows backed by `GroupService`.
+  - Support selection syncing with assignment editors (multi-select, search, role filter).
+- [ ] P6.7 Build Assignments center (quick look, backup/restore, diffing, bulk assignment wizard).
+  - Create dedicated wizard view for comparing app assignments, running `AssignmentService` diffs, executing bulk apply, and restoring backups.
+  - Include history log + dry-run preview with conflict warnings and filter awareness.
+- [ ] P6.8 Build Reports module (audit log viewer, export buttons, filter controls).
+  - Table view for audit events with filter toolbar (date range, actor, category) and integration with `ExportService`.
+  - Provide quick actions: export CSV/JSON, copy row, link to Azure portal entry.
+- [ ] P6.9 Build Settings/Configuration views (auth status, tenant config, cache management, theme selection, log export, about dialog) reusing the Phase 3 `SettingsWidget` and extending with cache/log controls plus navigation wiring.
+  - Embed existing settings widget inside shell tab, add sub-pages for cache inspection, log export, keyring inspection, theme toggle, and about/license info.
+  - Hook cache clear / attachment purge to repositories + `AttachmentCache`, surface telemetry opt-in.
+- [ ] P6.10 Ensure accessibility, keyboard shortcuts, dark/light theme support, and localization scaffolding.
+  - Define cross-platform shortcut map (navigation, refresh, search, actions) and expose to help overlay.
+  - Audit tab order, focus cues, and high-contrast palette; bootstrap Qt translation catalog (`.ts`) and wiring for future locale packs.
+
+## Phase 7 – Supporting Features & Polish  ✳️ Goal: Match Swift niceties
+- [ ] P7.1 Implement log export workflow (collect structured logs, copy to clipboard or save dialog) and integrate success feedback.
+- [ ] P7.2 Add clipboard utilities (permission list copy, device info copy) using Qt clipboard APIs.
+- [ ] P7.3 Implement notifications/haptics alternatives (system notifications, subtle animations) respecting platform conventions.
+- [ ] P7.4 Add cache management UI (clear local data, refresh triggers) with confirmation prompts.
+- [ ] P7.5 Review performance for large tenants (list virtualization, incremental loading, cancellation support).
+
+## Phase 8 – Quality Assurance & Automation  ✳️ Goal: Confidence in regressions
+- [ ] P8.1 Write unit tests for services, data models, auth flows using pytest + pytest-asyncio + respx/httpx mocking.
+- [ ] P8.2 Add UI tests with pytest-qt or squish-style smoke tests for critical workflows (login, device fetch, assignment edit).
+- [ ] P8.3 Configure continuous integration (GitHub Actions) running uv install, lint, type-check, tests on macOS/Windows/Linux runners.
+- [ ] P8.4 Add static analysis gates (ruff + mypy) and maintain coverage thresholds.
+- [ ] P8.5 Implement test doubles or mock server for Graph API to enable offline development.
+
+## Phase 9 – Packaging & Deployment  ✳️ Goal: Deliverable installers per platform
+- [ ] P9.1 Evaluate packaging toolchain compatibility with uv (e.g., `uvx pyinstaller`, `briefcase`, `nuitka`) and choose approach per OS.
+- [ ] P9.2 Automate build scripts for macOS (.app + dmg), Windows (.exe/msi), Linux (AppImage/Flatpak) ensuring MSAL redirect support.
+- [ ] P9.3 Code-signing strategy (macOS notarization, Windows signing) and integration with CI secrets.
+- [ ] P9.4 Implement in-app update check or release notifications aligned with distribution choice.
+- [ ] P9.5 Produce deployment verification checklist (auth test, Graph call, log export, cache, assignments).
+
+## Phase 10 – Documentation & Knowledge Transfer  ✳️ Goal: Sustainable hand-off
+- [ ] P10.1 Maintain developer docs (architecture overview, module guides, setup instructions) alongside code.
+- [ ] P10.2 Draft user-facing guide highlighting new cross-platform capabilities and any workflow adjustments.
+- [ ] P10.3 Record migration decisions, trade-offs, and outstanding Swift-only behaviors in CHANGELOG / ADRs.
+- [ ] P10.4 Plan incremental release milestones (alpha/beta) with feedback loops from existing macOS users.
+- [ ] P10.5 Final review with stakeholders; update this migration log with closure notes.
+
+## Risks & Considerations
+- MSAL platform differences (embedded web view vs system browser) may impact UX; evaluate early.
+- Graph API throttling at scale — ensure batching + retry logic is robust before enabling bulk operations.
+- Local cache integrity during schema evolution — plan migrations carefully to avoid data loss.
+- Packaging tool compatibility with uv-managed environments; may require custom build hooks.
+- Accessibility + High DPI support on Windows/Linux needs targeted testing.
+- Azure AD permission consent flows differ per tenant; provide guidance and diagnostics in-app.
+
+## Progress Log
+- 2025-02-14: Initial Swift project assessment completed; migration plan drafted and logged here.
+- 2025-02-14: Documented Graph API usage (P0.2) and platform-specific dependencies (P0.3); noted msgraph-sdk-python adoption and added supporting tasks.
+- 2025-02-14: Switched Graph dependency to `msgraph-beta-sdk-python` to ensure Intune beta endpoints coverage; updated tooling references and tasks.
+- 2025-02-14: Established packaging targets and compliance considerations (P0.4) and documented migration success metrics baseline (P0.5).
+- 2025-02-14: Ran `uv init --python 3.13 --package --name intune_manager .` to scaffold Python project (P1.1).
+- 2025-02-14: Added runtime and dev dependencies with `uv add …` commands completing P1.2 setup.
+- 2025-02-14: Defined uv scripts for run/lint/format/typecheck/tests (P1.3).
+- 2025-02-14: Scaffolded core package directories with AGENT playbooks (P1.4).
+- 2025-02-14: Published README/CONTRIBUTING scaffolding with uv workflow guidelines (P1.5).
+- 2025-02-14: Implemented configurable settings loader with platform directories fallback (P2.1).
+- 2025-02-14: Established structlog/loguru logging backbone with rotating file support (P2.2).
+- 2025-02-14: Created asyncio ↔ PySide6 bridge utilities and background task helpers (P2.3).
+- 2025-02-14: Ported Swift rate limiter to Python, including batching helpers (P2.4).
+- 2025-02-14: Defined Graph API error hierarchy with recovery metadata (P2.5).
+- 2025-02-14: Wrapped msgraph-beta client with rate-limited factory and callback credentials (P2.6).
+- 2025-02-14: Integrated MSAL auth manager, token cache, permission checker, and keyring-backed secret store (P3.1–P3.4).
+- 2025-10-22: Delivered PySide6 tenant configuration UI (P3.5) with controller-driven settings persistence, keyring client-secret handling, interactive login, and missing scope diagnostics.
+- 2025-10-22: Introduced pydantic Graph domain models (P4.1) covering devices, apps, groups, assignments, configuration artifacts, and audit events with enum mappings ready for SQLModel hydration.
+- 2025-10-22: Built SQLModel persistence foundation (P4.2) with schema versioning, cache metadata tracking, and mappers bridging Graph models to SQLite records.
+- 2025-10-22: Created cache-aware repositories (P4.3) handling TTL metadata and assignment joins to feed the future service layer.
+- 2025-10-22: Added binary attachment cache (P4.4) providing hashed storage, tenant scoping, TTL purging, and quota enforcement for icons/log bundles.
+- 2025-10-22: Validated domain model coverage vs SwiftData and documented remaining enrichment gaps (P4.5); expanded Phase 5 implementation roadmap accordingly.
+- 2025-10-22: Began Phase 5 by extending Graph client factory with pagination helpers, batch executor, and telemetry instrumentation (P5.1 in progress).
+- 2025-10-22: Added DeviceService scaffold using new Graph client iterators and repository integration (P5.2 underway).
+- 2025-10-23: Finalised Graph client helper suite (`request_bytes`, typed batch builders) and beta endpoint request builders for assignments, icons, device actions (P5.1 complete).
+- 2025-10-23: Delivered service layer implementations (devices/apps/groups/assignments/filters/configurations/audit/export/sync) with event emitters, streaming cache writes, and icon caching plus assignment diff workflows (P5.2–P5.5 complete).
+- 2025-10-23: Documented beta endpoint coverage vs GA fallback, highlighted raw REST dependencies, and updated migration controls for consent guidance (P5.6).
+- 2025-10-23: Bootstrapped PySide6 `MainWindow` shell with navigation stack, status bar, and placeholder panes awaiting module wiring (P6.1 underway).
+- 2025-10-24: Finalised core shell (P6.1) with persisted geometry/theme, tenant badge, toast + busy overlay helpers, and SyncService wiring; stood up `ui/components` design system package (P6.2 in progress) covering theme manager, layouts, dialogs, toasts, and overlay scaffolding.
+- 2025-10-24: Scaffolded `ui.dashboard` with metric cards, warnings list, and tenant sync trigger tied to new components (P6.3 in progress).
+
+---
+Instructions: Update tasks with `[>]` / `[x]` as work progresses. Append new phases/tasks as requirements evolve. Keep concise notes per item (e.g., date, outcome, blockers) to retain context across sessions.
