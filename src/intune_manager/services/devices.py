@@ -25,6 +25,13 @@ class DeviceActionEvent:
     error: Exception | None = None
 
 
+@dataclass(slots=True)
+class DeviceRefreshProgressEvent:
+    tenant_id: str | None
+    processed: int
+    finished: bool = False
+
+
 class DeviceService:
     """Encapsulates managed device workflows with caching and device actions."""
 
@@ -41,6 +48,8 @@ class DeviceService:
         self.refreshed: EventHook[RefreshEvent[list[ManagedDevice]]] = EventHook()
         self.errors: EventHook[ServiceErrorEvent] = EventHook()
         self.actions: EventHook[DeviceActionEvent] = EventHook()
+        self.refresh_progress: EventHook[DeviceRefreshProgressEvent] = EventHook()
+        self._progress_interval = 100
 
     # ------------------------------------------------------------------ Queries
 
@@ -57,6 +66,11 @@ class DeviceService:
 
     def is_cache_stale(self, tenant_id: str | None = None) -> bool:
         return self._repository.is_cache_stale(tenant_id=tenant_id)
+
+    def count_cached(self, tenant_id: str | None = None) -> int:
+        """Return cached device count without materialising rows."""
+
+        return self._repository.count(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 
@@ -84,20 +98,41 @@ class DeviceService:
         if expand_related:
             params = {"$expand": "detectedApps"}
 
+        processed = 0
+        interval = max(50, self._chunk_size // 2)
+
         async def device_iterator() -> AsyncIterator[ManagedDevice]:
+            nonlocal processed
             async for item in self._client_factory.iter_collection(
                 "GET",
                 "/deviceManagement/managedDevices",
                 params=params,
             ):
+                processed += 1
+                if processed % interval == 0:
+                    self.refresh_progress.emit(
+                        DeviceRefreshProgressEvent(
+                            tenant_id=tenant_id,
+                            processed=processed,
+                            finished=False,
+                        ),
+                    )
                 yield ManagedDevice.from_graph(item)
 
         try:
-            await self._repository.replace_all_async(
+            count = await self._repository.replace_all_async(
                 device_iterator(),
                 tenant_id=tenant_id,
                 expires_in=self._default_ttl,
                 chunk_size=self._chunk_size,
+            )
+            processed = max(processed, count)
+            self.refresh_progress.emit(
+                DeviceRefreshProgressEvent(
+                    tenant_id=tenant_id,
+                    processed=processed,
+                    finished=True,
+                ),
             )
             items = self.list_cached(tenant_id=tenant_id)
             self.refreshed.emit(
@@ -161,4 +196,4 @@ class DeviceService:
             raise
 
 
-__all__ = ["DeviceService", "DeviceActionEvent"]
+__all__ = ["DeviceService", "DeviceActionEvent", "DeviceRefreshProgressEvent"]

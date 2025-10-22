@@ -4,6 +4,7 @@ from typing import Iterable
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -40,7 +41,7 @@ class SectionHeader(QWidget):
         self.title_label.setProperty("class", "page-title")
         font = self.title_label.font()
         font.setPointSizeF(font.pointSizeF() + 4)
-        font.setWeight(600)
+        font.setWeight(QFont.Weight.DemiBold)
         self.title_label.setFont(font)
 
         header_row.addWidget(self.title_label)

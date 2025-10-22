@@ -1,5 +1,9 @@
 """UI package for the Intune Manager application."""
 
+from .applications import ApplicationsWidget
+from .assignments import AssignmentsWidget
+from .devices import DevicesWidget
+from .groups import GroupsWidget
 from .settings import (
     AuthStatus,
     SettingsController,
@@ -17,6 +21,10 @@ __all__ = [
     "SettingsSnapshot",
     "SettingsWidget",
     "DashboardWidget",
+    "DevicesWidget",
+    "ApplicationsWidget",
+    "GroupsWidget",
+    "AssignmentsWidget",
     "MainWindow",
     "NavigationItem",
 ]

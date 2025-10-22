@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from intune_manager.data import DirectoryGroup, GroupRepository
+from intune_manager.data import DirectoryGroup, GroupMember, GroupRepository
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.services.base import EventHook, RefreshEvent, ServiceErrorEvent
 from intune_manager.utils import get_logger
@@ -45,6 +45,9 @@ class GroupService:
 
     def is_cache_stale(self, tenant_id: str | None = None) -> bool:
         return self._repository.is_cache_stale(tenant_id=tenant_id)
+
+    def count_cached(self, tenant_id: str | None = None) -> int:
+        return self._repository.count(tenant_id=tenant_id)
 
     # ---------------------------------------------------------------- Actions
 
@@ -146,6 +149,39 @@ class GroupService:
             ),
         )
         logger.debug("Removed group member", group_id=group_id, member_id=member_id)
+
+    async def list_members(self, group_id: str) -> list[GroupMember]:
+        members: list[GroupMember] = []
+        async for item in self._client_factory.iter_collection(
+            "GET",
+            f"/groups/{group_id}/members",
+            params={"$select": "id,displayName,userPrincipalName,mail"},
+            headers={"ConsistencyLevel": "eventual"},
+        ):
+            members.append(GroupMember.from_graph(item))
+        logger.debug("Fetched group members", group_id=group_id, count=len(members))
+        return members
+
+    async def list_owners(self, group_id: str) -> list[GroupMember]:
+        owners: list[GroupMember] = []
+        async for item in self._client_factory.iter_collection(
+            "GET",
+            f"/groups/{group_id}/owners",
+            params={"$select": "id,displayName,userPrincipalName,mail"},
+            headers={"ConsistencyLevel": "eventual"},
+        ):
+            owners.append(GroupMember.from_graph(item))
+        logger.debug("Fetched group owners", group_id=group_id, count=len(owners))
+        return owners
+
+    async def update_membership_rule(self, group_id: str, rule: str | None) -> None:
+        payload: dict[str, object | None] = {"membershipRule": rule}
+        if rule:
+            payload["membershipRuleProcessingState"] = "On"
+        else:
+            payload["membershipRuleProcessingState"] = "Paused"
+        await self.update_group(group_id, payload)
+        logger.debug("Updated membership rule", group_id=group_id)
 
 
 __all__ = ["GroupService", "GroupMembershipEvent"]

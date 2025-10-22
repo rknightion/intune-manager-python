@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from .common import TimestampedResource
+from .common import GraphResource, TimestampedResource
 
 
 class GroupType(StrEnum):
@@ -26,3 +26,10 @@ class DirectoryGroup(TimestampedResource):
         default=None,
         alias="membershipRuleProcessingState",
     )
+
+
+class GroupMember(GraphResource):
+    display_name: str | None = Field(default=None, alias="displayName")
+    user_principal_name: str | None = Field(default=None, alias="userPrincipalName")
+    mail: str | None = Field(default=None, alias="mail")
+    odata_type: str | None = Field(default=None, alias="@odata.type")

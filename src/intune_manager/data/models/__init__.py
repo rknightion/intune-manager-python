@@ -15,7 +15,7 @@ from .common import GraphBaseModel, GraphResource, TimestampedResource
 from .configuration import ConfigurationProfile, ConfigurationSetting, SettingTemplate
 from .device import InstalledApp, ManagedDevice
 from .filters import AssignmentFilter
-from .group import DirectoryGroup
+from .group import DirectoryGroup, GroupMember
 
 __all__ = [
     "GraphBaseModel",
@@ -32,6 +32,7 @@ __all__ = [
     "AssignmentIntent",
     "MobileAppAssignment",
     "DirectoryGroup",
+    "GroupMember",
     "AssignmentFilter",
     "ConfigurationProfile",
     "ConfigurationSetting",

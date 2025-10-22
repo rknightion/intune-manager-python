@@ -36,6 +36,9 @@ class AuditLogService:
     def is_cache_stale(self, tenant_id: str | None = None) -> bool:
         return self._repository.is_cache_stale(tenant_id=tenant_id)
 
+    def count_cached(self, tenant_id: str | None = None) -> int:
+        return self._repository.count(tenant_id=tenant_id)
+
     async def refresh(
         self,
         tenant_id: str | None = None,

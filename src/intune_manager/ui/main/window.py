@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
-from typing import Callable, Dict
+from typing import Awaitable, Callable, Dict
 
 from PySide6.QtCore import Qt, QSize, QSettings
-from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,19 +15,29 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
+    QVBoxLayout,
     QWidget,
 )
 
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry, SyncProgressEvent
 from intune_manager.ui.components import (
+    AlertBanner,
     BusyOverlay,
+    CommandAction,
+    CommandPalette,
+    CommandRegistry,
     PageScaffold,
     TenantBadge,
     ThemeManager,
     ToastLevel,
     ToastManager,
+    UIContext,
 )
+from intune_manager.ui.assignments import AssignmentsWidget
+from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
+from intune_manager.ui.devices import DevicesWidget
+from intune_manager.ui.groups import GroupsWidget
 from intune_manager.utils import get_logger
 from intune_manager.utils.asyncio import AsyncBridge
 
@@ -66,18 +77,28 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._nav_list = QListWidget()
         self._pages: Dict[str, QWidget] = {}
+        self._content_container: QWidget | None = None
+        self._alert_banner: AlertBanner | None = None
         self._settings_store = QSettings("IntuneManager", "IntuneManagerApp")
         self._theme_manager = ThemeManager()
         self._toast_manager: ToastManager | None = None
         self._busy_overlay: BusyOverlay | None = None
+        self._command_registry = CommandRegistry()
+        self._command_palette: CommandPalette | None = None
+        self._ui_context: UIContext | None = None
         self._tenant_badge = TenantBadge()
         self._status_default_message = "Ready"
         self._busy_default_message = "Working…"
         self._subscriptions: list[Callable[[], None]] = []
+        self._shortcuts: list[QShortcut] = []
+        self._dashboard_widget: DashboardWidget | None = None
 
         self._configure_window()
         self._build_layout()
         self._initialize_components()
+        self._populate_navigation()
+        self._register_shortcuts()
+        self._register_commands()
         self._connect_navigation()
         self._connect_services()
         self._restore_window_preferences()
@@ -97,8 +118,19 @@ class MainWindow(QMainWindow):
 
     def _build_layout(self) -> None:
         central = QWidget()
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout = QVBoxLayout(central)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        self._alert_banner = AlertBanner(parent=central)
+        self._alert_banner.hide()
+        outer_layout.addWidget(self._alert_banner)
+
+        content = QWidget()
+        self._content_container = content
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         self._nav_list.setObjectName("NavigationList")
         self._nav_list.setMaximumWidth(220)
@@ -109,26 +141,10 @@ class MainWindow(QMainWindow):
             QSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding),
         )
 
-        for index, item in enumerate(self.NAV_ITEMS):
-            list_item = QListWidgetItem(item.icon or QIcon(), item.label)
-            list_item.setData(Qt.ItemDataRole.UserRole, item.key)
-            self._nav_list.addItem(list_item)
-            if item.key == "dashboard":
-                page = DashboardWidget(
-                    self._services,
-                    parent=self._stack,
-                    host=self,
-                )
-            else:
-                page = self._create_placeholder_page(item)
-            self._pages[item.key] = page
-            self._stack.addWidget(page)
-            if index == 0:
-                self._nav_list.setCurrentRow(0)
-                self._stack.setCurrentIndex(0)
+        content_layout.addWidget(self._nav_list)
+        content_layout.addWidget(self._stack, stretch=1)
 
-        layout.addWidget(self._nav_list)
-        layout.addWidget(self._stack, stretch=1)
+        outer_layout.addWidget(content, stretch=1)
         self.setCentralWidget(central)
 
     def _initialize_components(self) -> None:
@@ -137,8 +153,113 @@ class MainWindow(QMainWindow):
             return
         self._busy_overlay = BusyOverlay(central)
         self._toast_manager = ToastManager(central, theme=self._theme_manager)
+        self._command_palette = CommandPalette(
+            self._command_registry,
+            executor=self._execute_command,
+            parent=self,
+        )
         self._theme_manager.themeChanged.connect(self._apply_theme)
         self._apply_theme()
+
+    def _populate_navigation(self) -> None:
+        if self._ui_context is None:
+            # Ensure components initialised before populating navigation.
+            self._ui_context = UIContext(
+                show_notification=self.show_notification,
+                set_busy=self.set_busy,
+                clear_busy=self.clear_busy,
+                run_async=self.run_async,
+                command_registry=self._command_registry,
+                theme_manager=self._theme_manager,
+                show_banner=self.show_banner,
+                clear_banner=self.clear_banner,
+            )
+
+        self._nav_list.clear()
+
+        while self._stack.count():
+            widget = self._stack.widget(0)
+            self._stack.removeWidget(widget)
+            widget.deleteLater()
+
+        self._pages.clear()
+        self._dashboard_widget = None
+
+        for index, item in enumerate(self.NAV_ITEMS):
+            list_item = QListWidgetItem(item.icon or QIcon(), item.label)
+            list_item.setData(Qt.ItemDataRole.UserRole, item.key)
+            self._nav_list.addItem(list_item)
+
+            page = self._build_page_for_item(item)
+            self._pages[item.key] = page
+            self._stack.addWidget(page)
+            if index == 0:
+                self._nav_list.setCurrentRow(0)
+                self._stack.setCurrentIndex(0)
+
+    def _register_shortcuts(self) -> None:
+        sequences = ("Ctrl+K", "Meta+K")
+        for sequence in sequences:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(self._open_command_palette)
+            self._shortcuts.append(shortcut)
+
+    def _register_commands(self) -> None:
+        self._command_registry.register(
+            CommandAction(
+                id="appearance.toggle-theme",
+                title="Toggle theme",
+                callback=self._toggle_theme_from_command,
+                category="Appearance",
+                description="Switch between light and dark themes.",
+                shortcut="Ctrl+Shift+L",
+            ),
+        )
+
+    def _build_page_for_item(self, item: NavigationItem) -> QWidget:
+        if item.key == "dashboard":
+            if self._ui_context is None:
+                raise RuntimeError("UI context not initialised before dashboard creation")
+            dashboard = DashboardWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+            self._dashboard_widget = dashboard
+            return dashboard
+        if item.key == "devices":
+            if self._ui_context is None:
+                raise RuntimeError("UI context not initialised before device view creation")
+            return DevicesWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+        if item.key == "applications":
+            if self._ui_context is None:
+                raise RuntimeError("UI context not initialised before applications view creation")
+            return ApplicationsWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+        if item.key == "groups":
+            if self._ui_context is None:
+                raise RuntimeError("UI context not initialised before groups view creation")
+            return GroupsWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+        if item.key == "assignments":
+            if self._ui_context is None:
+                raise RuntimeError("UI context not initialised before assignments view creation")
+            return AssignmentsWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+        return self._create_placeholder_page(item)
 
     def _connect_navigation(self) -> None:
         self._nav_list.currentRowChanged.connect(self._stack.setCurrentIndex)
@@ -187,6 +308,9 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- UI helpers
 
+    def run_async(self, coro: Awaitable[object]) -> None:
+        self._bridge.run_coroutine(coro)
+
     def set_busy(self, message: str | None = None) -> None:
         display = message or self._busy_default_message
         if self._busy_overlay:
@@ -213,6 +337,47 @@ class MainWindow(QMainWindow):
         if self._toast_manager:
             self._toast_manager.show_toast(message, level=level, duration_ms=duration_ms)
         self.statusBar().showMessage(message, 3000)
+
+    def show_banner(
+        self,
+        message: str,
+        level: ToastLevel = ToastLevel.INFO,
+        *,
+        action_label: str | None = None,
+    ) -> None:
+        if self._alert_banner:
+            self._alert_banner.display(message, level=level, action_label=action_label)
+
+    def clear_banner(self) -> None:
+        if self._alert_banner:
+            self._alert_banner.clear()
+
+    # --------------------------------------------------------------- Commands
+
+    def _open_command_palette(self) -> None:
+        if self._command_palette:
+            self._command_palette.open_palette()
+
+    def _execute_command(self, action: CommandAction) -> None:
+        try:
+            result = action.callback()
+            if inspect.isawaitable(result):
+                self._bridge.run_coroutine(result)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001
+            logger.exception("Command execution failed", command=action.id)
+            self.show_notification(
+                f"Command failed: {action.title}",
+                level=ToastLevel.ERROR,
+                duration_ms=6000,
+            )
+
+    def _toggle_theme_from_command(self) -> None:
+        next_theme = self._theme_manager.toggle()
+        self.show_notification(
+            f"Switched to {next_theme} theme",
+            level=ToastLevel.INFO,
+            duration_ms=2500,
+        )
 
     # -------------------------------------------------------------- Service glue
 
@@ -270,6 +435,12 @@ class MainWindow(QMainWindow):
         self._persist_window_state()
         self._disconnect_services()
         super().closeEvent(event)
+
+    @property
+    def ui_context(self) -> UIContext:
+        if self._ui_context is None:
+            raise RuntimeError("UI context not initialised")
+        return self._ui_context
 
 
 __all__ = ["MainWindow", "NavigationItem"]
