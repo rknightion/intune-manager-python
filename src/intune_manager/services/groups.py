@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, AsyncIterator
 
 from intune_manager.data import DirectoryGroup, GroupMember, GroupRepository
 from intune_manager.graph.client import GraphClientFactory
@@ -20,6 +20,44 @@ class GroupMembershipEvent:
     action: str
 
 
+@dataclass(slots=True)
+class GroupMemberStream:
+    """Iterate group members in fixed-size pages."""
+
+    group_id: str
+    tenant_id: str | None
+    iterator: AsyncIterator[dict[str, Any]]
+    page_size: int
+    _exhausted: bool = False
+    _loaded: int = 0
+
+    async def next_page(self) -> list[GroupMember]:
+        if self._exhausted:
+            return []
+
+        page: list[GroupMember] = []
+        while len(page) < self.page_size:
+            try:
+                item = await self.iterator.__anext__()
+            except StopAsyncIteration:
+                self._exhausted = True
+                break
+            page.append(GroupMember.from_graph(item))
+            self._loaded += 1
+
+        if not page:
+            self._exhausted = True
+        return page
+
+    @property
+    def has_more(self) -> bool:
+        return not self._exhausted
+
+    @property
+    def loaded(self) -> int:
+        return self._loaded
+
+
 class GroupService:
     """Manage Azure AD group metadata and membership operations."""
 
@@ -35,6 +73,7 @@ class GroupService:
         self.refreshed: EventHook[RefreshEvent[list[DirectoryGroup]]] = EventHook()
         self.errors: EventHook[ServiceErrorEvent] = EventHook()
         self.membership: EventHook[GroupMembershipEvent] = EventHook()
+        self._member_default_page_size = 100
 
     # ---------------------------------------------------------------- Queries
 
@@ -151,16 +190,37 @@ class GroupService:
         logger.debug("Removed group member", group_id=group_id, member_id=member_id)
 
     async def list_members(self, group_id: str) -> list[GroupMember]:
+        stream = self.member_stream(group_id)
         members: list[GroupMember] = []
-        async for item in self._client_factory.iter_collection(
+        while True:
+            page = await stream.next_page()
+            if not page:
+                break
+            members.extend(page)
+        logger.debug("Fetched group members", group_id=group_id, count=len(members))
+        return members
+
+    def member_stream(
+        self,
+        group_id: str,
+        *,
+        tenant_id: str | None = None,
+        page_size: int | None = None,
+    ) -> GroupMemberStream:
+        size = page_size or self._member_default_page_size
+        iterator = self._client_factory.iter_collection(
             "GET",
             f"/groups/{group_id}/members",
             params={"$select": "id,displayName,userPrincipalName,mail"},
             headers={"ConsistencyLevel": "eventual"},
-        ):
-            members.append(GroupMember.from_graph(item))
-        logger.debug("Fetched group members", group_id=group_id, count=len(members))
-        return members
+            page_size=size,
+        )
+        return GroupMemberStream(
+            group_id=group_id,
+            tenant_id=tenant_id,
+            iterator=iterator,
+            page_size=size,
+        )
 
     async def list_owners(self, group_id: str) -> list[GroupMember]:
         owners: list[GroupMember] = []
@@ -184,4 +244,4 @@ class GroupService:
         logger.debug("Updated membership rule", group_id=group_id)
 
 
-__all__ = ["GroupService", "GroupMembershipEvent"]
+__all__ = ["GroupService", "GroupMembershipEvent", "GroupMemberStream"]

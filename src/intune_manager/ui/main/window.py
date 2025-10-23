@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from intune_manager.config import FirstRunStatus, detect_first_run
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry, SyncProgressEvent
 from intune_manager.ui.components import (
     AlertBanner,
@@ -38,6 +39,7 @@ from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
 from intune_manager.ui.devices import DevicesWidget
 from intune_manager.ui.groups import GroupsWidget
+from intune_manager.ui.settings import SettingsWidget
 from intune_manager.utils import get_logger
 from intune_manager.utils.asyncio import AsyncBridge
 
@@ -92,9 +94,13 @@ class MainWindow(QMainWindow):
         self._subscriptions: list[Callable[[], None]] = []
         self._shortcuts: list[QShortcut] = []
         self._dashboard_widget: DashboardWidget | None = None
+        self._settings_widget: SettingsWidget | None = None
+        self._banner_action: Callable[[], None] | None = None
+        self._first_run_status: FirstRunStatus | None = None
 
         self._configure_window()
         self._build_layout()
+        self._connect_banner_events()
         self._initialize_components()
         self._populate_navigation()
         self._register_shortcuts()
@@ -102,6 +108,7 @@ class MainWindow(QMainWindow):
         self._connect_navigation()
         self._connect_services()
         self._restore_window_preferences()
+        self._evaluate_onboarding_state()
 
     # ------------------------------------------------------------------ Setup
 
@@ -146,6 +153,12 @@ class MainWindow(QMainWindow):
 
         outer_layout.addWidget(content, stretch=1)
         self.setCentralWidget(central)
+
+    def _connect_banner_events(self) -> None:
+        if self._alert_banner is None:
+            return
+        self._alert_banner.actionTriggered.connect(self._handle_banner_action_triggered)
+        self._alert_banner.dismissed.connect(self._handle_banner_dismissed)
 
     def _initialize_components(self) -> None:
         central = self.centralWidget()
@@ -259,6 +272,19 @@ class MainWindow(QMainWindow):
                 context=self._ui_context,
                 parent=self._stack,
             )
+        if item.key == "settings":
+            page = PageScaffold(
+                "Settings & Diagnostics",
+                subtitle=(
+                    "Manage tenant credentials, validate Microsoft Graph permissions, and reset configuration."
+                ),
+                parent=self._stack,
+            )
+            settings_widget = SettingsWidget(parent=page)
+            page.add_body_widget(settings_widget, stretch=1)
+            page.body_layout.addStretch()
+            self._settings_widget = settings_widget
+            return page
         return self._create_placeholder_page(item)
 
     def _connect_navigation(self) -> None:
@@ -274,6 +300,35 @@ class MainWindow(QMainWindow):
             self._subscriptions.append(
                 self._services.sync.errors.subscribe(self._handle_sync_error),
             )
+
+    def _evaluate_onboarding_state(self) -> None:
+        try:
+            status = detect_first_run()
+        except Exception:  # noqa: BLE001 - defensive startup logging
+            logger.exception("Failed to evaluate first-run state")
+            return
+
+        self._first_run_status = status
+        logger.debug(
+            "Evaluated onboarding state",
+            first_run=status.is_first_run,
+            missing_settings=status.missing_settings,
+            has_token_cache=status.has_token_cache,
+            token_cache=str(status.token_cache_path),
+        )
+
+        if not status.is_first_run:
+            return
+
+        self._set_banner_action(self._open_onboarding_setup)
+        self.show_banner(
+            (
+                "Welcome to Intune Manager. Complete the tenant configuration and sign in to "
+                "start managing Intune resources."
+            ),
+            level=ToastLevel.WARNING,
+            action_label="Start setup",
+        )
 
     def _restore_window_preferences(self) -> None:
         geometry = self._settings_store.value("window/geometry")
@@ -352,6 +407,25 @@ class MainWindow(QMainWindow):
         if self._alert_banner:
             self._alert_banner.clear()
 
+    def _set_banner_action(self, action: Callable[[], None] | None) -> None:
+        self._banner_action = action
+
+    def _handle_banner_action_triggered(self) -> None:
+        if self._banner_action is None:
+            return
+        try:
+            self._banner_action()
+        except Exception:  # noqa: BLE001 - UI action safety
+            logger.exception("Banner action failed")
+            self.show_notification(
+                "Setup action failed to launch.",
+                level=ToastLevel.ERROR,
+                duration_ms=6000,
+            )
+
+    def _handle_banner_dismissed(self) -> None:
+        self._banner_action = None
+
     # --------------------------------------------------------------- Commands
 
     def _open_command_palette(self) -> None:
@@ -378,6 +452,26 @@ class MainWindow(QMainWindow):
             level=ToastLevel.INFO,
             duration_ms=2500,
         )
+
+    def _open_onboarding_setup(self) -> None:
+        self._navigate_to_nav_item("settings")
+        if self._settings_widget is not None:
+            self._settings_widget.launch_setup_wizard()
+        else:
+            self.show_notification(
+                "Open the Settings tab to configure your tenant and sign in.",
+                level=ToastLevel.INFO,
+                duration_ms=6000,
+            )
+
+    def _navigate_to_nav_item(self, key: str) -> None:
+        for index in range(self._nav_list.count()):
+            item = self._nav_list.item(index)
+            if item is None:
+                continue
+            if item.data(Qt.ItemDataRole.UserRole) == key:
+                self._nav_list.setCurrentRow(index)
+                return
 
     # -------------------------------------------------------------- Service glue
 
@@ -441,6 +535,10 @@ class MainWindow(QMainWindow):
         if self._ui_context is None:
             raise RuntimeError("UI context not initialised")
         return self._ui_context
+
+    @property
+    def first_run_status(self) -> FirstRunStatus | None:
+        return self._first_run_status
 
 
 __all__ = ["MainWindow", "NavigationItem"]

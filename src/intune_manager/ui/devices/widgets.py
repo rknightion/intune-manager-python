@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import csv
+from datetime import datetime
+from collections import OrderedDict
 from collections.abc import Callable
+from pathlib import Path
 from typing import Iterable, List
 
-from PySide6.QtCore import Qt, QItemSelectionModel
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, Qt
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -18,9 +23,11 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedLayout,
     QTableView,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QMenu,
 )
 
 from intune_manager.data import ManagedDevice
@@ -47,8 +54,57 @@ def _format_value(value: object | None) -> str:
     return str(value)
 
 
+def _format_bytes(value: int | None) -> str:
+    if value is None:
+        return "—"
+    if value <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(value)
+    index = 0
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024
+        index += 1
+    if index == 0:
+        return f"{int(size)} {units[index]}"
+    return f"{size:.1f} {units[index]}"
+
+
+class DeviceDetailCache:
+    """Simple LRU cache to provide instant detail pane rendering."""
+
+    def __init__(self, capacity: int = 2048) -> None:
+        self._capacity = max(1, capacity)
+        self._entries: OrderedDict[str, ManagedDevice] = OrderedDict()
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def prime(self, devices: Iterable[ManagedDevice]) -> None:
+        for device in devices:
+            self.put(device)
+
+    def put(self, device: ManagedDevice) -> None:
+        if not device.id:
+            return
+        key = device.id
+        if key in self._entries:
+            self._entries.pop(key)
+        self._entries[key] = device
+        while len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+
+    def get(self, device_id: str | None) -> ManagedDevice | None:
+        if not device_id:
+            return None
+        device = self._entries.get(device_id)
+        if device is not None:
+            self._entries.move_to_end(device_id)
+        return device
+
+
 class DeviceDetailPane(QWidget):
-    """Right-hand pane displaying selected device information."""
+    """Right-hand pane displaying selected device information with tabbed insights."""
 
     def __init__(self, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -59,7 +115,7 @@ class DeviceDetailPane(QWidget):
         empty_layout.setContentsMargins(24, 24, 24, 24)
         empty_layout.addStretch()
         self._empty_label = QLabel(
-            "Select a device to inspect compliance, ownership, and installed applications.",
+            "Select a device to inspect compliance, hardware health, and installed applications.",
             parent=self._empty_state,
         )
         self._empty_label.setWordWrap(True)
@@ -86,43 +142,90 @@ class DeviceDetailPane(QWidget):
         detail_layout.addWidget(self._title_label)
         detail_layout.addWidget(self._subtitle_label)
 
-        self._form_container = QWidget()
-        self._form_layout = QFormLayout(self._form_container)
-        self._form_layout.setContentsMargins(0, 0, 0, 0)
-        self._form_layout.setSpacing(6)
-        detail_layout.addWidget(self._form_container)
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.setTabPosition(QTabWidget.TabPosition.North)
 
-        self._form_fields: dict[str, QLabel] = {}
-        for key, label in [
+        overview_fields = [
             ("user", "Primary user"),
             ("ownership", "Ownership"),
             ("compliance", "Compliance"),
             ("management", "Management"),
-            ("platform", "Platform"),
+            ("enrollment", "Enrollment type"),
+            ("registration", "Registration state"),
+            ("category", "Category"),
             ("last_sync", "Last sync"),
+            ("enrolled", "Enrolled on"),
+        ]
+        hardware_fields = [
+            ("manufacturer", "Manufacturer"),
+            ("model", "Model"),
+            ("chassis", "Chassis"),
             ("serial", "Serial"),
+            ("sku", "SKU"),
+            ("storage_total", "Total storage"),
+            ("storage_free", "Free storage"),
+            ("memory", "Physical memory"),
+            ("battery_health", "Battery health"),
+            ("battery_level", "Battery level"),
+        ]
+        network_fields = [
             ("azure_id", "Azure AD device ID"),
-            ("enrollment", "Enrollment"),
-        ]:
-            value_label = QLabel("—")
-            value_label.setWordWrap(True)
-            self._form_fields[key] = value_label
-            self._form_layout.addRow(f"{label}:", value_label)
+            ("ip_v4", "IP address (v4)"),
+            ("wifi_mac", "Wi-Fi MAC"),
+            ("ethernet_mac", "Ethernet MAC"),
+            ("imei", "IMEI"),
+            ("meid", "MEID"),
+            ("udid", "UDID"),
+        ]
+        security_fields = [
+            ("azure_registered", "Azure AD registered"),
+            ("encrypted", "Encrypted"),
+            ("supervised", "Supervised"),
+            ("jailbroken", "Jailbreak detection"),
+            ("lost_mode", "Lost mode"),
+            ("threat_state", "Threat state"),
+            ("dfci_managed", "DFCI managed"),
+            ("bootstrap", "Bootstrap escrowed"),
+        ]
 
-        self._apps_label = QLabel("Installed applications")
-        self._apps_label.setProperty("class", "section-heading")
-        detail_layout.addWidget(self._apps_label)
+        self._overview_tab, self._overview_fields = self._create_form_tab(overview_fields)
+        self._hardware_tab, self._hardware_fields = self._create_form_tab(hardware_fields)
+        self._network_tab, self._network_fields = self._create_form_tab(network_fields)
+        self._security_tab, self._security_fields = self._create_form_tab(security_fields)
+
+        self._tabs.addTab(self._overview_tab, "Overview")
+        self._tabs.addTab(self._hardware_tab, "Hardware")
+        self._tabs.addTab(self._network_tab, "Network")
+        self._tabs.addTab(self._security_tab, "Security")
+
+        self._apps_widget = QWidget()
+        apps_layout = QVBoxLayout(self._apps_widget)
+        apps_layout.setContentsMargins(0, 8, 0, 0)
+        apps_layout.setSpacing(6)
+
+        self._apps_summary = QLabel()
+        self._apps_summary.setStyleSheet("color: palette(mid);")
+        apps_layout.addWidget(self._apps_summary)
 
         self._apps_list = QListWidget()
         self._apps_list.setObjectName("InstalledAppsList")
         self._apps_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        detail_layout.addWidget(self._apps_list, stretch=1)
+        apps_layout.addWidget(self._apps_list, stretch=1)
 
+        self._tabs.addTab(self._apps_widget, "Installed Apps")
+
+        detail_layout.addWidget(self._tabs, stretch=1)
         self._stack.addWidget(self._detail_widget)
+
+    # ----------------------------------------------------------------- Helpers
 
     def show_placeholder(self, message: str) -> None:
         self._empty_label.setText(message)
         self._stack.setCurrentWidget(self._empty_state)
+
+    def focus_overview(self) -> None:
+        self._tabs.setCurrentWidget(self._overview_tab)
 
     def display_device(self, device: ManagedDevice | None) -> None:
         if device is None:
@@ -139,42 +242,97 @@ class DeviceDetailPane(QWidget):
         subtitle = " · ".join(part for part in subtitle_parts if part)
         self._subtitle_label.setText(subtitle or "No hardware metadata available.")
 
-        self._set_field("user", _format_value(device.user_display_name or device.user_principal_name))
-        self._set_field(
-            "ownership",
-            _format_value(device.ownership.value if device.ownership else None),
+        self._set_fields(
+            self._overview_fields,
+            {
+                "user": device.user_display_name or device.user_principal_name,
+                "ownership": device.ownership.value if device.ownership else None,
+                "compliance": device.compliance_state.value if device.compliance_state else None,
+                "management": device.management_state.value if device.management_state else None,
+                "enrollment": device.enrolled_managed_by,
+                "registration": device.device_registration_state,
+                "category": device.device_category_display_name,
+                "last_sync": self._format_datetime(device.last_sync_date_time),
+                "enrolled": self._format_datetime(device.enrolled_date_time),
+            },
         )
-        self._set_field(
-            "compliance",
-            _format_value(device.compliance_state.value if device.compliance_state else None),
+        self._set_fields(
+            self._hardware_fields,
+            {
+                "manufacturer": device.manufacturer,
+                "model": device.model,
+                "chassis": device.chassis_type,
+                "serial": device.serial_number,
+                "sku": f"{device.sku_family or '—'} {device.sku_number or ''}".strip(),
+                "storage_total": _format_bytes(device.total_storage_space_in_bytes),
+                "storage_free": _format_bytes(device.free_storage_space_in_bytes),
+                "memory": _format_bytes(device.physical_memory_in_bytes),
+                "battery_health": f"{device.battery_health_percentage} %" if device.battery_health_percentage is not None else None,
+                "battery_level": f"{device.battery_level_percentage:.0f} %" if device.battery_level_percentage is not None else None,
+            },
         )
-        self._set_field(
-            "management",
-            _format_value(device.management_state.value if device.management_state else None),
+        self._set_fields(
+            self._network_fields,
+            {
+                "azure_id": device.azure_ad_device_id,
+                "ip_v4": device.ip_address_v4,
+                "wifi_mac": device.wi_fi_mac_address,
+                "ethernet_mac": device.ethernet_mac_address,
+                "imei": device.imei,
+                "meid": device.meid,
+                "udid": device.udid,
+            },
         )
-        self._set_field(
-            "platform",
-            f"{device.operating_system} {device.os_version or ''}".strip(),
-        )
-        self._set_field(
-            "last_sync",
-            _format_value(device.last_sync_date_time.strftime("%Y-%m-%d %H:%M") if device.last_sync_date_time else None),
-        )
-        self._set_field("serial", _format_value(device.serial_number))
-        self._set_field("azure_id", _format_value(device.azure_ad_device_id))
-        self._set_field(
-            "enrollment",
-            _format_value(device.enrolled_managed_by),
+        self._set_fields(
+            self._security_fields,
+            {
+                "azure_registered": device.azure_ad_registered,
+                "encrypted": device.is_encrypted,
+                "supervised": device.is_supervised,
+                "jailbroken": device.jailbreak_detection_state,
+                "lost_mode": device.lost_mode_state,
+                "threat_state": device.partner_reported_threat_state,
+                "dfci_managed": device.device_firmware_configuration_interface_managed,
+                "bootstrap": device.bootstrap_token_escrowed,
+            },
         )
 
+        self._populate_apps(device)
+
+    def _create_form_tab(
+        self,
+        fields: list[tuple[str, str]],
+    ) -> tuple[QWidget, dict[str, QLabel]]:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        labels: dict[str, QLabel] = {}
+        for key, label in fields:
+            value_label = QLabel("—")
+            value_label.setWordWrap(True)
+            labels[key] = value_label
+            layout.addRow(f"{label}:", value_label)
+        return widget, labels
+
+    def _set_fields(self, mapping: dict[str, QLabel], values: dict[str, object | None]) -> None:
+        for key, value in values.items():
+            label = mapping.get(key)
+            if label is None:
+                continue
+            label.setText(_format_value(value))
+
+    def _populate_apps(self, device: ManagedDevice) -> None:
         self._apps_list.clear()
         apps = device.installed_apps or []
         if not apps:
-            placeholder = QListWidgetItem("Installed application inventory not loaded.")
+            self._apps_summary.setText("Installed applications: inventory not loaded.")
+            placeholder = QListWidgetItem("No installed applications reported for this device.")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self._apps_list.addItem(placeholder)
             return
 
+        self._apps_summary.setText(f"Installed applications: {len(apps):,}")
         for app in sorted(apps, key=lambda item: (item.display_name or "").lower()):
             name = app.display_name or "Unknown application"
             version = app.version or "—"
@@ -183,17 +341,21 @@ class DeviceDetailPane(QWidget):
             if publisher:
                 text += f" — {publisher}"
             item = QListWidgetItem(text)
-            item.setToolTip(
-                f"Install state: {app.install_state or 'unknown'}\n"
-                f"Last sync: {app.last_sync_date_time or 'n/a'}",
-            )
+            tooltip_parts = [
+                f"Install state: {app.install_state or 'unknown'}",
+            ]
+            if app.last_sync_date_time:
+                tooltip_parts.append(f"Last sync: {app.last_sync_date_time}")
+            item.setToolTip("\n".join(tooltip_parts))
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._apps_list.addItem(item)
 
-    def _set_field(self, key: str, value: str) -> None:
-        label = self._form_fields.get(key)
-        if label:
-            label.setText(value)
+    @staticmethod
+    def _format_datetime(value: datetime | None) -> str:
+        if value is None:
+            return "—"
+        return value.strftime("%Y-%m-%d %H:%M")
+
 
 
 class DevicesWidget(PageScaffold):
@@ -217,6 +379,12 @@ class DevicesWidget(PageScaffold):
         self._services = services
         self._context = context
         self._controller = DeviceController(services)
+        self._detail_cache = DeviceDetailCache()
+        self._total_devices = 0
+        self._pending_selection_ids: set[str] = set()
+        self._auto_select_first = False
+        self._lazy_threshold = 1000
+        self._lazy_chunk_size = 400
 
         self._refresh_button = make_toolbar_button(
             "Refresh",
@@ -246,10 +414,16 @@ class DevicesWidget(PageScaffold):
             "Shutdown",
             tooltip="Shut down the selected device.",
         )
+        self._export_button = make_toolbar_button(
+            "Export",
+            tooltip="Export the selected devices to CSV.",
+        )
+        self._export_button.setEnabled(False)
 
         actions: List[QToolButton] = [
             self._refresh_button,
             self._force_refresh_button,
+            self._export_button,
             self._sync_device_button,
             self._retire_button,
             self._wipe_button,
@@ -267,6 +441,8 @@ class DevicesWidget(PageScaffold):
         self._model = DeviceTableModel()
         self._proxy = DeviceFilterProxyModel()
         self._proxy.setSourceModel(self._model)
+        self._model.load_finished.connect(self._handle_model_loaded)
+        self._model.batch_appended.connect(self._handle_model_batch_appended)
 
         self._selected_devices: list[ManagedDevice] = []
         self._selected_device_ids: set[str] = set()
@@ -285,6 +461,7 @@ class DevicesWidget(PageScaffold):
         self._wipe_button.clicked.connect(lambda: self._handle_device_action("wipe"))
         self._reboot_button.clicked.connect(lambda: self._handle_device_action("rebootNow"))
         self._shutdown_button.clicked.connect(lambda: self._handle_device_action("shutDown"))
+        self._export_button.clicked.connect(self._handle_export_selected)
 
         self._controller.register_callbacks(
             refreshed=self._handle_devices_refreshed,
@@ -352,6 +529,8 @@ class DevicesWidget(PageScaffold):
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         table_layout.addWidget(self._table)
 
         splitter.addWidget(table_container)
@@ -384,13 +563,54 @@ class DevicesWidget(PageScaffold):
 
     # ----------------------------------------------------------------- Data flow
 
+    def _handle_model_batch_appended(self, _: int) -> None:
+        self._update_summary()
+
+    def _handle_model_loaded(self) -> None:
+        if self._pending_selection_ids:
+            self._reselect_devices(self._pending_selection_ids)
+        elif self._auto_select_first and self._model.rowCount() > 0:
+            self._table.selectRow(0)
+        self._pending_selection_ids = set()
+        self._auto_select_first = False
+        self._update_summary()
+
+    def _set_devices_for_view(
+        self,
+        devices: Iterable[ManagedDevice],
+        *,
+        preserve_selection: set[str] | None = None,
+        auto_select_first: bool = True,
+    ) -> None:
+        device_list = list(devices)
+        self._total_devices = len(device_list)
+        self._detail_cache.clear()
+        self._detail_cache.prime(device_list)
+        self._apply_filter_options(device_list)
+
+        if self._total_devices > self._lazy_threshold:
+            self._pending_selection_ids = set(preserve_selection or [])
+            self._auto_select_first = auto_select_first
+            self._model.set_devices_lazy(device_list, chunk_size=self._lazy_chunk_size)
+        else:
+            self._pending_selection_ids = set()
+            self._auto_select_first = False
+            self._model.set_devices(device_list)
+            if preserve_selection:
+                self._reselect_devices(preserve_selection)
+            elif auto_select_first and device_list:
+                self._table.selectRow(0)
+
+        if not device_list:
+            self._detail_pane.show_placeholder(
+                "No managed devices cached. Refresh to load the latest inventory.",
+            )
+
+        self._update_summary()
+
     def _load_cached_devices(self) -> None:
         devices = self._controller.list_cached()
-        self._model.set_devices(devices)
-        self._apply_filter_options(devices)
-        self._update_summary()
-        if devices:
-            self._table.selectRow(0)
+        self._set_devices_for_view(devices, auto_select_first=True)
 
     def _handle_devices_refreshed(
         self,
@@ -399,13 +619,12 @@ class DevicesWidget(PageScaffold):
     ) -> None:
         devices_list = list(devices)
         previous_ids = set(self._selected_device_ids)
-        self._model.set_devices(devices_list)
-        self._apply_filter_options(devices_list)
-        self._update_summary()
-        if previous_ids:
-            self._reselect_devices(previous_ids)
-        elif devices_list:
-            self._table.selectRow(0)
+        auto_select_first = not previous_ids
+        self._set_devices_for_view(
+            devices_list,
+            preserve_selection=previous_ids,
+            auto_select_first=auto_select_first,
+        )
         if not from_cache:
             self._context.show_notification(
                 f"Loaded {len(devices_list):,} devices from Microsoft Graph.",
@@ -635,16 +854,185 @@ class DevicesWidget(PageScaffold):
                 continue
             selected_devices.append(device)
             selected_ids.add(device.id)
+            self._detail_cache.put(device)
         self._selected_devices = selected_devices
         self._selected_device_ids = selected_ids
         if len(selected_devices) == 1:
-            self._detail_pane.display_device(selected_devices[0])
+            device = selected_devices[0]
+            detail = self._detail_cache.get(device.id) or device
+            self._detail_pane.display_device(detail)
+            self._detail_pane.focus_overview()
         else:
             self._detail_pane.show_placeholder(
-                f"{len(selected_devices):,} devices selected. Select a single device to inspect details.",
+                (
+                    f"{len(selected_devices):,} devices selected. "
+                    "Select a single device to inspect details or use Export to CSV for reporting."
+                ),
             )
         self._update_action_buttons()
         self._update_summary()
+
+    def _show_context_menu(self, position: QPoint) -> None:
+        global_pos = self._table.viewport().mapToGlobal(position)
+        index = self._table.indexAt(position)
+        if index.isValid():
+            selection_model = self._table.selectionModel()
+            if selection_model and not selection_model.isRowSelected(index.row(), QModelIndex()):
+                selection_model.select(
+                    index,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+                )
+
+        menu = QMenu(self)
+        has_selection = bool(self._selected_devices)
+        single_selection = len(self._selected_devices) == 1
+        service_available = self._services.devices is not None
+        actions_enabled = service_available and has_selection and not self._bulk_action_active
+
+        open_action = menu.addAction("Open details")
+        open_action.setEnabled(single_selection)
+        open_action.triggered.connect(self._focus_selected_detail)
+
+        copy_name = menu.addAction("Copy device name")
+        copy_name.setEnabled(single_selection)
+        copy_name.triggered.connect(lambda: self._copy_selection_field(lambda d: d.device_name, "Device name"))
+
+        copy_user = menu.addAction("Copy primary user")
+        copy_user.setEnabled(single_selection)
+        copy_user.triggered.connect(
+            lambda: self._copy_selection_field(
+                lambda d: d.user_display_name or d.user_principal_name,
+                "Primary user",
+            ),
+        )
+
+        copy_device_id = menu.addAction("Copy device ID")
+        copy_device_id.setEnabled(single_selection)
+        copy_device_id.triggered.connect(lambda: self._copy_selection_field(lambda d: d.id, "Device ID"))
+
+        menu.addSeparator()
+
+        export_action = menu.addAction("Export selection to CSV…")
+        export_action.setEnabled(has_selection)
+        export_action.triggered.connect(self._handle_export_selected)
+
+        refresh_action = menu.addAction("Refresh devices")
+        refresh_action.setEnabled(service_available and self._pending_actions == 0)
+        refresh_action.triggered.connect(lambda: self._start_refresh(force=False))
+
+        menu.addSeparator()
+        for action_name, label in self._ACTION_LABELS.items():
+            action = menu.addAction(label)
+            action.setEnabled(actions_enabled)
+            action.triggered.connect(
+                lambda _, name=action_name: self._handle_device_action(name),
+            )
+
+        menu.exec(global_pos)
+
+    def _focus_selected_detail(self) -> None:
+        if not self._selected_devices:
+            return
+        device = self._selected_devices[0]
+        detail = self._detail_cache.get(device.id) or device
+        self._detail_pane.display_device(detail)
+        self._detail_pane.focus_overview()
+
+    def _copy_selection_field(
+        self,
+        extractor: Callable[[ManagedDevice], str | None],
+        label: str,
+    ) -> None:
+        if not self._selected_devices:
+            return
+        device = self._selected_devices[0]
+        value = extractor(device)
+        if not value:
+            self._context.show_notification(
+                f"No {label.lower()} available for the selected device.",
+                level=ToastLevel.INFO,
+                duration_ms=4000,
+            )
+            return
+        QGuiApplication.clipboard().setText(str(value))
+        self._context.show_notification(
+            f"{label} copied to clipboard.",
+            level=ToastLevel.SUCCESS,
+            duration_ms=2500,
+        )
+
+    def _handle_export_selected(self) -> None:
+        if not self._selected_devices:
+            self._context.show_notification(
+                "Select at least one device to export.",
+                level=ToastLevel.INFO,
+                duration_ms=4000,
+            )
+            return
+
+        default_dir = Path.home() / "Desktop"
+        if not default_dir.exists():
+            default_dir = Path.home()
+        default_path = default_dir / "intune-devices.csv"
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export selected devices",
+            str(default_path),
+            "CSV Files (*.csv)",
+        )
+        if not filename:
+            return
+
+        try:
+            rows = [self._serialize_device_for_export(device) for device in self._selected_devices]
+            if not rows:
+                self._context.show_notification(
+                    "No device data available to export.",
+                    level=ToastLevel.WARNING,
+                )
+                return
+            fieldnames = list(rows[0].keys())
+            with open(filename, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+        except Exception as exc:  # noqa: BLE001
+            self._context.show_notification(
+                f"Failed to export devices: {exc}",
+                level=ToastLevel.ERROR,
+                duration_ms=8000,
+            )
+            return
+
+        self._context.show_notification(
+            f"Exported {len(rows):,} device(s) to {filename}.",
+            level=ToastLevel.SUCCESS,
+            duration_ms=6000,
+        )
+
+    def _serialize_device_for_export(self, device: ManagedDevice) -> dict[str, str]:
+        return {
+            "Device Name": device.device_name,
+            "Primary User": device.user_display_name
+            or device.user_principal_name
+            or "",
+            "Operating System": device.operating_system,
+            "OS Version": device.os_version or "",
+            "Compliance": device.compliance_state.value if device.compliance_state else "",
+            "Management": device.management_state.value if device.management_state else "",
+            "Ownership": device.ownership.value if device.ownership else "",
+            "Enrollment": device.enrolled_managed_by or "",
+            "Last Sync": DeviceDetailPane._format_datetime(device.last_sync_date_time),
+            "Azure AD Device ID": device.azure_ad_device_id or "",
+            "Serial Number": device.serial_number or "",
+            "Wi-Fi MAC": device.wi_fi_mac_address or "",
+            "Ethernet MAC": device.ethernet_mac_address or "",
+            "IP Address": device.ip_address_v4 or "",
+            "Manufacturer": device.manufacturer or "",
+            "Model": device.model or "",
+            "Threat State": device.partner_reported_threat_state or "",
+        }
 
     def _reselect_devices(self, device_ids: set[str]) -> None:
         if not device_ids:
@@ -668,18 +1056,29 @@ class DevicesWidget(PageScaffold):
     # ----------------------------------------------------------------- Helpers
 
     def _update_summary(self) -> None:
-        total = self._model.rowCount()
         visible = self._proxy.rowCount()
-        stale = False
-        if self._services.devices is not None:
-            stale = self._controller.is_cache_stale()
+        total_cached = self._total_devices
+        stale = self._services.devices is not None and self._controller.is_cache_stale()
+
         parts = [f"{visible:,} devices shown"]
-        if visible != total:
-            parts.append(f"{total:,} cached")
+        if self._model.is_loading():
+            parts[-1] += " (loading…)"
+
+        if total_cached and total_cached != visible:
+            parts.append(f"{total_cached:,} cached")
+        elif total_cached and not self._model.is_loading():
+            parts.append(f"{total_cached:,} cached")
+
         if stale:
             parts.append("Cache stale — refresh recommended")
         if self._selected_devices:
             parts.append(f"{len(self._selected_devices):,} selected")
+        if self._bulk_action_active and self._bulk_action_summary is not None:
+            remaining = self._bulk_action_summary["total"] - (
+                self._bulk_action_summary["success"] + self._bulk_action_summary["failure"]
+            )
+            if remaining > 0:
+                parts.append(f"Bulk action in progress ({remaining} remaining)")
         self._summary_label.setText(" · ".join(parts))
 
     def _update_action_buttons(self, disabled: bool | None = None) -> None:
@@ -702,6 +1101,7 @@ class DevicesWidget(PageScaffold):
         refresh_enabled = service_available and self._pending_actions == 0
         self._refresh_button.setEnabled(refresh_enabled)
         self._force_refresh_button.setEnabled(refresh_enabled)
+        self._export_button.setEnabled(bool(self._selected_devices))
 
     def _handle_service_unavailable(self) -> None:
         self._table.setEnabled(False)

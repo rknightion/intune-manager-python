@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 
 from intune_manager.config import DEFAULT_GRAPH_SCOPES, Settings
 
+from .setup_wizard import SetupWizard
+
 from .controller import AuthStatus, SettingsController, SettingsSnapshot
 
 
@@ -136,13 +138,19 @@ class SettingsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.save_button = QPushButton("Save configuration")
-        self.test_button = QPushButton("Test sign-in")
+        self.sign_in_button = QPushButton("Interactive sign-in")
         self.permission_button = QPushButton("Check permissions")
+        self.connection_button = QPushButton("Test connection")
+        self.setup_button = QPushButton("Setup wizard")
+        self.reset_button = QPushButton("Reset configuration")
 
         layout.addWidget(self.save_button)
-        layout.addWidget(self.test_button)
+        layout.addWidget(self.sign_in_button)
         layout.addWidget(self.permission_button)
+        layout.addWidget(self.connection_button)
         layout.addStretch()
+        layout.addWidget(self.setup_button)
+        layout.addWidget(self.reset_button)
 
         return container
 
@@ -172,8 +180,11 @@ class SettingsWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self.save_button.clicked.connect(self._handle_save_clicked)
-        self.test_button.clicked.connect(self._handle_test_clicked)
+        self.sign_in_button.clicked.connect(self._handle_sign_in_clicked)
         self.permission_button.clicked.connect(self._handle_permissions_clicked)
+        self.connection_button.clicked.connect(self._handle_connection_clicked)
+        self.setup_button.clicked.connect(self.launch_setup_wizard)
+        self.reset_button.clicked.connect(self._handle_reset_clicked)
 
         self._controller.settingsLoaded.connect(self._apply_settings)
         self._controller.settingsSaved.connect(self._apply_settings)
@@ -181,6 +192,7 @@ class SettingsWidget(QWidget):
         self._controller.errorOccurred.connect(self._handle_error)
         self._controller.infoMessage.connect(self._handle_info)
         self._controller.busyStateChanged.connect(self._handle_busy_state)
+        self._controller.testConnectionCompleted.connect(self._handle_test_connection_result)
 
     # ----------------------------------------------------------------- Handlers
 
@@ -247,7 +259,7 @@ class SettingsWidget(QWidget):
             settings, client_secret=secret, clear_secret=clear
         )
 
-    def _handle_test_clicked(self) -> None:
+    def _handle_sign_in_clicked(self) -> None:
         settings = self._collect_settings(require_identifiers=True)
         if settings is None:
             return
@@ -262,6 +274,29 @@ class SettingsWidget(QWidget):
         if settings is None:
             return
         self._controller.check_permissions(settings)
+
+    def _handle_connection_clicked(self) -> None:
+        settings = self._collect_settings(require_identifiers=True)
+        if settings is None:
+            return
+        secret, clear = self._gather_secret_inputs()
+        self._controller.save_settings(
+            settings, client_secret=secret, clear_secret=clear
+        )
+        self._controller.test_graph_connection(settings)
+
+    def _handle_reset_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Reset configuration",
+            (
+                "This will clear saved tenant settings, cached tokens, and stored secrets.\n"
+                "Do you want to continue?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._controller.reset_configuration()
 
     def _handle_clear_secret(self) -> None:
         if not self._secret_present:
@@ -288,7 +323,14 @@ class SettingsWidget(QWidget):
         self._set_feedback(message, error=False)
 
     def _handle_busy_state(self, busy: bool, message: str) -> None:
-        for button in (self.save_button, self.test_button, self.permission_button):
+        for button in (
+            self.save_button,
+            self.sign_in_button,
+            self.permission_button,
+            self.connection_button,
+            self.setup_button,
+            self.reset_button,
+        ):
             button.setDisabled(busy)
         self.busy_label.setText(message or "")
 
@@ -329,6 +371,13 @@ class SettingsWidget(QWidget):
         else:
             clear = False
         return None, clear
+
+    def _handle_test_connection_result(self, success: bool, message: str) -> None:
+        self._set_feedback(message, error=not success)
+
+    def launch_setup_wizard(self) -> None:
+        wizard = SetupWizard(self._controller, parent=self)
+        wizard.exec()
 
     def _parse_scopes(self, text: str) -> list[str]:
         if not text:

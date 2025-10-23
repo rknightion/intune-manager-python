@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable, List, Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    Qt,
+    QSortFilterProxyModel,
+    QTimer,
+    Signal,
+)
 
 from intune_manager.data import ManagedDevice
 
@@ -25,6 +33,9 @@ def _format_datetime(value: datetime | None) -> str | None:
 
 class DeviceTableModel(QAbstractTableModel):
     """Table model projecting managed devices for the grid view."""
+
+    load_finished = Signal()
+    batch_appended = Signal(int)
 
     def __init__(self, devices: Sequence[ManagedDevice] | None = None) -> None:
         super().__init__()
@@ -65,12 +76,20 @@ class DeviceTableModel(QAbstractTableModel):
                 lambda device: (device.ownership.value if device.ownership else None),
             ),
             DeviceColumn(
+                "enrolled_managed_by",
+                "Enrollment",
+                lambda device: device.enrolled_managed_by,
+            ),
+            DeviceColumn(
                 "last_sync_date_time",
                 "Last Sync",
                 lambda device: _format_datetime(device.last_sync_date_time),
             ),
         ]
         self._devices: list[ManagedDevice] = list(devices or [])
+        self._pending_devices: deque[ManagedDevice] = deque()
+        self._insert_timer: QTimer | None = None
+        self._chunk_size = 500
 
     # ----------------------------------------------------------------- Qt API
 
@@ -129,9 +148,35 @@ class DeviceTableModel(QAbstractTableModel):
     # ----------------------------------------------------------------- Helpers
 
     def set_devices(self, devices: Iterable[ManagedDevice]) -> None:
+        if self._insert_timer and self._insert_timer.isActive():
+            self._insert_timer.stop()
+        self._pending_devices.clear()
         self.beginResetModel()
         self._devices = list(devices)
         self.endResetModel()
+        self.load_finished.emit()
+
+    def set_devices_lazy(
+        self,
+        devices: Iterable[ManagedDevice],
+        *,
+        chunk_size: int = 500,
+    ) -> None:
+        if self._insert_timer and self._insert_timer.isActive():
+            self._insert_timer.stop()
+        self.beginResetModel()
+        self._devices = []
+        self.endResetModel()
+        self._pending_devices = deque(devices)
+        self._chunk_size = max(1, chunk_size)
+        if self._insert_timer is None:
+            self._insert_timer = QTimer(self)
+            self._insert_timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self._insert_timer.timeout.connect(self._consume_pending_devices)
+        if not self._pending_devices:
+            self.load_finished.emit()
+            return
+        self._insert_timer.start(0)
 
     def device_at(self, row: int) -> ManagedDevice | None:
         if 0 <= row < len(self._devices):
@@ -140,6 +185,36 @@ class DeviceTableModel(QAbstractTableModel):
 
     def devices(self) -> list[ManagedDevice]:
         return list(self._devices)
+
+    def is_loading(self) -> bool:
+        return bool(self._pending_devices)
+
+    # ------------------------------------------------------------- Lazy insert
+
+    def _consume_pending_devices(self) -> None:
+        if not self._pending_devices:
+            if self._insert_timer and self._insert_timer.isActive():
+                self._insert_timer.stop()
+            self.load_finished.emit()
+            return
+
+        batch: list[ManagedDevice] = []
+        while self._pending_devices and len(batch) < self._chunk_size:
+            batch.append(self._pending_devices.popleft())
+
+        if not batch:
+            return
+
+        start = len(self._devices)
+        end = start + len(batch) - 1
+        self.beginInsertRows(QModelIndex(), start, end)
+        self._devices.extend(batch)
+        self.endInsertRows()
+        self.batch_appended.emit(len(batch))
+
+        if not self._pending_devices and self._insert_timer and self._insert_timer.isActive():
+            self._insert_timer.stop()
+            self.load_finished.emit()
 
 
 class DeviceFilterProxyModel(QSortFilterProxyModel):
@@ -152,6 +227,7 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
         self._compliance_filter: str | None = None
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.setDynamicSortFilter(True)
 
     # ------------------------------------------------------------- Properties
 
@@ -199,6 +275,10 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
                 device.azure_ad_device_id,
                 device.manufacturer,
                 device.model,
+                device.enrolled_managed_by,
+                device.device_registration_state,
+                device.device_category_display_name,
+                device.operating_system,
             ]
             if not any(
                 self._search_text in value.lower()

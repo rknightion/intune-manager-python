@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import httpx
+
 from PySide6.QtCore import QObject, Signal
 from azure.core.credentials import AccessToken
 
@@ -10,6 +12,7 @@ from intune_manager.auth import (
     AuthManager,
     PermissionChecker,
     SecretStore,
+    TokenCacheManager,
     auth_manager,
 )
 from intune_manager.auth.auth_manager import AuthenticatedUser
@@ -49,6 +52,7 @@ class SettingsController(QObject):
     errorOccurred = Signal(str)
     busyStateChanged = Signal(bool, str)
     infoMessage = Signal(str)
+    testConnectionCompleted = Signal(bool, str)
 
     def __init__(
         self,
@@ -63,6 +67,7 @@ class SettingsController(QObject):
         self._auth = auth or auth_manager
         self._permission_checker = permission_checker or PermissionChecker()
         self._secret_store = secret_store or SecretStore()
+        self._token_cache_manager = TokenCacheManager()
         self._loop = ensure_qt_event_loop(loop)
         self._bridge = AsyncBridge(self._loop)
         self._bridge.task_completed.connect(self._handle_async_result)
@@ -74,6 +79,7 @@ class SettingsController(QObject):
 
     def load_settings(self) -> SettingsSnapshot:
         settings = self._settings_manager.load()
+        self._token_cache_manager = TokenCacheManager(settings.token_cache_path)
         has_secret = self._secret_store.get_secret(CLIENT_SECRET_KEY) is not None
         self._current_settings = settings
         snapshot = SettingsSnapshot(settings=settings, has_client_secret=has_secret)
@@ -91,6 +97,7 @@ class SettingsController(QObject):
         settings.graph_scopes = list(settings.configured_scopes())
         self._settings_manager.save(settings)
         self._current_settings = settings
+        self._token_cache_manager = TokenCacheManager(settings.token_cache_path)
         if clear_secret:
             self._secret_store.delete_secret(CLIENT_SECRET_KEY)
         elif client_secret:
@@ -112,6 +119,11 @@ class SettingsController(QObject):
         snapshot = SettingsSnapshot(settings=settings, has_client_secret=has_secret)
         self.settingsSaved.emit(snapshot)
         self.infoMessage.emit("Settings saved")
+
+    def current_settings(self) -> Settings:
+        if self._current_settings is None:
+            return self.load_settings().settings
+        return self._current_settings
 
     def test_sign_in(self, settings: Settings) -> None:
         """Trigger an interactive login and update status/missing scopes."""
@@ -147,6 +159,53 @@ class SettingsController(QObject):
         """Return cached status without new token acquisition."""
         return self._build_status(self._last_token)
 
+    def reset_configuration(self) -> None:
+        """Clear persisted settings, secrets, and cached tokens."""
+
+        try:
+            empty = Settings()
+            self._settings_manager.save(empty)
+            self._current_settings = empty
+            self._last_token = None
+            try:
+                self._secret_store.delete_secret(CLIENT_SECRET_KEY)
+            except Exception:  # pragma: no cover - keyring best-effort
+                logger.exception("Failed to delete stored client secret")
+
+            token_path = self._token_cache_manager.path
+            if token_path.exists():
+                try:
+                    token_path.unlink()
+                except Exception:  # pragma: no cover - filesystem best-effort
+                    logger.exception("Failed to delete token cache", path=token_path)
+
+            self._token_cache_manager = TokenCacheManager(empty.token_cache_path)
+            snapshot = SettingsSnapshot(settings=empty, has_client_secret=False)
+            self.settingsLoaded.emit(snapshot)
+            self.infoMessage.emit(
+                "Configuration reset. Relaunch the setup wizard to configure Intune Manager.",
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Configuration reset failed")
+            self.errorOccurred.emit(str(exc))
+
+    def test_graph_connection(self, settings: Settings | None = None) -> None:
+        """Run a lightweight Microsoft Graph query to validate connectivity."""
+
+        target_settings = settings or self.current_settings()
+        try:
+            self._configure_auth(target_settings)
+        except AuthenticationError as exc:
+            self.errorOccurred.emit(str(exc))
+            return
+
+        scopes = list(target_settings.configured_scopes())
+        self._run_async(
+            "test_connection",
+            "Testing Microsoft Graph connectivity…",
+            self._perform_test_connection(scopes),
+        )
+
     # ----------------------------------------------------------------- Helpers
 
     def _configure_auth(self, settings: Settings) -> None:
@@ -166,14 +225,53 @@ class SettingsController(QObject):
         self._set_busy(True, message)
         self._bridge.run_coroutine(coro)
 
+    async def _perform_test_connection(self, scopes: list[str]) -> tuple[bool, str]:
+        try:
+            token = await self._auth.acquire_token(scopes)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Token acquisition failed during connectivity test")
+            return False, f"Unable to acquire token: {exc}"
+
+        url = "https://graph.microsoft.com/v1.0/organization?$top=1"
+        headers = {"Authorization": f"Bearer {token.token}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Graph connectivity test failed")
+            return False, f"Graph API request failed: {exc}"
+
+        return True, "Successfully queried Microsoft Graph organization endpoint."
+
     def _handle_async_result(self, result: object, error: object) -> None:
         action = self._pending_action
         self._pending_action = None
         self._set_busy(False, "")
 
+        if action is None:
+            logger.warning("Async result received without pending action", result=result, error=error)
+            return
+
         if error:
             logger.error("Settings action failed", action=action, exception=error)
+            if action == "test_connection":
+                self.testConnectionCompleted.emit(False, str(error))
             self.errorOccurred.emit(str(error))
+            return
+
+        if action == "test_connection":
+            if not isinstance(result, tuple) or len(result) != 2:
+                logger.warning("Unexpected test connection result: %r", result)
+                self.testConnectionCompleted.emit(False, "Unexpected result from connectivity test.")
+                return
+            success, detail = bool(result[0]), str(result[1])
+            if success:
+                self.infoMessage.emit(detail)
+            else:
+                self.errorOccurred.emit(detail)
+            self.testConnectionCompleted.emit(success, detail)
             return
 
         if not isinstance(result, AccessToken):

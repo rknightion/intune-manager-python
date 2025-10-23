@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable, List, Sequence
@@ -145,8 +146,10 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
         self._search_text: str = ""
         self._platform_filter: str | None = None
         self._intent_filter: str | None = None
+        self._fuzzy_threshold: float = 0.62
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.setDynamicSortFilter(True)
 
     def set_search_text(self, text: str) -> None:
         normalised = text.strip().lower()
@@ -187,12 +190,29 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
                 app.description,
                 app.publisher,
                 app.owner,
+                app.app_version if hasattr(app, "app_version") else None,
             ]
-            if not any(
-                self._search_text in value.lower()
+            tokens = [token for token in self._search_text.split() if token]
+            blob = " ".join(
+                value.lower()
                 for value in haystack
                 if isinstance(value, str)
-            ):
+            )
+            matched = False
+            if tokens and all(token in blob for token in tokens):
+                matched = True
+            else:
+                best_ratio = 0.0
+                for value in haystack:
+                    if not isinstance(value, str) or not value:
+                        continue
+                    ratio = SequenceMatcher(None, self._search_text, value.lower()).ratio()
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                        if best_ratio >= 0.95:
+                            break
+                matched = best_ratio >= self._fuzzy_threshold
+            if not matched:
                 return False
 
         if self._platform_filter:

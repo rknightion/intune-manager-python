@@ -29,7 +29,6 @@ from intune_manager.data import (
     AssignmentIntent,
     AssignmentSettings,
     DirectoryGroup,
-    MobileApp,
     MobileAppAssignment,
 )
 from intune_manager.data.models.assignment import (
@@ -145,16 +144,17 @@ class AssignmentEditorDialog(QDialog):
 
     def __init__(
         self,
-        app: MobileApp,
         assignments: List[MobileAppAssignment],
         groups: List[DirectoryGroup],
         filters: List[AssignmentFilter],
         *,
+        subject_name: str = "Assignments",
         on_export: AssignmentExportCallback | None = None,
+        auto_export_default: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Assignment editor — {app.display_name}")
+        self.setWindowTitle(f"Assignment editor — {subject_name}")
         self.resize(860, 540)
 
         self._assignments: List[MobileAppAssignment] = list(assignments)
@@ -216,7 +216,7 @@ class AssignmentEditorDialog(QDialog):
         layout.addWidget(helper_box)
 
         self._auto_export_checkbox = QCheckBox("Export assignments before applying", parent=self)
-        self._auto_export_checkbox.setChecked(True)
+        self._auto_export_checkbox.setChecked(auto_export_default)
         layout.addWidget(self._auto_export_checkbox)
 
         self._button_box = QDialogButtonBox(

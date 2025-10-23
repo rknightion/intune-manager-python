@@ -1,0 +1,239 @@
+# IntuneManager Migration Plan (Swift ➜ Python + PySide6)
+Date: 2025-02-14  
+Maintainer: Codex migration log  
+Python Baseline: 3.13 (managed with `uv`)  
+Primary Tooling: PySide6, msal, msgraph-beta-sdk-python, httpx, SQLModel + SQLite, pydantic, ruff, pytest, mypy, uvx/pyinstaller (to be validated)
+
+---
+Instructions: Update tasks with `[>]` / `[x]` as work progresses. Append new phases/tasks as requirements evolve. Keep concise notes per item (e.g., outcome, blockers) to retain context across sessions. Mark a task `[x]` only after `uv run intune-manager` launches cleanly; use a ~5s timeout to terminate the GUI if needed and resolve any startup issues before completion.
+Any tasks not completed in a step must be marked as such. If it would be more appropriate to do that task in a future step then please update the future step (our future tasks are not immutable and can be adapted and adjusted as the projects architecture evolves)
+For any interactions with the Microsoft Graph API you should utilise context7 MCP to ensure the right API calls are made. Use library ID microsoftgraph/msgraph-beta-sdk-python for context relating to the python SDK and library ID microsoftgraph/microsoft-graph-docs-contrib for all context relating to the MS Graph API and the relevant calls to make and expected responses.
+
+## What Has Been Completed
+
+### [x] DONE  PHASE 0: Assessment & Planning
+- Analyzed Swift app architecture (95 files, ~36K LOC, SwiftUI + SwiftData)
+- Catalogued Graph API endpoints (devices, apps, groups, assignments, configs, audit)
+- Identified platform dependencies (Keychain → keyring, SwiftData → SQLModel, AppKit → PySide6)
+- Defined cross-platform targets (macOS/Windows/Linux with code signing requirements)
+- Set success metrics (feature parity, auth reliability ≥99%, tenant sync <90s for 5K devices)
+
+### [x] DONE  PHASE 1: Python Project Bootstrapping
+- Initialized with `uv` (Python 3.13, package-based project structure)
+- Configured all dependencies: PySide6, msal, msgraph-beta-sdk, httpx, pydantic, sqlmodel, structlog/loguru, pytest, ruff, mypy
+- Set up dev scripts: `uv run intune-manager-{lint,fmt,typecheck,tests,app}`
+- Created layered package structure: `auth/`, `services/`, `data/`, `ui/`, `config/`, `utils/`, `graph/`, `cli/`
+- Added README, CONTRIBUTING, AGENTS guides
+
+### [x] DONE  PHASE 2: Core Infrastructure
+**Configuration** (`config.settings`):
+- `SettingsManager`: Loads from env vars + dotenv file, persists to platformdirs config directory
+- `Settings` dataclass: tenant_id, client_id, redirect_uri, authority, graph_scopes, cache paths
+- Default Graph scopes include all required Intune permissions
+
+**Logging** (`utils.logging`):
+- structlog + loguru pipeline with rotating file handler (`~/.cache/IntuneManager/logs/`)
+- Console + file sinks, JSON-structured logs, context binding
+- `log_file_path()` export helper for UI
+
+**Async/Qt Bridge** (`utils.asyncio`):
+- `qasync` integration for asyncio + Qt event loop
+- `AsyncBridge` class: `run_async(coro)` with `task_completed` signal
+- Interval scheduling, delayed callbacks
+
+**Rate Limiting** (`graph.rate_limiter`):
+- `RateLimiter` ported from Swift: 20-second window tracking
+- Limits: 100 writes/window, 1000 total requests/window
+- Exponential backoff with jitter (1s → 32s max), batch splitting logic
+
+**Error Handling** (`graph.errors`):
+- Categorized exceptions: `GraphAPIError`, `AuthenticationError`, `PermissionError`, `RateLimitError`
+- Recovery metadata (retry hints, required scopes)
+- Graph response code → exception translation
+
+**Graph Client Factory** (`graph.client`):
+- Wraps `msgraph-beta-sdk-python` with callback credential provider
+- `RateLimitedAsyncClient`: Custom httpx adapter with rate limiter integration
+- Methods: `request_json()`, `request_bytes()`, `iter_collection()` (auto-pagination)
+- Beta endpoint support via api_version parameter
+
+### [x] DONE  PHASE 3: Authentication & Permissions
+**AuthManager** (`auth.auth_manager`):
+- MSAL `PublicClientApplication` wrapper with async interfaces
+- Token cache serialization to `~/.cache/IntuneManager/token_cache.bin`
+- Methods: `acquire_token()`, `sign_in_interactive()`, `sign_out()`, silent refresh
+- Multi-tenant support, current user tracking
+
+**PermissionChecker** (`auth.permission_checker`):
+- JWT payload decoding to extract granted scopes
+- Compares against required Graph permissions, reports missing scopes
+
+**SecretStore** (`auth.secret_store`):
+- Cross-platform secure storage using `keyring` library
+- macOS Keychain / Windows Credential Manager / Linux SecretService integration
+
+**Settings UI** (`ui.settings`):
+- `SettingsWidget`: Tenant/client config, scope editor, keyring-backed client secret
+- Interactive sign-in, permission diagnostics, missing scope list
+- `SettingsController`: Qt signals for async operations (auth, save, load)
+
+### [x] DONE  PHASE 4: Data Models & Persistence
+**Pydantic Domain Models** (`data.models.*`):
+- `ManagedDevice`: Compliance/management states, hardware/network info, user details
+- `MobileApp`: Display name, publisher, platform, assignments, publishing state
+- `DirectoryGroup`: ID, name, security/mail flags
+- `MobileAppAssignment`: Target groups, intent (Available/Required/Uninstall), settings
+- `AssignmentFilter`, `ConfigurationProfile`, `AuditEvent`
+- All use Graph API alias mapping via `Field(alias="...")`
+
+**SQLModel Persistence** (`data.sql.*`):
+- 9 tables: `DeviceRecord`, `MobileAppRecord`, `GroupRecord`, `MobileAppAssignmentRecord`, `ConfigurationProfileRecord`, `AuditEventRecord`, `AssignmentFilterRecord`, `CacheEntry`, `SchemaVersion`
+- Tenant-scoped caching, JSON payload denormalization
+- `DatabaseManager`: Schema versioning (SCHEMA_VERSION=1), engine creation
+- Mappers: Graph pydantic ↔ SQLModel record conversion
+
+**Repositories** (`data.repositories.*`):
+- `BaseCacheRepository<DomainT, RecordT>`: Generic cache-aware base with TTL tracking
+- Concrete repos: Devices (15min TTL), Apps (20min), Groups (30min), Configs (30min), Filters (60min), Audit (15min)
+- Methods: `list_cached()`, `replace_all()`, `count_cached()`, `is_cache_stale()`, `clear()`
+- Assignment join management in `MobileAppRepository`
+
+**Attachment Storage** (`data.storage.attachments`):
+- `AttachmentCache`: Hashed file storage under `~/.cache/IntuneManager/attachments/`
+- Tenant scoping, quota enforcement, TTL-based purging
+- Metadata tracking (`AttachmentMetadata`), capacity logging
+
+### [x] DONE  PHASE 5: Graph Services & Business Logic
+**Graph Request Builders** (`graph.requests`):
+- Typed `GraphRequest` dataclass (method, url, headers, body, params, api_version)
+- Device actions: sync, retire, wipe, rebootNow, shutDown
+- Mobile apps: assignments CRUD, icon download, install summary
+- Batch operations: `build_batch_requests()`, `GraphBatch` container
+- Configuration & audit query builders
+
+**Service Layer** (`services.*`):
+All services follow pattern:
+```python
+class *Service:
+    refreshed: EventHook[RefreshEvent[List[Model]]]
+    errors: EventHook[ServiceErrorEvent]
+
+    def list_cached(tenant_id) -> List[Model]
+    def is_cache_stale(tenant_id) -> bool
+    def count_cached(tenant_id) -> int
+    async def refresh(tenant_id, force=False) -> List[Model]
+```
+
+Implementations:
+- **DeviceService**: Fetch devices with optional `$expand=detectedApps`, device actions (sync/wipe/retire/reboot/shutdown)
+- **ApplicationService**: Fetch apps with assignments/categories, icon caching, install summaries
+- **GroupService**: Fetch groups with membership counts, group membership events
+- **AssignmentService**: Diff/apply workflows, assignment backup/restore (JSON), conflict detection
+- **AssignmentFilterService**: Filter metadata caching
+- **ConfigurationService**: Device configurations from multiple endpoints
+- **AuditLogService**: Audit events with `$filter` support
+- **ExportService**: CSV/JSON export for devices, apps, audit logs
+- **SyncService**: Multi-phase refresh orchestration, progress events
+- **MobileConfigService**: Stub only (deferred)
+
+**Beta Endpoint Coverage**:
+- Device actions, mobile app assignments, install summaries, assignment filters, config templates require beta
+- Documented GA-compatible alternatives where available
+
+### [x] DONE  PHASE 6.3-6.7: Core UI Modules
+**Dashboard** (`ui.dashboard`):
+- `DashboardWidget` with resource metrics, cache staleness, sync-triggered refresh
+- QtCharts visualizations (device compliance pie, assignment intent bar)
+- Banner integration for auth/config warnings, tenant/auth status cards
+- Command palette action for tenant refresh
+
+**Devices Module** (`ui.devices`):
+- `DevicesWidget` with table, proxy models, search text, platform/compliance filters
+- Selection-aware action toolbar wired to `DeviceService` events
+- Detail pane with tabbed layout (Overview, Hardware, Network, Security, Installed Apps)
+- Batch selection with multi-device actions, context menu, CSV export
+- LRU cache for instant detail drawer display
+- Lazy loading with chunked append for >1k rows
+
+**Applications Module** (`ui.applications`):
+- Icon-decorated grid with platform/intent filters
+- Tabbed detail pane with compliance/assignment badges
+- Assignment editor with target add/remove, JSON settings editing, install summary drill-down
+- Fuzzy matching search (SequenceMatcher + tokenized contains)
+- Bulk assignment wizard across multi-select
+
+**Groups Module** (`ui.groups`):
+- Dual table/hierarchy tabs with type badges, synced selection
+- Async member streams with cached pagination, prev/next controls
+- Group detail panel with ownership lists, dynamic membership rule editor
+- Add/remove member UI with validation
+- Assignment export support
+
+**Assignments Center** (`ui.assignments`):
+- Source/target selection with staged group awareness
+- Diff summaries, backup/restore, history timeline with warnings
+- Bulk wizard flow: app selection → group scoping → conflict resolution → preview → apply
+- Cancellable progress dialog with retry-on-conflict
+- Per-update keep/apply toggles in conflict resolver
+
+## Current Architecture
+
+**Technology Stack**:
+- **UI**: PySide6 (Qt 6.10+)
+- **Auth**: MSAL Python SDK with keyring for secrets
+- **Graph API**: msgraph-beta-sdk-python
+- **Async**: asyncio + qasync for Qt integration
+- **Data**: Pydantic models + SQLModel (SQLAlchemy 2.0) + SQLite
+- **Logging**: structlog + loguru with rotating files
+- **Dev Tools**: ruff (lint/format), mypy (type-check), pytest
+
+**Package Structure**:
+```
+src/intune_manager/
+├── __init__.py              # App entry (main() function)
+├── auth/                    # MSAL, permissions, secrets, token cache
+├── config/                  # Settings management, env/file persistence
+├── graph/                   # Graph client, requests, rate limiting, errors
+├── data/
+│   ├── models/             # Pydantic domain models (Graph entities)
+│   ├── sql/                # SQLModel tables, engine, mappers
+│   ├── repositories/       # Cache-aware data access layer
+│   └── storage/            # Attachment cache (icons, logs)
+├── services/               # Business logic (devices, apps, groups, assignments, etc.)
+├── ui/
+│   ├── main/              # MainWindow shell
+│   ├── components/        # Shared widgets (theme, alerts, toasts, overlays, dialogs)
+│   ├── dashboard/         # Dashboard view (metrics, status, warnings)
+│   └── settings/          # Settings dialog (auth, config, scopes)
+└── utils/                  # Logging, async bridge, background tasks
+```
+
+**Key Architectural Decisions**:
+1. **msgraph-beta-sdk** over v1.0 for Intune endpoint coverage
+2. **SQLModel** to combine Pydantic validation with SQL persistence
+3. **EventHook** pattern (not Qt signals) in services for UI decoupling
+4. **AsyncBridge** to bridge asyncio coroutines to Qt event loop
+5. **RateLimiter** centralized in Graph client for 20-second window tracking
+6. **BaseCacheRepository** generic for DRY cache/TTL management
+7. **keyring** for cross-platform secure credential storage
+
+## What's Ready for Next Phases
+
+**Working Infrastructure**:
+- [x] DONE  Complete auth flow (login, token refresh, permission checking)
+- [x] DONE  All Graph service implementations with caching
+- [x] DONE  Database persistence with schema versioning
+- [x] DONE  MainWindow shell with navigation, status bar, theme manager
+- [x] DONE  Dashboard with metrics, warnings, sync trigger
+- [x] DONE  Settings UI with auth integration
+- [x] DONE  Shared components (alerts, toasts, overlays, command palette)
+
+**What Services Can Do** (Backend Ready):
+- Device listing, detail fetch, actions (sync/wipe/retire/reboot/shutdown)
+- App listing with assignments, icon caching, install summaries
+- Group listing with membership
+- Assignment diff, apply, backup/restore
+- Configuration profile listing
+- Audit log fetching with filters
+- CSV/JSON export
+- Multi-service sync orchestration

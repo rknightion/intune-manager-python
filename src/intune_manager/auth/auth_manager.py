@@ -45,7 +45,7 @@ class AuthManager:
             )
 
         authority = settings.authority or settings.derive_authority()
-        self._cache_manager = TokenCacheManager()
+        self._cache_manager = TokenCacheManager(settings.token_cache_path)
         self._app = msal.PublicClientApplication(
             client_id=settings.client_id,
             authority=authority,

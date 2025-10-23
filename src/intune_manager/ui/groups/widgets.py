@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from typing import Iterable, List
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,8 +21,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QSplitter,
+    QTabWidget,
     QTableView,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +48,9 @@ from .models import GroupFilterProxyModel, GroupTableModel, _group_type_label
 
 class GroupDetailPane(QWidget):
     """Display selected group metadata and membership."""
+
+    members_next_requested = Signal()
+    members_prev_requested = Signal()
 
     def __init__(self, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -86,6 +92,30 @@ class GroupDetailPane(QWidget):
         members_label = QLabel("Members")
         members_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(members_label)
+
+        member_controls = QHBoxLayout()
+        member_controls.setContentsMargins(0, 0, 0, 0)
+        member_controls.setSpacing(6)
+
+        self._member_prev_button = QToolButton()
+        self._member_prev_button.setText("Previous")
+        self._member_prev_button.setEnabled(False)
+        self._member_prev_button.clicked.connect(lambda: self.members_prev_requested.emit())
+        member_controls.addWidget(self._member_prev_button)
+
+        self._member_next_button = QToolButton()
+        self._member_next_button.setText("Next")
+        self._member_next_button.setEnabled(False)
+        self._member_next_button.clicked.connect(lambda: self.members_next_requested.emit())
+        member_controls.addWidget(self._member_next_button)
+
+        member_controls.addStretch()
+
+        self._member_page_label = QLabel("Members not loaded.")
+        self._member_page_label.setStyleSheet("color: palette(mid);")
+        member_controls.addWidget(self._member_page_label)
+
+        layout.addLayout(member_controls)
 
         self._members_list = QListWidget()
         self._members_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -144,6 +174,7 @@ class GroupDetailPane(QWidget):
         self._member_status_label.setText("Load members to view membership details.")
         self._member_detail_label.setText("Select a member to view details.")
         self._member_lookup.clear()
+        self._update_member_controls(page_index=None, has_more=False, total_loaded=None)
 
     def clear_owners(self) -> None:
         self._owners_list.clear()
@@ -152,7 +183,15 @@ class GroupDetailPane(QWidget):
         self._owners_list.addItem(placeholder)
         self._owner_status_label.setText("Load owners to view ownership details.")
 
-    def set_members(self, members: Iterable[GroupMember], *, loading: bool = False) -> None:
+    def set_members(
+        self,
+        members: Iterable[GroupMember],
+        *,
+        loading: bool = False,
+        page_index: int | None = None,
+        has_more: bool | None = None,
+        total_loaded: int | None = None,
+    ) -> None:
         self._members_list.clear()
         if loading:
             placeholder = QListWidgetItem("Loading members…")
@@ -160,6 +199,7 @@ class GroupDetailPane(QWidget):
             self._members_list.addItem(placeholder)
             self._member_status_label.setText("Fetching members from Microsoft Graph…")
             self._member_detail_label.setText("Fetching members…")
+            self._update_member_controls(page_index=None, has_more=False, total_loaded=None)
             return
 
         members_list = list(members)
@@ -170,6 +210,7 @@ class GroupDetailPane(QWidget):
             self._members_list.addItem(placeholder)
             self._member_status_label.setText("Group has no members.")
             self._member_detail_label.setText("Group has no members.")
+            self._update_member_controls(page_index=page_index, has_more=has_more or False, total_loaded=total_loaded)
             return
 
         for member in members_list:
@@ -179,13 +220,14 @@ class GroupDetailPane(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, member.id)
             self._members_list.addItem(item)
-        self._member_status_label.setText(f"{len(members_list)} members loaded.")
+        self._member_status_label.setText(f"{len(members_list)} members in page.")
         first_item = self._members_list.item(0)
         if first_item is not None and first_item.flags() & Qt.ItemFlag.ItemIsSelectable:
             self._members_list.setCurrentItem(first_item)
             self._update_member_detail(first_item.data(Qt.ItemDataRole.UserRole))
         else:
             self._member_detail_label.setText("Select a member to view details.")
+        self._update_member_controls(page_index=page_index, has_more=has_more or False, total_loaded=total_loaded)
 
     def _handle_member_selection_changed(
         self,
@@ -197,6 +239,29 @@ class GroupDetailPane(QWidget):
             return
         member_id = current.data(Qt.ItemDataRole.UserRole)
         self._update_member_detail(member_id)
+
+    def _update_member_controls(
+        self,
+        *,
+        page_index: int | None,
+        has_more: bool,
+        total_loaded: int | None,
+    ) -> None:
+        if page_index is None:
+            self._member_prev_button.setEnabled(False)
+            self._member_next_button.setEnabled(False)
+            self._member_page_label.setText("Members not loaded.")
+            return
+
+        page_number = page_index + 1
+        summary_parts = [f"Page {page_number}"]
+        if total_loaded is not None:
+            summary_parts.append(f"{total_loaded} loaded")
+        if has_more:
+            summary_parts.append("more available")
+        self._member_page_label.setText(" • ".join(summary_parts))
+        self._member_prev_button.setEnabled(page_index > 0)
+        self._member_next_button.setEnabled(has_more)
 
     def _update_member_detail(self, member_id: str | None) -> None:
         if not member_id:
@@ -419,7 +484,16 @@ class GroupsWidget(PageScaffold):
         self._proxy.setSourceModel(self._model)
 
         self._selected_group: DirectoryGroup | None = None
+        self._selected_group_ids: set[str] = set()
         self._command_unregister: Callable[[], None] | None = None
+        self._group_lookup: dict[str, DirectoryGroup] = {}
+        self._tree_item_map: dict[str, QTreeWidgetItem] = {}
+        self._member_page_size = 100
+        self._member_pages: list[list[GroupMember]] = []
+        self._member_page_index = -1
+        self._member_total_loaded = 0
+        self._member_stream = None
+        self._member_group_id: str | None = None
 
         self._build_filters()
         self._build_body()
@@ -480,8 +554,9 @@ class GroupsWidget(PageScaffold):
     def _build_body(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setSizes([620, 380])
+        splitter.setSizes([640, 360])
 
+        # Table view setup
         table_container = QWidget()
         table_layout = QVBoxLayout(table_container)
         table_layout.setContentsMargins(0, 0, 0, 0)
@@ -490,7 +565,7 @@ class GroupsWidget(PageScaffold):
         self._table = QTableView()
         self._table.setModel(self._proxy)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -498,20 +573,47 @@ class GroupsWidget(PageScaffold):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table_layout.addWidget(self._table)
 
-        splitter.addWidget(table_container)
+        # Tree view setup
+        tree_container = QWidget()
+        tree_layout = QVBoxLayout(tree_container)
+        tree_layout.setContentsMargins(0, 0, 0, 0)
+        tree_layout.setSpacing(0)
+
+        self._group_tree = QTreeWidget()
+        self._group_tree.setHeaderHidden(True)
+        self._group_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._group_tree.setAlternatingRowColors(True)
+        tree_layout.addWidget(self._group_tree)
+
+        self._view_tabs = QTabWidget()
+        self._view_tabs.setDocumentMode(True)
+        self._view_tabs.addTab(table_container, "Table view")
+        self._view_tabs.addTab(tree_container, "Hierarchy view")
+        self._view_tabs.currentChanged.connect(lambda *_: self._update_summary())
+
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_layout.addWidget(self._view_tabs)
+
+        splitter.addWidget(left_container)
 
         self._detail_pane = GroupDetailPane(parent=splitter)
+        self._detail_pane.members_next_requested.connect(self._handle_members_next_requested)
+        self._detail_pane.members_prev_requested.connect(self._handle_members_prev_requested)
         splitter.addWidget(self._detail_pane)
 
         self.body_layout.addWidget(splitter, stretch=1)
 
         if selection_model := self._table.selectionModel():
             selection_model.selectionChanged.connect(self._handle_selection_changed)
+        self._group_tree.itemSelectionChanged.connect(self._handle_tree_selection_changed)
 
-        self._proxy.modelReset.connect(self._update_summary)
-        self._proxy.rowsInserted.connect(lambda *_: self._update_summary())
-        self._proxy.rowsRemoved.connect(lambda *_: self._update_summary())
-        self._model.modelReset.connect(self._update_summary)
+        self._proxy.modelReset.connect(self._refresh_filtered_views)
+        self._proxy.rowsInserted.connect(lambda *_: self._refresh_filtered_views())
+        self._proxy.rowsRemoved.connect(lambda *_: self._refresh_filtered_views())
+        self._model.modelReset.connect(self._refresh_filtered_views)
 
     # ---------------------------------------------------------------- Commands
 
@@ -531,8 +633,9 @@ class GroupsWidget(PageScaffold):
     def _load_cached_groups(self) -> None:
         groups = self._controller.list_cached()
         self._model.set_groups(groups)
+        self._update_group_lookup(groups)
         self._apply_filter_options(groups)
-        self._update_summary()
+        self._refresh_filtered_views()
         if groups:
             self._table.selectRow(0)
 
@@ -544,8 +647,9 @@ class GroupsWidget(PageScaffold):
         groups_list = list(groups)
         selected_id = self._selected_group.id if self._selected_group else None
         self._model.set_groups(groups_list)
+        self._update_group_lookup(groups_list)
         self._apply_filter_options(groups_list)
-        self._update_summary()
+        self._refresh_filtered_views()
         if selected_id:
             self._reselect_group(selected_id)
         elif groups_list:
@@ -571,7 +675,10 @@ class GroupsWidget(PageScaffold):
 
     def _handle_membership_event(self, event: GroupMembershipEvent) -> None:
         if self._selected_group and self._selected_group.id == event.group_id:
-            self._context.run_async(self._load_members_async(event.group_id))
+            self._context.set_busy("Refreshing members…")
+            self._start_member_stream(event.group_id)
+            self._detail_pane.set_members([], loading=True)
+            self._context.run_async(self._fetch_next_member_page_async(event.group_id))
 
     # ----------------------------------------------------------------- Actions
 
@@ -613,19 +720,16 @@ class GroupsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
-        self._detail_pane.set_members([], loading=True)
-        self._context.run_async(self._load_members_async(group.id))
-
-    async def _load_members_async(self, group_id: str) -> None:
-        try:
-            members = await self._controller.list_members(group_id)
-            if self._selected_group and self._selected_group.id == group_id:
-                self._detail_pane.set_members(members)
-        except Exception as exc:  # noqa: BLE001
+        if not getattr(group, "id", None):
             self._context.show_notification(
-                f"Failed to load members: {exc}",
+                "Selected group is missing an identifier.",
                 level=ToastLevel.ERROR,
             )
+            return
+        self._detail_pane.set_members([], loading=True)
+        self._context.set_busy("Loading members…")
+        self._start_member_stream(group.id)
+        self._context.run_async(self._fetch_next_member_page_async(group.id))
 
     def _handle_load_owners_clicked(self) -> None:
         group = self._selected_group
@@ -761,24 +865,19 @@ class GroupsWidget(PageScaffold):
             self._context.clear_busy()
 
     def _handle_send_to_assignments_clicked(self) -> None:
-        selection_model = self._table.selectionModel()
-        if selection_model is None:
-            return
-        indexes = selection_model.selectedRows()
-        if not indexes:
+        if not self._selected_group_ids:
             self._context.show_notification(
                 "Select at least one group to stage for the assignment centre.",
                 level=ToastLevel.WARNING,
             )
             return
         staged: list[tuple[str, str]] = []
-        for proxy_index in indexes:
-            source_index = self._proxy.mapToSource(proxy_index)
-            group = self._model.group_at(source_index.row())
-            if group is None or not group.id:
+        for group_id in self._selected_group_ids:
+            group = self._group_lookup.get(group_id)
+            if group is None:
                 continue
-            name = group.display_name or group.mail or group.mail_nickname or group.id
-            staged.append((group.id, name))
+            name = group.display_name or group.mail or group.mail_nickname or group_id
+            staged.append((group_id, name))
         if not staged:
             self._context.show_notification(
                 "Unable to stage the selected group(s); missing identifiers.",
@@ -865,17 +964,17 @@ class GroupsWidget(PageScaffold):
 
     def _handle_search_changed(self, text: str) -> None:
         self._proxy.set_search_text(text)
-        self._update_summary()
+        self._refresh_filtered_views()
 
     def _handle_type_changed(self, index: int) -> None:  # noqa: ARG002
         group_type = self._type_combo.currentData()
         self._proxy.set_type_filter(group_type)
-        self._update_summary()
+        self._refresh_filtered_views()
 
     def _handle_mail_changed(self, index: int) -> None:  # noqa: ARG002
         mail_state = self._mail_combo.currentData()
         self._proxy.set_mail_filter(mail_state)
-        self._update_summary()
+        self._refresh_filtered_views()
 
     def _apply_filter_options(self, groups: Iterable[DirectoryGroup]) -> None:
         types = sorted({_group_type_label(group) for group in groups}, key=str.lower)
@@ -905,6 +1004,138 @@ class GroupsWidget(PageScaffold):
             combo.setCurrentIndex(0)
         combo.blockSignals(False)
 
+    def _refresh_filtered_views(self) -> None:
+        self._rebuild_group_tree()
+        visible_groups = self._current_filtered_groups()
+        visible_ids = {
+            group.id
+            for group in visible_groups
+            if getattr(group, "id", None)
+        }
+        if self._selected_group_ids and not (self._selected_group_ids & visible_ids):
+            self._selected_group_ids.clear()
+            self._apply_group_selection([])
+        elif self._selected_group_ids:
+            self._selected_group_ids &= visible_ids
+            self._set_table_selection(self._selected_group_ids)
+            self._set_tree_selection(self._selected_group_ids)
+            if self._selected_group and self._selected_group.id not in self._selected_group_ids:
+                group = next((g for g in visible_groups if g.id in self._selected_group_ids), None)
+                if group is not None:
+                    self._apply_group_selection([group])
+        self._update_summary()
+
+    def _current_filtered_groups(self) -> list[DirectoryGroup]:
+        groups: list[DirectoryGroup] = []
+        for row in range(self._proxy.rowCount()):
+            source_index = self._proxy.mapToSource(self._proxy.index(row, 0))
+            group = self._model.group_at(source_index.row())
+            if group is not None:
+                groups.append(group)
+        return groups
+
+    def _update_group_lookup(self, groups: Iterable[DirectoryGroup]) -> None:
+        self._group_lookup = {
+            group.id: group
+            for group in groups
+            if getattr(group, "id", None)
+        }
+
+    def _rebuild_group_tree(self) -> None:
+        groups = self._current_filtered_groups()
+        self._group_tree.blockSignals(True)
+        self._group_tree.clear()
+        self._tree_item_map.clear()
+
+        if not groups:
+            placeholder = QTreeWidgetItem(["No groups match current filters."])
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._group_tree.addTopLevelItem(placeholder)
+            self._group_tree.blockSignals(False)
+            return
+
+        categories: dict[str, QTreeWidgetItem] = {}
+        for group in groups:
+            group_id = getattr(group, "id", None)
+            if not group_id:
+                continue
+            type_label = _group_type_label(group)
+            parent = categories.get(type_label)
+            if parent is None:
+                parent = QTreeWidgetItem([f"{type_label}"])
+                parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                categories[type_label] = parent
+                self._group_tree.addTopLevelItem(parent)
+            display = (
+                group.display_name
+                or group.mail
+                or group.mail_nickname
+                or group_id
+            )
+            child = QTreeWidgetItem([display])
+            child.setData(0, Qt.ItemDataRole.UserRole, group_id)
+            tooltip_parts = [
+                group.description or "",
+                f"Mail: {group.mail}" if group.mail else "",
+            ]
+            tooltip = "\n".join(part for part in tooltip_parts if part)
+            if tooltip:
+                child.setToolTip(0, tooltip)
+            parent.addChild(child)
+            self._tree_item_map[group_id] = child
+
+        for parent in categories.values():
+            parent.setExpanded(True)
+
+        self._group_tree.blockSignals(False)
+        if self._selected_group_ids:
+            self._set_tree_selection(self._selected_group_ids)
+
+    def _set_tree_selection(self, group_ids: Iterable[str]) -> None:
+        self._group_tree.blockSignals(True)
+        self._group_tree.clearSelection()
+        first_item: QTreeWidgetItem | None = None
+        for group_id in group_ids:
+            item = self._tree_item_map.get(group_id)
+            if item is None:
+                continue
+            item.setSelected(True)
+            if first_item is None:
+                first_item = item
+        if first_item is not None:
+            self._group_tree.scrollToItem(first_item)
+        self._group_tree.blockSignals(False)
+
+    def _set_table_selection(self, group_ids: Iterable[str]) -> None:
+        selection_model = self._table.selectionModel()
+        if selection_model is None:
+            return
+        selection_model.blockSignals(True)
+        selection_model.clearSelection()
+        first_proxy: QModelIndex | None = None
+        for group_id in group_ids:
+            row = self._row_for_group_id(group_id)
+            if row is None:
+                continue
+            proxy_index = self._proxy.mapFromSource(self._model.index(row, 0))
+            if proxy_index.isValid():
+                selection_model.select(
+                    proxy_index,
+                    QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+                )
+                if first_proxy is None:
+                    first_proxy = proxy_index
+        if first_proxy is not None:
+            self._table.scrollTo(first_proxy)
+        selection_model.blockSignals(False)
+
+    def _row_for_group_id(self, group_id: str) -> int | None:
+        for row in range(self._model.rowCount()):
+            group = self._model.group_at(row)
+            if group is not None and group.id == group_id:
+                return row
+        return None
+
     # ----------------------------------------------------------------- Selection
 
     def _handle_selection_changed(self, *_: object) -> None:
@@ -912,38 +1143,175 @@ class GroupsWidget(PageScaffold):
         if selection_model is None:
             return
         indexes = selection_model.selectedRows()
-        if not indexes:
-            self._selected_group = None
+        groups: list[DirectoryGroup] = []
+        ids: set[str] = set()
+        for proxy_index in indexes:
+            source_index = self._proxy.mapToSource(proxy_index)
+            group = self._model.group_at(source_index.row())
+            if group is None or not getattr(group, "id", None):
+                continue
+            groups.append(group)
+            ids.add(group.id)
+        if indexes:
+            self._set_tree_selection(ids)
+        else:
+            self._set_tree_selection(set())
+        self._apply_group_selection(groups)
+
+    def _handle_tree_selection_changed(self) -> None:
+        items = self._group_tree.selectedItems()
+        groups: list[DirectoryGroup] = []
+        ids: set[str] = set()
+        for item in items:
+            group_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if not group_id:
+                continue
+            group = self._group_lookup.get(group_id)
+            if group is None:
+                continue
+            groups.append(group)
+            ids.add(group_id)
+        if items:
+            self._set_table_selection(ids)
+        else:
+            self._set_table_selection(set())
+        self._apply_group_selection(groups)
+
+    def _apply_group_selection(self, groups: list[DirectoryGroup]) -> None:
+        previous_id = self._selected_group.id if self._selected_group else None
+        self._selected_group_ids = {
+            group.id
+            for group in groups
+            if getattr(group, "id", None)
+        }
+        next_group = groups[0] if groups else None
+        self._selected_group = next_group
+
+        if next_group is None:
+            self._member_group_id = None
             self._detail_pane.display_group(None)
-            self._update_action_buttons()
+            self._detail_pane.clear_members()
+            self._detail_pane.clear_owners()
+        else:
+            self._detail_pane.display_group(next_group)
+            if previous_id != next_group.id:
+                self._prepare_member_state_for_group(next_group)
+            owner_cache = self._controller.cached_owners(next_group.id)
+            if owner_cache is not None:
+                self._detail_pane.set_owners(owner_cache)
+            else:
+                self._detail_pane.clear_owners()
+
+        self._update_action_buttons()
+        self._update_summary()
+
+    def _prepare_member_state_for_group(self, group: DirectoryGroup) -> None:
+        group_id = getattr(group, "id", None)
+        self._member_stream = None
+        self._member_pages = []
+        self._member_total_loaded = 0
+        self._member_page_index = -1
+        self._member_group_id = group_id
+
+        if not group_id:
+            self._detail_pane.clear_members()
             return
-        proxy_index = indexes[0]
-        source_index = self._proxy.mapToSource(proxy_index)
-        group = self._model.group_at(source_index.row())
-        self._selected_group = group
-        self._detail_pane.display_group(group)
-        cached = self._controller.cached_members(group.id) if group else None
-        if group and cached is not None:
-            self._detail_pane.set_members(cached)
+
+        cached = self._controller.cached_members(group_id)
+        cached_stream = self._controller.cached_member_stream(group_id)
+        if cached_stream is not None:
+            self._member_stream = cached_stream
+        if cached:
+            self._member_pages = [
+                cached[index : index + self._member_page_size]
+                for index in range(0, len(cached), self._member_page_size)
+            ]
+            self._member_total_loaded = len(cached)
+            self._display_member_page(0)
         else:
             self._detail_pane.clear_members()
-        owner_cache = self._controller.cached_owners(group.id) if group else None
-        if group and owner_cache is not None:
-            self._detail_pane.set_owners(owner_cache)
-        else:
-            self._detail_pane.clear_owners()
-        self._update_action_buttons()
+
+    def _display_member_page(self, index: int) -> None:
+        if not (0 <= index < len(self._member_pages)):
+            self._detail_pane.clear_members()
+            return
+        page = self._member_pages[index]
+        has_more = False
+        if index < len(self._member_pages) - 1:
+            has_more = True
+        elif self._member_stream is not None and self._member_stream.has_more:
+            has_more = True
+        self._member_page_index = index
+        self._detail_pane.set_members(
+            page,
+            page_index=index,
+            has_more=has_more,
+            total_loaded=self._member_total_loaded or len(page),
+        )
+
+    def _start_member_stream(self, group_id: str) -> None:
+        self._member_stream = self._controller.member_stream(group_id, page_size=self._member_page_size)
+        self._member_group_id = group_id
+        self._member_pages = []
+        self._member_page_index = -1
+        self._member_total_loaded = 0
+        self._controller.cache_members(group_id, [], append=False)
+
+    async def _fetch_next_member_page_async(self, group_id: str) -> None:
+        stream = self._member_stream
+        if stream is None or self._member_group_id != group_id:
+            self._start_member_stream(group_id)
+            stream = self._member_stream
+        if stream is None:
+            return
+        try:
+            page = await stream.next_page()
+            if self._member_group_id != group_id:
+                return
+            if page:
+                self._member_pages.append(page)
+                self._member_total_loaded += len(page)
+                self._controller.cache_members(group_id, page, append=True)
+                self._display_member_page(len(self._member_pages) - 1)
+            elif not self._member_pages:
+                self._detail_pane.set_members([], page_index=0, has_more=False, total_loaded=0)
+            else:
+                current_index = self._member_page_index if self._member_page_index >= 0 else len(self._member_pages) - 1
+                self._display_member_page(max(0, current_index))
+        except Exception as exc:  # noqa: BLE001
+            self._context.show_notification(
+                f"Failed to load members: {exc}",
+                level=ToastLevel.ERROR,
+                duration_ms=8000,
+            )
+        finally:
+            self._context.clear_busy()
+
+    def _handle_members_next_requested(self) -> None:
+        group_id = self._member_group_id
+        if not group_id:
+            return
+        next_index = self._member_page_index + 1
+        if next_index < len(self._member_pages):
+            self._display_member_page(next_index)
+            return
+        if self._member_stream is not None and self._member_stream.has_more:
+            self._context.set_busy("Loading additional members…")
+            self._context.run_async(self._fetch_next_member_page_async(group_id))
+
+    def _handle_members_prev_requested(self) -> None:
+        if self._member_page_index <= 0:
+            return
+        self._display_member_page(self._member_page_index - 1)
 
     def _reselect_group(self, group_id: str) -> None:
-        for row in range(self._model.rowCount()):
-            group = self._model.group_at(row)
-            if group is None or group.id != group_id:
-                continue
-            proxy_index = self._proxy.mapFromSource(self._model.index(row, 0))
-            if proxy_index.isValid():
-                self._table.selectRow(proxy_index.row())
-                self._table.scrollTo(proxy_index)
-            break
+        if not group_id:
+            return
+        self._set_table_selection({group_id})
+        self._set_tree_selection({group_id})
+        group = self._group_lookup.get(group_id)
+        if group is not None:
+            self._apply_group_selection([group])
 
     # ----------------------------------------------------------------- Helpers
 
@@ -956,6 +1324,11 @@ class GroupsWidget(PageScaffold):
             parts.append(f"{total:,} cached")
         if stale:
             parts.append("Cache stale — refresh recommended")
+        selected = len(self._selected_group_ids)
+        if selected:
+            parts.append(f"{selected:,} selected")
+        view_label = "Hierarchy" if self._view_tabs.currentIndex() == 1 else "Table"
+        parts.append(f"View: {view_label}")
         self._summary_label.setText(" · ".join(parts))
 
     def _update_action_buttons(self) -> None:

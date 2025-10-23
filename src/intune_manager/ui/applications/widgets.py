@@ -34,6 +34,11 @@ from intune_manager.data import (
     MobileApp,
     MobileAppAssignment,
 )
+from intune_manager.data.models.assignment import (
+    AssignmentIntent,
+    FilteredGroupAssignmentTarget,
+    GroupAssignmentTarget,
+)
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.applications import InstallSummaryEvent
 from intune_manager.ui.components import (
@@ -44,9 +49,10 @@ from intune_manager.ui.components import (
     make_toolbar_button,
 )
 
-from .assignment_editor import AssignmentEditorDialog
+from intune_manager.ui.assignments.assignment_editor import AssignmentEditorDialog
 from .controller import ApplicationController
 from .models import ApplicationFilterProxyModel, ApplicationTableModel
+from .bulk_assignment import BulkAssignmentDialog, BulkAssignmentPlan
 
 
 def _format_value(value: object | None) -> str:
@@ -333,6 +339,11 @@ class ApplicationsWidget(PageScaffold):
             "Export assignments",
             tooltip="Export current assignments to JSON.",
         )
+        self._bulk_assign_button = make_toolbar_button(
+            "Bulk assign",
+            tooltip="Assign multiple applications to selected groups in one workflow.",
+        )
+        self._bulk_assign_button.setEnabled(False)
 
         actions: List[QToolButton] = [
             self._refresh_button,
@@ -340,6 +351,7 @@ class ApplicationsWidget(PageScaffold):
             self._install_summary_button,
             self._cache_icon_button,
             self._edit_assignments_button,
+            self._bulk_assign_button,
             self._export_assignments_button,
         ]
 
@@ -357,6 +369,7 @@ class ApplicationsWidget(PageScaffold):
         self._icon_cache: dict[str, QIcon] = {}
         self._install_summaries: dict[str, dict[str, object]] = {}
         self._selected_app: MobileApp | None = None
+        self._selected_apps: list[MobileApp] = []
         self._command_unregister: Callable[[], None] | None = None
 
         self._model.set_icon_provider(lambda app_id: self._icon_cache.get(app_id))
@@ -370,6 +383,7 @@ class ApplicationsWidget(PageScaffold):
         self._cache_icon_button.clicked.connect(self._handle_cache_icon_clicked)
         self._edit_assignments_button.clicked.connect(self._handle_edit_assignments_clicked)
         self._export_assignments_button.clicked.connect(self._handle_export_assignments_clicked)
+        self._bulk_assign_button.clicked.connect(self._handle_bulk_assign_clicked)
 
         self._controller.register_callbacks(
             refreshed=self._handle_apps_refreshed,
@@ -427,7 +441,7 @@ class ApplicationsWidget(PageScaffold):
         self._table = QTableView()
         self._table.setModel(self._proxy)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -666,12 +680,13 @@ class ApplicationsWidget(PageScaffold):
                     filters = []
 
         self._context.clear_busy()
+        subject = app.display_name or app.id or "Application"
         dialog = AssignmentEditorDialog(
-            app,
-            assignments,
-            groups,
-            filters,
-            on_export=lambda payload: self._export_assignments(payload, suggested_name=f"{app.display_name}_assignments.json"),
+            assignments=assignments,
+            groups=groups,
+            filters=filters,
+            subject_name=subject,
+            on_export=lambda payload: self._export_assignments(payload, suggested_name=f"{subject}_assignments.json"),
             parent=self,
         )
         if dialog.exec() == dialog.Accepted:
@@ -701,6 +716,57 @@ class ApplicationsWidget(PageScaffold):
         finally:
             self._context.clear_busy()
 
+    def _handle_bulk_assign_clicked(self) -> None:
+        if not self._selected_apps:
+            self._context.show_notification(
+                "Select one or more applications before using bulk assignment.",
+                level=ToastLevel.INFO,
+            )
+            return
+        if self._services.assignments is None:
+            self._context.show_notification(
+                "Assignment service not configured. Enable assignment workflows in Settings.",
+                level=ToastLevel.WARNING,
+            )
+            return
+
+        group_service = self._services.groups
+        if group_service is None:
+            self._context.show_notification(
+                "Group service unavailable. Refresh directory groups before applying assignments.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        groups = [group for group in group_service.list_cached() if group.id]
+        if not groups:
+            self._context.show_notification(
+                "No directory groups cached. Refresh groups before running the bulk assignment wizard.",
+                level=ToastLevel.WARNING,
+                duration_ms=6000,
+            )
+            return
+
+        filters_service = self._services.assignment_filters
+        filters = filters_service.list_cached() if filters_service is not None else []
+
+        dialog = BulkAssignmentDialog(
+            apps=self._selected_apps,
+            groups=groups,
+            filters=filters,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        plan = dialog.plan()
+        if plan is None:
+            return
+
+        self._context.set_busy("Applying bulk assignments…")
+        self._refresh_button.setEnabled(False)
+        self._force_refresh_button.setEnabled(False)
+        self._bulk_assign_button.setEnabled(False)
+        self._context.run_async(self._apply_bulk_assignments_async(plan))
+
     def _handle_export_assignments_clicked(self) -> None:
         app = self._selected_app
         if app is None:
@@ -714,6 +780,113 @@ class ApplicationsWidget(PageScaffold):
             self._context.show_notification("No assignments cached for export.", level=ToastLevel.INFO)
             return
         self._export_assignments(assignments, suggested_name=f"{app.display_name}_assignments.json")
+
+    async def _apply_bulk_assignments_async(self, plan: BulkAssignmentPlan) -> None:
+        successes = 0
+        failures: list[str] = []
+        total_apps = len(plan.apps)
+        try:
+            if total_apps == 0 or not plan.groups:
+                return
+            for index, app in enumerate(plan.apps, start=1):
+                label = app.display_name or app.id or "Application"
+                self._context.set_busy_message(
+                    f"Applying assignments… {index}/{total_apps} — {label}",
+                )
+                current_assignments = list(app.assignments or [])
+                desired_assignments = list(current_assignments)
+                updated = False
+                for group in plan.groups:
+                    if not group.id:
+                        continue
+                    existing = self._find_assignment(
+                        current_assignments,
+                        group.id,
+                        plan.filter_id,
+                        plan.intent,
+                    )
+                    if existing:
+                        if plan.settings is not None and existing.settings != plan.settings:
+                            replacement = existing.model_copy(update={"settings": plan.settings})
+                            desired_assignments = [
+                                replacement if assignment is existing else assignment
+                                for assignment in desired_assignments
+                            ]
+                            updated = True
+                        continue
+                    target = (
+                        FilteredGroupAssignmentTarget(group_id=group.id, assignment_filter_id=plan.filter_id)
+                        if plan.filter_id
+                        else GroupAssignmentTarget(group_id=group.id)
+                    )
+                    new_assignment = MobileAppAssignment.model_construct(
+                        id="",
+                        intent=plan.intent,
+                        target=target,
+                        settings=plan.settings,
+                    )
+                    desired_assignments.append(new_assignment)
+                    updated = True
+                if not updated:
+                    continue
+                diff = self._controller.diff_assignments(
+                    current=current_assignments,
+                    desired=desired_assignments,
+                )
+                if diff is None or diff.is_noop:
+                    continue
+                try:
+                    await self._controller.apply_diff(app.id, diff)
+                    successes += 1
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{label}: {exc}")
+            if successes:
+                await self._controller.refresh(force=True, include_assignments=True)
+        finally:
+            self._context.clear_busy()
+            self._refresh_button.setEnabled(True)
+            self._force_refresh_button.setEnabled(True)
+            self._update_action_buttons()
+
+        if not total_apps:
+            return
+        if failures:
+            self._context.show_notification(
+                f"Assignments applied with {len(failures)} failure(s). Check logs for details.",
+                level=ToastLevel.WARNING,
+                duration_ms=8000,
+            )
+        elif successes:
+            self._context.show_notification(
+                f"Assignments applied to {successes} application(s).",
+                level=ToastLevel.SUCCESS,
+            )
+        else:
+            self._context.show_notification(
+                "No assignment changes were necessary.",
+                level=ToastLevel.INFO,
+                duration_ms=4000,
+            )
+
+    @staticmethod
+    def _find_assignment(
+        assignments: Iterable[MobileAppAssignment],
+        group_id: str,
+        filter_id: str | None,
+        intent: AssignmentIntent,
+    ) -> MobileAppAssignment | None:
+        for assignment in assignments:
+            if assignment.intent != intent:
+                continue
+            target = assignment.target
+            target_group = getattr(target, "group_id", None)
+            if target_group != group_id:
+                continue
+            target_filter = getattr(target, "assignment_filter_id", None)
+            if (filter_id or None) != (target_filter or None):
+                continue
+            return assignment
+        return None
 
     # ----------------------------------------------------------------- Filters
 
@@ -774,24 +947,38 @@ class ApplicationsWidget(PageScaffold):
         indexes = selection_model.selectedRows()
         if not indexes:
             self._selected_app = None
+            self._selected_apps = []
             self._detail_pane.display_app(None, None)
+            self._detail_pane.update_install_summary(None)
             self._update_action_buttons()
             return
-        proxy_index = indexes[0]
-        source_index = self._proxy.mapToSource(proxy_index)
-        app = self._model.app_at(source_index.row())
-        self._selected_app = app
-        icon = self._icon_cache.get(app.id) if app else None
-        self._detail_pane.display_app(app, icon)
-        if app:
+        selected_apps: list[MobileApp] = []
+        for proxy_index in indexes:
+            source_index = self._proxy.mapToSource(proxy_index)
+            app = self._model.app_at(source_index.row())
+            if app is None:
+                continue
+            selected_apps.append(app)
+        self._selected_apps = selected_apps
+        self._selected_app = selected_apps[0] if selected_apps else None
+
+        if self._selected_app is None:
+            self._detail_pane.display_app(None, None)
+            self._detail_pane.update_install_summary(None)
+        else:
+            app = self._selected_app
+            icon = self._icon_cache.get(app.id) if app.id else None
+            self._detail_pane.display_app(app, icon)
             summary = self._install_summaries.get(app.id)
             self._detail_pane.update_install_summary(summary)
             if (
                 self._services.applications is not None
+                and app.id
                 and app.id not in self._icon_cache
             ):
                 self._context.run_async(self._cache_icon_async(app.id))
         self._update_action_buttons()
+        self._update_summary()
 
     def _reselect_app(self, app_id: str) -> None:
         for row in range(self._model.rowCount()):
@@ -815,20 +1002,27 @@ class ApplicationsWidget(PageScaffold):
             parts.append(f"{total:,} cached")
         if stale:
             parts.append("Cache stale — refresh recommended")
+        if self._selected_apps:
+            parts.append(f"{len(self._selected_apps):,} selected")
         self._summary_label.setText(" · ".join(parts))
 
     def _update_action_buttons(self) -> None:
         app_selected = self._selected_app is not None
+        multiple_selected = len(self._selected_apps) > 1
+        any_selected = bool(self._selected_apps)
         service_available = self._services.applications is not None
         assignment_service_available = self._services.assignments is not None
 
         for button in [self._install_summary_button, self._cache_icon_button]:
-            button.setEnabled(service_available and app_selected)
+            button.setEnabled(service_available and app_selected and not multiple_selected)
 
         self._edit_assignments_button.setEnabled(
-            service_available and assignment_service_available and app_selected,
+            service_available and assignment_service_available and app_selected and not multiple_selected,
         )
-        self._export_assignments_button.setEnabled(service_available and app_selected)
+        self._export_assignments_button.setEnabled(service_available and app_selected and not multiple_selected)
+        self._bulk_assign_button.setEnabled(
+            service_available and assignment_service_available and any_selected,
+        )
 
         self._refresh_button.setEnabled(service_available)
         self._force_refresh_button.setEnabled(service_available)

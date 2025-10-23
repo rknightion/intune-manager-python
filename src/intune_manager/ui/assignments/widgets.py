@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -16,6 +21,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressDialog,
     QSizePolicy,
     QSplitter,
     QTableView,
@@ -24,7 +32,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp, MobileAppAssignment
+from pydantic import ValidationError
+
+from intune_manager.data import (
+    AssignmentFilter,
+    AssignmentIntent,
+    AssignmentSettings,
+    DirectoryGroup,
+    MobileApp,
+    MobileAppAssignment,
+)
+from intune_manager.data.models.assignment import FilteredGroupAssignmentTarget, GroupAssignmentTarget
 from intune_manager.services.assignments import AssignmentAppliedEvent, AssignmentDiff
 from intune_manager.services.base import ServiceErrorEvent
 from intune_manager.services import ServiceRegistry
@@ -38,14 +56,10 @@ from intune_manager.ui.components import (
 )
 from intune_manager.utils import get_logger
 
+from .bulk_wizard import BulkAssignmentPlan, BulkAssignmentWizard
+from .assignment_editor import AssignmentEditorDialog
 from .controller import AssignmentCenterController
-from .models import (
-    AssignmentTableModel,
-    DiffDetailModel,
-    DiffSummary,
-    DiffSummaryModel,
-    DiffDetail,
-)
+from .models import AssignmentTableModel, DiffDetailModel, DiffSummary, DiffSummaryModel
 
 
 logger = get_logger(__name__)
@@ -57,6 +71,127 @@ def _clone_for_desired(assignments: Iterable[MobileAppAssignment]) -> list[Mobil
         cloned.append(assignment.model_copy(update={"id": None}))
     return cloned
 
+
+class _CancellationToken:
+    """Simple cancellation token for bulk apply flows."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@dataclass(slots=True)
+class _StagedGroupOptions:
+    intent: AssignmentIntent
+    filter_id: Optional[str]
+    settings: Optional[AssignmentSettings]
+    update_existing: bool
+
+
+class _StagedGroupsDialog(QDialog):
+    """Collects options for importing staged groups into desired assignments."""
+
+    def __init__(
+        self,
+        *,
+        group_count: int,
+        filters: Iterable[AssignmentFilter],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Create assignments for staged groups")
+        self.resize(460, 420)
+
+        self._result: _StagedGroupOptions | None = None
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            f"{group_count} staged group(s) will receive the same intent, filter, and optional settings.",
+            parent=self,
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 8, 0, 8)
+        form.setSpacing(8)
+
+        self._intent_combo = QComboBox()
+        for intent in AssignmentIntent:
+            label = intent.value.replace("WithoutEnrollment", " without enrollment").replace("_", " ")
+            form_label = label.title()
+            self._intent_combo.addItem(form_label, intent.value)
+        form.addRow("Assignment intent", self._intent_combo)
+
+        self._filter_combo = QComboBox()
+        self._filter_combo.addItem("No filter", None)
+        for assignment_filter in sorted(filters, key=lambda item: (item.display_name or item.id or "").lower()):
+            if not assignment_filter.id:
+                continue
+            display = assignment_filter.display_name or assignment_filter.id
+            self._filter_combo.addItem(display, assignment_filter.id)
+        form.addRow("Assignment filter", self._filter_combo)
+
+        self._overwrite_checkbox = QCheckBox("Update existing assignments for these groups", parent=self)
+        form.addRow("Existing targets", self._overwrite_checkbox)
+
+        layout.addLayout(form)
+
+        settings_box = QGroupBox("Advanced settings (optional)", parent=self)
+        settings_layout = QVBoxLayout(settings_box)
+        hint = QLabel(
+            "Provide Graph assignment settings JSON to apply to each staged group. Leave blank to use provider defaults.",
+            parent=settings_box,
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(mid);")
+        settings_layout.addWidget(hint)
+
+        self._settings_edit = QPlainTextEdit(parent=settings_box)
+        self._settings_edit.setPlaceholderText("Paste assignment settings JSON…")
+        self._settings_edit.setMinimumHeight(120)
+        settings_layout.addWidget(self._settings_edit)
+
+        layout.addWidget(settings_box)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok,
+            parent=self,
+        )
+        button_box.accepted.connect(self._handle_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def options(self) -> _StagedGroupOptions | None:
+        return self._result
+
+    def _handle_accept(self) -> None:
+        intent_value = self._intent_combo.currentData()
+        if intent_value is None:
+            QMessageBox.warning(self, "Missing intent", "Select an assignment intent before continuing.")
+            return
+        intent = AssignmentIntent(intent_value)
+        filter_id = self._filter_combo.currentData()
+
+        settings_obj: AssignmentSettings | None = None
+        payload_text = self._settings_edit.toPlainText().strip()
+        if payload_text:
+            try:
+                payload = json.loads(payload_text)
+                settings_obj = AssignmentSettings.model_validate(payload)
+            except (json.JSONDecodeError, ValidationError) as exc:
+                QMessageBox.warning(self, "Invalid settings", f"Unable to parse settings JSON: {exc}")
+                return
+
+        self._result = _StagedGroupOptions(
+            intent=intent,
+            filter_id=filter_id,
+            settings=settings_obj,
+            update_existing=self._overwrite_checkbox.isChecked(),
+        )
+        self.accept()
 
 class AssignmentsWidget(PageScaffold):
     """Assignment centre workspace for bulk comparison and apply flows."""
@@ -88,10 +223,20 @@ class AssignmentsWidget(PageScaffold):
             "Import assignments",
             tooltip="Import assignments from a JSON export to use as the desired state.",
         )
+        self._edit_button = make_toolbar_button(
+            "Edit desired",
+            tooltip="Open the assignment editor to add/remove targets and adjust intents or settings.",
+        )
+        self._staged_apply_button = make_toolbar_button(
+            "Apply staged groups",
+            tooltip="Create or update desired assignments for the staged groups collected from the Groups module.",
+        )
 
         actions: List[QToolButton] = [
             self._preview_button,
             self._apply_button,
+            self._edit_button,
+            self._staged_apply_button,
             self._backup_button,
             self._restore_button,
         ]
@@ -107,6 +252,8 @@ class AssignmentsWidget(PageScaffold):
         self._app_index: Dict[str, MobileApp] = {}
         self._group_lookup: Dict[str, DirectoryGroup] = {}
         self._filter_lookup: Dict[str, AssignmentFilter] = {}
+        self._groups: list[DirectoryGroup] = []
+        self._filters: list[AssignmentFilter] = []
         self._assignment_cache: Dict[str, list[MobileAppAssignment]] = {}
         self._source_assignments: list[MobileAppAssignment] = []
         self._desired_assignments: list[MobileAppAssignment] = []
@@ -310,6 +457,8 @@ class AssignmentsWidget(PageScaffold):
         self._apply_button.clicked.connect(self._handle_apply_clicked)
         self._backup_button.clicked.connect(self._handle_backup_clicked)
         self._restore_button.clicked.connect(self._handle_restore_clicked)
+        self._edit_button.clicked.connect(self._handle_edit_desired_clicked)
+        self._staged_apply_button.clicked.connect(self._handle_apply_staged_groups_clicked)
 
         if self._summary_view is not None:
             selection = self._summary_view.selectionModel()
@@ -355,8 +504,13 @@ class AssignmentsWidget(PageScaffold):
         self._app_index = {app.id: app for app in apps if app.id}
         self._populate_app_lists()
 
-        self._group_lookup = {group.id: group for group in self._controller.list_groups() if group.id}
-        self._filter_lookup = {flt.id: flt for flt in self._controller.list_filters() if flt.id}
+        groups = [group for group in self._controller.list_groups() if group.id]
+        self._groups = groups
+        self._group_lookup = {group.id: group for group in groups if group.id}
+
+        filters = [flt for flt in self._controller.list_filters() if flt.id]
+        self._filters = filters
+        self._filter_lookup = {flt.id: flt for flt in filters if flt.id}
 
         if not self._controller.is_assignment_service_available():
             self._context.show_banner(
@@ -447,20 +601,14 @@ class AssignmentsWidget(PageScaffold):
             return
 
         self._source_assignments = assignments
-        self._desired_assignments = _clone_for_desired(assignments)
         app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
-        self._assignment_table.set_assignments(
-            self._desired_assignments,
-            group_lookup=self._group_lookup,
-            filter_lookup=self._filter_lookup,
+        self._set_desired_assignments(
+            assignments,
+            origin="cache",
+            status_message=f"{len(assignments):,} assignments loaded from {app_name}.",
+            history_message=f"Loaded assignments for {app_name}",
         )
-        self._assignment_status_label.setText(
-            f"{len(assignments):,} assignments loaded from {app_name}.",
-        )
-        self._refresh_staged_groups_summary()
-        self._append_history(f"Loaded assignments for {app_name}")
         self._context.clear_busy()
-        self._update_toolbar_state()
 
     async def _get_assignments(self, app_id: str) -> list[MobileAppAssignment]:
         if app_id in self._assignment_cache:
@@ -573,39 +721,146 @@ class AssignmentsWidget(PageScaffold):
             )
             return
 
-        button = QMessageBox.question(
-            self,
-            "Apply assignment changes",
-            "Apply the computed assignment changes to the selected targets?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        wizard = BulkAssignmentWizard(
+            diffs=pending,
+            apps=self._app_index,
+            group_lookup=self._group_lookup,
+            desired_assignments=self._desired_assignments,
+            warning_provider=self._collect_warnings,
+            staged_groups=self._staged_groups,
+            parent=self,
         )
-        if button != QMessageBox.StandardButton.Yes:
+        if wizard.exec() != QDialog.DialogCode.Accepted:
             return
 
-        self._context.set_busy("Applying assignment changes…")
-        self._context.run_async(self._apply_async(pending))
+        plan = wizard.result()
+        if plan is None or not plan.diffs:
+            self._context.show_notification(
+                "No assignments selected for application.",
+                level=ToastLevel.INFO,
+            )
+            return
 
-    async def _apply_async(self, pending: Dict[str, AssignmentDiff]) -> None:
+        if plan.warnings and not plan.options.skip_warnings:
+            warning_text = "\n".join(plan.warnings)
+            confirm = QMessageBox.question(
+                self,
+                "Warnings detected",
+                f"The following warnings were detected:\n\n{warning_text}\n\nContinue applying changes?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                self._append_history("Bulk apply cancelled after warning review.", warning=True)
+                return
+
+        self._start_bulk_apply(plan)
+
+    def _start_bulk_apply(self, plan: BulkAssignmentPlan) -> None:
+        total = len(plan.diffs)
+        if total == 0:
+            self._context.show_notification(
+                "No assignments selected for application.",
+                level=ToastLevel.INFO,
+            )
+            return
+
+        if plan.selected_group_ids:
+            self._append_history(
+                f"Bulk apply scoped to {len(plan.selected_group_ids)} specific group(s).",
+            )
+
+        progress = QProgressDialog("Preparing bulk assignment apply…", "Cancel", 0, total, self)
+        progress.setWindowTitle("Applying assignments")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+
+        token = _CancellationToken()
+        progress.canceled.connect(token.cancel)
+
+        self._context.set_busy("Applying assignment changes…")
+        self._context.run_async(self._apply_async(plan, token, progress))
+
+    async def _apply_async(
+        self,
+        plan: BulkAssignmentPlan,
+        token: _CancellationToken,
+        progress: QProgressDialog,
+    ) -> None:
+        total = len(plan.diffs)
         successes = 0
         failures = 0
-        for app_id, diff in pending.items():
-            app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
-            try:
-                await self._controller.apply_diff(app_id, diff)
-                self._append_history(
-                    f"Applied assignments to {app_name}: +{len(diff.to_create)}/~{len(diff.to_update)}/-{len(diff.to_delete)}",
-                )
-                successes += 1
-                # Refresh cache so subsequent previews reflect new state.
-                self._assignment_cache[app_id] = await self._controller.fetch_assignments(app_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Failed to apply assignment diff", app_id=app_id)
-                self._append_history(
-                    f"Failed to apply assignments to {app_name}: {exc}",
-                    warning=True,
-                )
-                failures += 1
-        self._context.clear_busy()
+        applied_ids: list[str] = []
+        cancelled = False
+
+        try:
+            progress.setRange(0, total)
+            progress.setValue(0)
+            for index, (app_id, diff) in enumerate(plan.diffs.items(), start=1):
+                if token.cancelled:
+                    cancelled = True
+                    break
+
+                app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
+                progress.setLabelText(f"Applying assignments for {app_name} ({index}/{total})")
+                QApplication.processEvents()
+
+                succeeded = False
+                last_exc: Exception | None = None
+                try:
+                    await self._controller.apply_diff(app_id, diff)
+                    succeeded = True
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if plan.options.retry_conflicts and not token.cancelled:
+                        try:
+                            await self._controller.apply_diff(app_id, diff)
+                        except Exception as retry_exc:  # noqa: BLE001
+                            last_exc = retry_exc
+                        else:
+                            succeeded = True
+
+                    if not succeeded:
+                        logger.exception("Failed to apply assignment diff", app_id=app_id)
+                        detail = last_exc or "Unknown error"
+                        self._append_history(
+                            f"Failed to apply assignments to {app_name}: {detail}",
+                            warning=True,
+                        )
+                        failures += 1
+
+                if succeeded:
+                    self._append_history(
+                        f"Applied assignments to {app_name}: +{len(diff.to_create)}/~{len(diff.to_update)}/-{len(diff.to_delete)}",
+                    )
+                    successes += 1
+                    applied_ids.append(app_id)
+                    self._assignment_cache[app_id] = await self._controller.fetch_assignments(app_id)
+
+                progress.setValue(index)
+                QApplication.processEvents()
+
+            if token.cancelled:
+                cancelled = True
+
+        finally:
+            progress.setValue(total)
+            progress.close()
+            self._context.clear_busy()
+            for app_id in applied_ids:
+                self._diff_cache.pop(app_id, None)
+            self._rebuild_diff_models_from_cache()
+            self._update_toolbar_state()
+
+        if cancelled:
+            self._context.show_notification(
+                f"Bulk assignment apply cancelled after {successes} of {total} target(s).",
+                level=ToastLevel.INFO,
+            )
+            return
+
         if failures:
             self._context.show_notification(
                 f"Assignments applied with {failures} failure(s). Check history for details.",
@@ -616,11 +871,40 @@ class AssignmentsWidget(PageScaffold):
                 f"Assignments applied to {successes} target(s).",
                 level=ToastLevel.SUCCESS,
             )
-        self._diff_cache.clear()
-        self._diff_summary_model.set_summaries([])
-        self._diff_detail_model.set_details([])
-        self._clear_warnings()
-        self._update_toolbar_state()
+            if plan.options.notify_end_users:
+                self._append_history(
+                    "End-user notifications were requested for this bulk apply run.",
+                )
+
+    def _rebuild_diff_models_from_cache(self) -> None:
+        summaries: list[DiffSummary] = []
+        warnings: list[str] = []
+
+        for app_id, diff in self._diff_cache.items():
+            app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
+            summary_warnings = self._collect_warnings(app_id, diff)
+            summaries.append(
+                DiffSummary(
+                    app_id=app_id,
+                    app_name=app_name or app_id,
+                    creates=len(diff.to_create),
+                    updates=len(diff.to_update),
+                    deletes=len(diff.to_delete),
+                    warnings=summary_warnings,
+                    has_filters=any(
+                        getattr(item.target, "assignment_filter_id", None)
+                        for item in diff.to_create + [update.desired for update in diff.to_update]
+                    ),
+                ),
+            )
+            warnings.extend(f"{app_name}: {warning}" for warning in summary_warnings)
+
+        self._diff_summary_model.set_summaries(summaries)
+        if summaries:
+            self._select_first_summary_row()
+        else:
+            self._diff_detail_model.set_details([])
+        self._populate_warnings(warnings)
 
     def _handle_backup_clicked(self) -> None:
         if not self._desired_assignments:
@@ -629,35 +913,7 @@ class AssignmentsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
-        try:
-            payload = self._controller.export_assignments(self._desired_assignments)
-        except Exception as exc:  # noqa: BLE001
-            self._context.show_notification(
-                f"Unable to export assignments: {exc}",
-                level=ToastLevel.ERROR,
-            )
-            return
-        suggested = f"assignments-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export assignments",
-            suggested,
-            "JSON files (*.json);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            with Path(path).open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to write export file", path=path)
-            self._context.show_notification(
-                f"Failed to write file: {exc}",
-                level=ToastLevel.ERROR,
-            )
-            return
-        self._append_history(f"Exported assignments to {path}")
-        self._context.show_notification("Assignments exported successfully.", level=ToastLevel.SUCCESS)
+        self._export_desired_assignments(self._desired_assignments)
 
     def _handle_restore_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -694,21 +950,12 @@ class AssignmentsWidget(PageScaffold):
 
         self._desired_assignments = _clone_for_desired(assignments)
         self._desired_origin = f"import:{Path(path).name}"
-        self._assignment_table.set_assignments(
-            self._desired_assignments,
-            group_lookup=self._group_lookup,
-            filter_lookup=self._filter_lookup,
+        self._set_desired_assignments(
+            assignments,
+            origin=f"import:{Path(path).name}",
+            status_message=f"{len(self._desired_assignments):,} assignments loaded from import ({Path(path).name}).",
+            history_message=f"Imported assignments from {path}",
         )
-        self._assignment_status_label.setText(
-            f"{len(self._desired_assignments):,} assignments loaded from import ({Path(path).name}).",
-        )
-        self._refresh_staged_groups_summary()
-        self._append_history(f"Imported assignments from {path}")
-        self._diff_cache.clear()
-        self._diff_summary_model.set_summaries([])
-        self._diff_detail_model.set_details([])
-        self._clear_warnings()
-        self._update_toolbar_state()
 
     def _handle_summary_selection(self) -> None:
         if self._summary_view is None:
@@ -747,6 +994,78 @@ class AssignmentsWidget(PageScaffold):
             level=ToastLevel.ERROR,
         )
 
+    def _handle_edit_desired_clicked(self) -> None:
+        assignments = list(self._desired_assignments or self._source_assignments)
+        dialog = AssignmentEditorDialog(
+            assignments=assignments,
+            groups=self._groups,
+            filters=self._filters,
+            subject_name="Desired assignment template",
+            on_export=lambda payload: self._export_desired_assignments(payload),
+            auto_export_default=False,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        desired = dialog.desired_assignments()
+        self._set_desired_assignments(
+            desired,
+            origin="editor",
+            status_message=f"{len(desired):,} assignments staged via manual editor.",
+            history_message="Desired assignments updated via editor.",
+        )
+
+        if dialog.auto_export_enabled():
+            self._export_desired_assignments(desired)
+
+    def _handle_apply_staged_groups_clicked(self) -> None:
+        if not self._staged_groups:
+            self._context.show_notification(
+                "No staged groups available. Stage groups from the Groups module first.",
+                level=ToastLevel.INFO,
+            )
+            return
+        dialog = _StagedGroupsDialog(
+            group_count=len(self._staged_groups),
+            filters=self._filters,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        options = dialog.options()
+        if options is None:
+            return
+
+        desired, created, updated, skipped = self._apply_staged_groups_to_desired(options)
+        if created == 0 and updated == 0:
+            message = (
+                "All staged groups already covered by desired assignments." if skipped else "No changes applied."
+            )
+            self._context.show_notification(message, level=ToastLevel.INFO)
+            return
+
+        summary_parts: list[str] = []
+        if created:
+            summary_parts.append(f"{created} created")
+        if updated:
+            summary_parts.append(f"{updated} updated")
+        if skipped:
+            summary_parts.append(f"{skipped} skipped")
+        summary = ", ".join(summary_parts)
+
+        self._set_desired_assignments(
+            desired,
+            origin="staged-groups",
+            status_message=f"{len(desired):,} assignments prepared after applying staged groups.",
+            history_message=f"Staged groups imported → {summary}",
+        )
+
+        self._context.show_notification(
+            f"Staged groups processed: {summary}.",
+            level=ToastLevel.SUCCESS if created or updated else ToastLevel.INFO,
+        )
+
     # ----------------------------------------------------------------- Helpers
 
     def _consume_staged_groups_command(self) -> None:
@@ -780,6 +1099,7 @@ class AssignmentsWidget(PageScaffold):
         if self._staged_groups_list is None:
             return
         self._staged_groups_list.clear()
+        self._staged_apply_button.setEnabled(bool(self._staged_groups))
         if not self._staged_groups:
             placeholder = QListWidgetItem("No staged groups.")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -798,6 +1118,131 @@ class AssignmentsWidget(PageScaffold):
             getattr(assignment.target, "group_id", None) == group_id
             for assignment in self._desired_assignments
         )
+
+    def _set_desired_assignments(
+        self,
+        assignments: Iterable[MobileAppAssignment],
+        *,
+        origin: str,
+        status_message: str,
+        history_message: str | None = None,
+    ) -> None:
+        desired_list = list(assignments)
+        self._desired_assignments = _clone_for_desired(desired_list)
+        self._desired_origin = origin
+        self._assignment_table.set_assignments(
+            self._desired_assignments,
+            group_lookup=self._group_lookup,
+            filter_lookup=self._filter_lookup,
+        )
+        if self._assignment_status_label is not None:
+            self._assignment_status_label.setText(status_message)
+        if history_message:
+            self._append_history(history_message)
+        self._refresh_staged_groups_summary()
+        self._diff_cache.clear()
+        self._diff_summary_model.set_summaries([])
+        self._diff_detail_model.set_details([])
+        self._clear_warnings()
+        self._update_toolbar_state()
+
+    def _export_desired_assignments(
+        self,
+        assignments: Iterable[MobileAppAssignment],
+        *,
+        suggested_name: str | None = None,
+    ) -> bool:
+        if not self._controller.is_assignment_service_available():
+            self._context.show_notification(
+                "Assignment service not configured — export unavailable.",
+                level=ToastLevel.WARNING,
+            )
+            return False
+        try:
+            payload = self._controller.export_assignments(assignments)
+        except Exception as exc:  # noqa: BLE001
+            self._context.show_notification(
+                f"Unable to export assignments: {exc}",
+                level=ToastLevel.ERROR,
+            )
+            return False
+
+        filename = suggested_name or f"assignments-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export assignments",
+            filename,
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return False
+        try:
+            with Path(path).open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to write export file", path=path)
+            self._context.show_notification(
+                f"Failed to write file: {exc}",
+                level=ToastLevel.ERROR,
+            )
+            return False
+
+        self._append_history(f"Exported assignments to {path}")
+        self._context.show_notification("Assignments exported successfully.", level=ToastLevel.SUCCESS)
+        return True
+
+    def _apply_staged_groups_to_desired(
+        self,
+        options: _StagedGroupOptions,
+    ) -> tuple[list[MobileAppAssignment], int, int, int]:
+        desired = list(self._desired_assignments)
+        group_index: Dict[str, int] = {}
+        for index, assignment in enumerate(desired):
+            group_id = getattr(assignment.target, "group_id", None)
+            if group_id:
+                group_index[group_id] = index
+
+        created = 0
+        updated = 0
+        skipped = 0
+
+        for group_id in self._staged_groups:
+            if not group_id:
+                continue
+            target = (
+                FilteredGroupAssignmentTarget(group_id=group_id, assignment_filter_id=options.filter_id)
+                if options.filter_id
+                else GroupAssignmentTarget(group_id=group_id)
+            )
+            settings = options.settings.model_copy(deep=True) if options.settings else None
+
+            if group_id in group_index:
+                if not options.update_existing:
+                    skipped += 1
+                    continue
+                idx = group_index[group_id]
+                current = desired[idx]
+                desired[idx] = current.model_copy(
+                    update={
+                        "intent": options.intent,
+                        "target": target,
+                        "settings": settings,
+                    },
+                )
+                updated += 1
+                continue
+
+            assignment = MobileAppAssignment.model_construct(
+                id=None,
+                intent=options.intent,
+                target=target,
+                settings=settings,
+            )
+            desired.append(assignment)
+            group_index[group_id] = len(desired) - 1
+            created += 1
+
+        return desired, created, updated, skipped
 
     def _collect_warnings(self, target_id: str, diff: AssignmentDiff) -> list[str]:
         warnings: list[str] = []
@@ -901,6 +1346,7 @@ class AssignmentsWidget(PageScaffold):
         )
         self._apply_button.setEnabled(apply_enabled)
         self._backup_button.setEnabled(has_desired and self._controller.is_assignment_service_available())
+        self._edit_button.setEnabled(bool(self._groups) or has_desired or bool(self._source_assignments))
 
     # ----------------------------------------------------------------- Cleanup
 
