@@ -2,7 +2,7 @@
 
 ## Mission
 - Deliver the cross-platform Intune Manager GUI by migrating the Swift macOS app to Python 3.13 with PySide6.
-- Ensure feature parity with the Swift reference while embracing uv-based workflows, MSAL auth, and the official `msgraph-beta-sdk-python` MS graph SDK.
+- Ensure feature parity with the Swift reference while embracing uv-based workflows, MSAL auth, and direct Microsoft Graph REST API access via httpx.
 - Treat `migration.txt` as the durable backlog and always update it before exiting a session.
 
 ## Project Architecture
@@ -12,7 +12,7 @@
 src/intune_manager/
 ├── auth/          # MSAL + keyring for secure token/secret lifecycle
 ├── config/        # Settings, env vars, feature flags
-├── graph/         # msgraph-beta-sdk wrappers, rate limiting, middleware
+├── graph/         # Graph API client (httpx), rate limiting, version switching
 ├── data/          # Models, SQLModel persistence, repositories, storage
 │   ├── models/    # Pydantic domain models (devices, apps, groups, assignments, etc.)
 │   ├── repositories/ # Cache-aware data access patterns
@@ -58,14 +58,15 @@ AGENTS.md         # This file (project-wide conventions)
 
 ### Graph API Access
 - Route all Microsoft Graph calls through `intune_manager.graph` (rate limiting, retry, logging).
-- Use `msgraph-beta-sdk-python` clients with dependency-injected credentials.
+- Use custom httpx client with MSAL token injection for direct REST API access.
+- Support both v1.0 GA and beta endpoints via per-path version override system.
 - Cache responses in SQLModel with configurable TTLs per domain.
 - Document new scopes or API additions in `migration.txt`.
 
 ### Domain Boundaries (Mirror Swift architecture)
 - **auth**: MSAL token acquisition, keyring secret storage, permission validation
 - **config**: Environment setup, dotenv, platform-specific config directories
-- **graph**: Graph SDK wrappers, pagination, batch operations, endpoint utilities
+- **graph**: Graph REST client (httpx+MSAL), rate limiting, pagination, batch operations, version switching
 - **data**: Models, SQLite persistence, cache management, repositories
 - **services**: Business logic (device sync, app assignment, group membership queries)
 - **ui**: PySide6 windows, dialogs, widgets, styling, event orchestration

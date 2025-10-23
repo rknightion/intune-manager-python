@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 
 
 GraphMethod = Literal["GET", "POST", "PATCH", "DELETE", "PUT"]
+BETA_VERSION = "beta"
 
 
 @dataclass(slots=True)
@@ -73,6 +74,7 @@ def mobile_app_assign_request(
         method="POST",
         url=path,
         body={"mobileAppAssignments": list(assignments)},
+        api_version=BETA_VERSION,
     )
 
 
@@ -107,7 +109,7 @@ def mobile_app_assignment_delete_request(app_id: str, assignment_id: str) -> Gra
 
 def mobile_app_install_summary_request(app_id: str) -> GraphRequest:
     path = f"/deviceAppManagement/mobileApps/{app_id}/installSummary"
-    return GraphRequest(method="GET", url=path)
+    return GraphRequest(method="GET", url=path, api_version=BETA_VERSION)
 
 
 def mobile_app_icon_request(
@@ -122,6 +124,7 @@ def mobile_app_icon_request(
         method="GET",
         url=path,
         headers={"Accept": "image/png"},
+        api_version=BETA_VERSION,
     )
 
 
@@ -134,7 +137,8 @@ def configuration_assign_request(
     """Build assign request for configuration profiles and templates."""
 
     path = f"/deviceManagement/{endpoint}/{configuration_id}/assign"
-    return GraphRequest(method="POST", url=path, body=body)
+    api_version = BETA_VERSION if endpoint == "configurationPolicies" else None
+    return GraphRequest(method="POST", url=path, body=body, api_version=api_version)
 
 
 def audit_events_request(
@@ -147,6 +151,7 @@ def audit_events_request(
         url=path,
         params=params,
         headers={"ConsistencyLevel": "eventual"},
+        api_version=BETA_VERSION,
     )
 
 
@@ -155,7 +160,7 @@ def assignment_filters_request(
     params: dict[str, Any] | None = None,
 ) -> GraphRequest:
     path = "/deviceManagement/assignmentFilters"
-    return GraphRequest(method="GET", url=path, params=params)
+    return GraphRequest(method="GET", url=path, params=params, api_version=BETA_VERSION)
 
 
 def graph_request_to_batch_entry(

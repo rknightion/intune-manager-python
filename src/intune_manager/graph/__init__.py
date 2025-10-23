@@ -1,5 +1,11 @@
 """Graph client utilities."""
 
+from .client import (
+    ApiVersionInput,
+    GraphAPIVersion,
+    GraphClientConfig,
+    GraphClientFactory,
+)
 from .errors import (
     AuthenticationError,
     GraphAPIError,
@@ -17,4 +23,8 @@ __all__ = [
     "PermissionError",
     "RateLimiter",
     "rate_limiter",
+    "GraphClientFactory",
+    "GraphClientConfig",
+    "GraphAPIVersion",
+    "ApiVersionInput",
 ]

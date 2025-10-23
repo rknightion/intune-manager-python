@@ -92,6 +92,14 @@ class AttachmentCache:
             for entry in root.glob("**/*"):
                 if entry.is_file():
                     entry.unlink()
+        logger.info("Attachment cache purged", tenant_id=tenant_id)
+
+    def base_dir(self, *, tenant_id: str | None = None) -> Path:
+        """Return the root directory backing the attachment cache."""
+
+        root = self._tenant_root(tenant_id)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     # --------------------------------------------------------------- Helpers
 

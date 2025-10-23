@@ -63,6 +63,7 @@ class AssignmentFilterService:
                 request.url,
                 params=request.params,
                 headers=request.headers,
+                api_version=request.api_version,
             ):
                 filters.append(AssignmentFilter.from_graph(item))
 

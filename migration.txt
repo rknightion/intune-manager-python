@@ -70,11 +70,6 @@ When working with Microsoft Graph API:
 ## Current Migration Tasks
 **Start at the top and work your way down**
 
-- [ ] P6.12: Make proper use of MS Graph APIs by implementing:
-- [ ] P6.12.1: Implement a mechanism that allows us to use both the MS Graph v1.0 GA API (stable) for API calls where the functionality we require is present in 1.0 GA version but allows us to override for specific API calls to the MS Graph Beta API where that functionality we need is only implemented in the Graph BETA API. Effectively allowing the app to make use of both API versions depending on the path called. We should be defaulting to the v1 GA API for stability and only using the beta APIs where we require the functionality. Alternatively if the existing functionality we're utilising is in the majority in the beta API then instead default to the beta API and override for v1 (you decice)
-- [ ] P6.12.2: Review all current API calls made by our app to ensure we are using the right version of the MS Graph API (beta or GA depending on functionality required). We should validate our calls and contents and expected returns against the context7 MCP docs for graph API or other MS Graph API documentation and pay special attention to noting if functionality we need is only in the beta version or not
-
-
 
 - [ ] P6.9 Build Settings/Configuration views (auth status, tenant config, cache management, theme selection, log export, about dialog) reusing the Phase 3 `SettingsWidget` and extending with cache/log controls plus navigation wiring.
   - Embed existing settings widget inside shell tab, add sub-pages for cache inspection, log export, keyring inspection, theme toggle, and about/license info.

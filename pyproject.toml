@@ -13,7 +13,6 @@ dependencies = [
     "keyring>=25.6.0",
     "loguru>=0.7.3",
     "msal>=1.34.0",
-    "msgraph-beta-sdk>=1.48.0",
     "platformdirs>=4.5.0",
     "pydantic>=2.12.3",
     "pyside6>=6.10.0",
@@ -46,3 +45,26 @@ dev = [
     "respx>=0.22.0",
     "ruff>=0.14.1",
 ]
+
+[tool.nuitka]
+mode = "app"
+enable-plugin = "pyside6"
+include-qt-plugins = "all"
+nofollow-import-to = ["*.tests", "pytest", "mypy", "ruff"]
+show-scons = true
+lto = "yes"
+jobs = "8"
+console = "force"
+
+[tool.nuitka.macos]
+macos-create-app-bundle = true
+macos-app-name = "IntuneManager"
+include-module = ["keyring.backends.macOS"]
+
+[tool.nuitka.windows]
+windows-console-mode = "disable"
+windows-uac-admin = true
+include-module = ["keyring.backends.Windows"]
+
+[tool.nuitka.linux]
+include-module = ["keyring.backends.SecretService", "secretstorage"]

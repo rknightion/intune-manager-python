@@ -82,10 +82,12 @@ class ConfigurationService:
         try:
             profiles: list[ConfigurationProfile] = []
             for endpoint in endpoints:
+                api_version = "beta" if endpoint.endswith("configurationPolicies") else None
                 async for item in self._client_factory.iter_collection(
                     "GET",
                     endpoint,
                     params=params,
+                    api_version=api_version,
                 ):
                     profiles.append(ConfigurationProfile.from_graph(item))
 

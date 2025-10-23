@@ -72,6 +72,7 @@ class AuditLogService:
                 request.url,
                 params=request.params,
                 headers=request.headers,
+                api_version=request.api_version,
             ):
                 events.append(AuditEvent.from_graph(item))
 

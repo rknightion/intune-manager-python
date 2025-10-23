@@ -11,6 +11,7 @@ from .audit import AuditLogService
 from .base import EventHook, RefreshEvent, ServiceErrorEvent
 from .configurations import ConfigurationAssignmentEvent, ConfigurationService
 from .devices import DeviceActionEvent, DeviceService
+from .diagnostics import AttachmentStats, DiagnosticsService
 from .export import ExportService
 from .filters import AssignmentFilterService
 from .groups import GroupMembershipEvent, GroupService
@@ -35,6 +36,8 @@ __all__ = [
     "MobileConfigService",
     "AuditLogService",
     "ExportService",
+    "DiagnosticsService",
+    "AttachmentStats",
     "SyncService",
     "SyncProgressEvent",
     "EventHook",

@@ -7,6 +7,7 @@ from .assignments import AssignmentService
 from .audit import AuditLogService
 from .configurations import ConfigurationService
 from .devices import DeviceService
+from .diagnostics import DiagnosticsService
 from .export import ExportService
 from .filters import AssignmentFilterService
 from .groups import GroupService
@@ -28,6 +29,7 @@ class ServiceRegistry:
     audit: AuditLogService | None = None
     export: ExportService | None = None
     sync: SyncService | None = None
+    diagnostics: DiagnosticsService | None = None
 
 
 __all__ = ["ServiceRegistry"]

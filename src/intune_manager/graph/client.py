@@ -4,19 +4,14 @@ import asyncio
 import json
 import time
 from collections.abc import Callable as CallableABC, Iterable
-from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Callable, Mapping, Sequence, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, AsyncGenerator, Callable, Mapping, Sequence, Tuple, TypeAlias
 
 import httpx
-from azure.core.credentials import AccessToken, TokenCredential
-from kiota_authentication_azure.azure_identity_authentication_provider import (
-    AzureIdentityAuthenticationProvider,
-)
+from azure.core.credentials import AccessToken
 from httpx._client import UseClientDefault, USE_CLIENT_DEFAULT
 from httpx import Auth
-
-from msgraph_beta import GraphServiceClient
-from msgraph_core.base_graph_request_adapter import BaseGraphRequestAdapter
 
 from intune_manager.graph.errors import (
     AuthenticationError,
@@ -36,6 +31,23 @@ logger = get_logger(__name__)
 TokenProvider = Callable[[Sequence[str]], AccessToken]
 
 
+class GraphAPIVersion(str, Enum):
+    """Supported Microsoft Graph API versions for the client factory."""
+
+    V1 = "v1.0"
+    BETA = "beta"
+
+
+ApiVersionInput: TypeAlias = GraphAPIVersion | str | None
+
+
+DEFAULT_VERSION_OVERRIDES: dict[str, str] = {
+    "/deviceManagement/configurationPolicies": GraphAPIVersion.BETA.value,
+    "/deviceManagement/assignmentFilters": GraphAPIVersion.BETA.value,
+    "/deviceManagement/auditEvents": GraphAPIVersion.BETA.value,
+}
+
+
 @dataclass(slots=True)
 class GraphTelemetryEvent:
     method: str
@@ -47,23 +59,85 @@ class GraphTelemetryEvent:
     success: bool
 
 
-class CallbackTokenCredential(TokenCredential):
-    """Wraps a callable token provider to satisfy Azure's credential interface."""
+def _coerce_api_version(value: GraphAPIVersion | str) -> str:
+    """Normalise API version inputs to canonical string values."""
 
-    def __init__(self, provider: TokenProvider) -> None:
-        self._provider = provider
+    if isinstance(value, GraphAPIVersion):
+        return value.value
+    normalised = value.strip()
+    lowered = normalised.lower()
+    if lowered in {"v1", "v1.0", "1.0", "ga"}:
+        return GraphAPIVersion.V1.value
+    if lowered == "beta":
+        return GraphAPIVersion.BETA.value
+    return normalised
 
-    def get_token(
-        self,
-        *scopes: str,
-        claims: str | None = None,
-        tenant_id: str | None = None,
-        enable_cae: bool = False,
-        **kwargs: object,
-    ) -> AccessToken:
-        del claims, tenant_id, enable_cae, kwargs
-        token = self._provider(scopes)
-        return token
+
+def _prepare_relative_path(path: str) -> tuple[str, str | None]:
+    """Return a leading-slash path without version plus any embedded version."""
+
+    trimmed = path.strip()
+    host = "graph.microsoft.com"
+    for scheme in ("https://", "http://"):
+        prefix = f"{scheme}{host}"
+        if trimmed.startswith(prefix):
+            trimmed = trimmed[len(prefix) :]
+            break
+    if not trimmed.startswith("/"):
+        trimmed = "/" + trimmed
+
+    version: str | None = None
+    for prefix, mapped in (
+        ("/beta", GraphAPIVersion.BETA.value),
+        ("/v1.0", GraphAPIVersion.V1.value),
+        ("/v1", GraphAPIVersion.V1.value),
+        ("/1.0", GraphAPIVersion.V1.value),
+    ):
+        if trimmed == prefix:
+            version = mapped
+            trimmed = "/"
+            break
+        candidate = f"{prefix}/"
+        if trimmed.startswith(candidate):
+            version = mapped
+            trimmed = trimmed[len(prefix) :]
+            if not trimmed.startswith("/"):
+                trimmed = "/" + trimmed
+            break
+
+    if trimmed != "/" and trimmed.endswith("/"):
+        trimmed = trimmed.rstrip("/")
+    return trimmed or "/", version
+
+
+def _normalise_override_key(path: str) -> str:
+    """Normalise override keys to allow loose user input (with/without host)."""
+
+    trimmed = path.strip()
+    host = "graph.microsoft.com/"
+    for scheme in ("https://", "http://"):
+        prefix = f"{scheme}{host}"
+        if trimmed.startswith(prefix):
+            trimmed = trimmed[len(prefix) :]
+            break
+
+    relative, _ = _prepare_relative_path(trimmed)
+    return relative
+
+
+def _prefix_matches(prefix: str, path: str) -> bool:
+    """Determine whether an override prefix applies to a path boundary."""
+
+    if prefix in {"", "/"}:
+        return True
+    if path == prefix:
+        return True
+    if not path.startswith(prefix):
+        return False
+    boundary_index = len(prefix)
+    if boundary_index >= len(path):
+        return True
+    return path[boundary_index] == "/"
 
 
 AuthOption = (
@@ -269,7 +343,10 @@ class GraphClientConfig:
     scopes: Sequence[str]
     user_agent: str = "IntuneManager-Python"
     telemetry_namespace: str = "intune-manager"
-    api_version: str = "beta"
+    api_version: GraphAPIVersion | str = GraphAPIVersion.V1
+    version_overrides: Mapping[str, GraphAPIVersion | str] = field(
+        default_factory=lambda: dict(DEFAULT_VERSION_OVERRIDES),
+    )
     page_size: int = 100
     enable_telemetry: bool = True
     telemetry_callback: Callable[[GraphTelemetryEvent], None] | None = None
@@ -279,24 +356,72 @@ class GraphClientFactory:
     def __init__(
         self, token_provider: TokenProvider, config: GraphClientConfig
     ) -> None:
-        self._credential = CallbackTokenCredential(token_provider)
+        self._token_provider = token_provider
         self._config = config
         self._telemetry_callback = (
             config.telemetry_callback if config.enable_telemetry else None
         )
+        self._default_api_version = _coerce_api_version(config.api_version)
+        self._version_overrides: dict[str, str] = {}
+        if config.version_overrides:
+            for prefix, version in config.version_overrides.items():
+                self.set_version_override(prefix, version)
         self._http_client: RateLimitedAsyncClient | None = None
 
-    def create_client(self) -> GraphServiceClient:
-        http_client = self._get_http_client()
-        auth_provider = AzureIdentityAuthenticationProvider(
-            credentials=self._credential,
-            scopes=list(self._config.scopes),
-        )
-        adapter = BaseGraphRequestAdapter(
-            authentication_provider=auth_provider,
-            http_client=http_client,
-        )
-        return GraphServiceClient(adapter)
+    @property
+    def default_api_version(self) -> str:
+        """Return the currently configured default API version."""
+
+        return self._default_api_version
+
+    def set_default_api_version(self, version: GraphAPIVersion | str) -> None:
+        """Update the default API version used when no overrides apply."""
+
+        self._default_api_version = _coerce_api_version(version)
+
+    @property
+    def version_overrides(self) -> Mapping[str, str]:
+        """Expose a copy of the registered path-based API version overrides."""
+
+        return dict(self._version_overrides)
+
+    def set_version_override(
+        self,
+        prefix: str,
+        version: GraphAPIVersion | str,
+    ) -> None:
+        """Force a specific API version for requests matching a path prefix."""
+
+        normalised = _normalise_override_key(prefix)
+        if normalised != "/" and normalised.endswith("/"):
+            normalised = normalised.rstrip("/")
+        if not normalised or normalised == "":
+            raise ValueError("Version override prefix cannot be empty")
+        self._version_overrides[normalised] = _coerce_api_version(version)
+
+    def remove_version_override(self, prefix: str) -> None:
+        """Remove a previously registered API version override."""
+
+        normalised = _normalise_override_key(prefix)
+        if normalised != "/" and normalised.endswith("/"):
+            normalised = normalised.rstrip("/")
+        self._version_overrides.pop(normalised, None)
+
+    def clear_version_overrides(self) -> None:
+        """Clear all registered API version overrides."""
+
+        self._version_overrides.clear()
+
+    def resolve_api_version(
+        self,
+        path: str,
+        *,
+        explicit: ApiVersionInput = None,
+    ) -> str:
+        """Resolve the API version that will be used for a given request path."""
+
+        relative, embedded = _prepare_relative_path(path)
+        return self._resolve_api_version(relative, explicit or embedded)
 
     async def request(
         self,
@@ -308,7 +433,7 @@ class GraphClientFactory:
         data: Any | None = None,
         content: bytes | None = None,
         headers: dict[str, str] | None = None,
-        api_version: str | None = None,
+        api_version: ApiVersionInput = None,
     ) -> httpx.Response:
         client = self._get_http_client()
         url = self._absolute_url(path, api_version=api_version)
@@ -331,7 +456,7 @@ class GraphClientFactory:
         params: dict[str, Any] | None = None,
         json_body: Any | None = None,
         headers: dict[str, str] | None = None,
-        api_version: str | None = None,
+        api_version: ApiVersionInput = None,
     ) -> dict[str, Any]:
         response = await self.request(
             method,
@@ -350,7 +475,7 @@ class GraphClientFactory:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        api_version: str | None = None,
+        api_version: ApiVersionInput = None,
     ) -> bytes:
         response = await self.request(
             method,
@@ -369,7 +494,7 @@ class GraphClientFactory:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         page_size: int | None = None,
-        api_version: str | None = None,
+        api_version: ApiVersionInput = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         next_url = self._absolute_url(path, api_version=api_version)
         query: dict[str, Any] | None = dict(params or {})
@@ -408,11 +533,19 @@ class GraphClientFactory:
         self,
         requests: Iterable[GraphRequest | Mapping[str, Any]],
         *,
-        api_version: str | None = None,
+        api_version: ApiVersionInput = None,
     ) -> dict[str, Any]:
+        resolved_version: str | None = None
+        if api_version is not None:
+            resolved_version = _coerce_api_version(api_version)
+
         payload = {"requests": []}
         for index, request in enumerate(requests, start=1):
+            explicit_version: ApiVersionInput = None
+            request_path: str | None = None
             if isinstance(request, GraphRequest):
+                explicit_version = request.api_version
+                request_path = request.url
                 entry = graph_request_to_batch_entry(
                     request,
                     request_id=str(index),
@@ -422,17 +555,31 @@ class GraphClientFactory:
                 entry.setdefault("id", str(index))
                 if entry.get("url") is None:
                     raise ValueError("Batch request entries must include a 'url'")
+                url_value = entry.get("url")
+                request_path = url_value if isinstance(url_value, str) else None
             payload["requests"].append(entry)
+
+            if api_version is None and request_path:
+                hint = self.resolve_api_version(request_path, explicit=explicit_version)
+                if resolved_version is None:
+                    resolved_version = hint
+                elif resolved_version != hint:
+                    raise ValueError(
+                        "Batch requests span multiple Graph API versions; split the batch "
+                        "by version or pass api_version explicitly.",
+                    )
 
         if not payload["requests"]:
             return {"responses": []}
+
+        effective_version = resolved_version or self._default_api_version
 
         return await self.request_json(
             "POST",
             "/$batch",
             json_body=payload,
             headers={"Content-Type": "application/json"},
-            api_version=api_version,
+            api_version=effective_version,
         )
 
     async def close(self) -> None:
@@ -447,19 +594,49 @@ class GraphClientFactory:
             callback = self._telemetry_callback
             if callback is None and self._config.enable_telemetry:
                 callback = self._default_telemetry_callback
+
+            # Create auth callable that injects Bearer token into each request
+            def bearer_auth(request: httpx.Request) -> httpx.Request:
+                # Get token for configured Graph API scopes
+                token = self._token_provider(self._config.scopes)
+                request.headers["Authorization"] = f"Bearer {token.token}"
+                return request
+
             self._http_client = RateLimitedAsyncClient(
                 headers={"User-Agent": self._config.user_agent},
+                auth=bearer_auth,
                 telemetry_callback=callback,
             )
         return self._http_client
 
-    def _absolute_url(self, path: str, api_version: str | None = None) -> str:
+    def _resolve_api_version(
+        self,
+        relative_path: str,
+        explicit: ApiVersionInput,
+    ) -> str:
+        if explicit is not None:
+            return _coerce_api_version(explicit)
+        override = self._lookup_override(relative_path)
+        if override is not None:
+            return override
+        return self._default_api_version
+
+    def _lookup_override(self, relative_path: str) -> str | None:
+        best_prefix: str | None = None
+        best_version: str | None = None
+        for prefix, version in self._version_overrides.items():
+            if _prefix_matches(prefix, relative_path):
+                if best_prefix is None or len(prefix) > len(best_prefix):
+                    best_prefix = prefix
+                    best_version = version
+        return best_version
+
+    def _absolute_url(self, path: str, api_version: ApiVersionInput = None) -> str:
         if path.startswith("http://") or path.startswith("https://"):
             return path
-        if not path.startswith("/"):
-            path = "/" + path
-        version = api_version or self._config.api_version
-        return f"https://graph.microsoft.com/{version}{path}"
+        relative, embedded = _prepare_relative_path(path)
+        version = self._resolve_api_version(relative, api_version or embedded)
+        return f"https://graph.microsoft.com/{version}{relative}"
 
     def _default_telemetry_callback(self, event: GraphTelemetryEvent) -> None:
         logger.debug(
@@ -478,6 +655,7 @@ __all__ = [
     "GraphClientFactory",
     "GraphClientConfig",
     "TokenProvider",
-    "CallbackTokenCredential",
     "GraphTelemetryEvent",
+    "GraphAPIVersion",
+    "ApiVersionInput",
 ]

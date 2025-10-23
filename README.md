@@ -28,7 +28,7 @@ src/intune_manager/
   auth/       # MSAL flows, permission checks, secure storage
   services/   # Graph-powered business logic and orchestration
   data/       # SQLModel persistence and caching
-  graph/      # GraphServiceClient factories, middleware, batching
+  graph/      # Graph REST client (httpx+MSAL), rate limiting, batching
   ui/         # PySide6 windows, widgets, and layouts
   config/     # Settings management and environment handling
   utils/      # Shared helpers and infrastructure utilities
