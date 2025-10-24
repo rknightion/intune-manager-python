@@ -49,7 +49,7 @@ from intune_manager.ui.devices import DevicesWidget
 from intune_manager.ui.groups import GroupsWidget
 from intune_manager.ui.reports import ReportsWidget
 from intune_manager.ui.settings import SettingsPage
-from intune_manager.utils import get_logger
+from intune_manager.utils import get_logger, safe_mode_enabled, safe_mode_reason
 from intune_manager.utils.asyncio import AsyncBridge
 
 
@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
         self._connect_services()
         self._restore_window_preferences()
         self._evaluate_onboarding_state()
+        self._display_safe_mode_banner()
 
     # ------------------------------------------------------------------ Setup
 
@@ -450,6 +451,24 @@ class MainWindow(QMainWindow):
             action_label="Start setup",
         )
 
+    def _display_safe_mode_banner(self) -> None:
+        if not safe_mode_enabled():
+            return
+        reason = safe_mode_reason()
+        message = (
+            "Intune Manager is running in Safe Mode. Background diagnostics and "
+            "automatic cache refresh are paused until you relaunch normally."
+        )
+        if reason:
+            message = f"{message}\nReason: {reason}"
+        action_label = None
+        if self._services.diagnostics is not None:
+            action_label = "Clear caches"
+            self._set_banner_action(self._purge_caches_from_safe_mode)
+        else:
+            self._set_banner_action(None)
+        self.show_banner(message, level=ToastLevel.WARNING, action_label=action_label)
+
     def _restore_window_preferences(self) -> None:
         geometry = self._settings_store.value("window/geometry")
         if isinstance(geometry, (bytes, bytearray)):
@@ -561,6 +580,32 @@ class MainWindow(QMainWindow):
 
     def _handle_banner_dismissed(self) -> None:
         self._banner_action = None
+
+    def _purge_caches_from_safe_mode(self) -> None:
+        diagnostics = self._services.diagnostics if self._services else None
+        if diagnostics is None:
+            self.show_notification(
+                "Diagnostics service unavailable; cannot clear caches.",
+                level=ToastLevel.ERROR,
+            )
+            return
+        self.set_busy("Clearing cached Graph data…")
+        try:
+            diagnostics.clear_all_caches()
+            diagnostics.purge_attachments()
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to purge caches from safe mode banner")
+            self.show_notification(
+                "Failed to clear cached data.",
+                level=ToastLevel.ERROR,
+            )
+        else:
+            self.show_notification(
+                "All cached data purged successfully.",
+                level=ToastLevel.SUCCESS,
+            )
+        finally:
+            self.clear_busy()
 
     # --------------------------------------------------------------- Commands
 

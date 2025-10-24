@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from intune_manager.config.settings import log_dir
+from intune_manager.config.settings import log_dir, runtime_dir
 from intune_manager.utils.logging import get_logger
 
 
@@ -26,6 +26,7 @@ class CrashReporter:
         self._previous_hook = None
         self._previous_async_handler = None
         self._installed_loop: asyncio.AbstractEventLoop | None = None
+        self._marker_path = runtime_dir() / "last-crash.json"
 
     # ------------------------------------------------------------------ Install
 
@@ -148,6 +149,7 @@ class CrashReporter:
                 "executable": sys.executable,
                 "args": sys.argv,
                 "exception_type": exc_type.__name__,
+                "message": str(exc_value),
             }
             if context:
                 try:
@@ -163,7 +165,38 @@ class CrashReporter:
                 handle.write(trace)
 
             self._last_report = path
+            self._write_marker(
+                {
+                    "report_path": str(path),
+                    "timestamp": metadata["timestamp"],
+                    "exception_type": metadata["exception_type"],
+                    "message": metadata.get("message"),
+                }
+            )
             return path
+
+    # --------------------------------------------------------- Recovery helpers
+
+    def pending_crash(self) -> dict[str, Any] | None:
+        if not self._marker_path.exists():
+            return None
+        try:
+            payload = json.loads(self._marker_path.read_text(encoding="utf-8"))
+            payload["marker_path"] = str(self._marker_path)
+            return payload
+        except json.JSONDecodeError:  # pragma: no cover - defensive
+            self._marker_path.unlink(missing_ok=True)
+            return None
+
+    def clear_pending_crash(self) -> None:
+        self._marker_path.unlink(missing_ok=True)
+
+    def _write_marker(self, payload: dict[str, Any]) -> None:
+        try:
+            self._marker_path.parent.mkdir(parents=True, exist_ok=True)
+            self._marker_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError:  # pragma: no cover - best effort
+            self._logger.warning("Failed to persist crash marker", path=str(self._marker_path))
 
 
 __all__ = ["CrashReporter"]

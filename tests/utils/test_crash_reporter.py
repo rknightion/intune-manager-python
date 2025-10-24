@@ -39,3 +39,25 @@ def test_install_sets_asyncio_handler(tmp_path) -> None:
     finally:
         reporter.uninstall()
         loop.close()
+
+
+def test_crash_marker_roundtrip(tmp_path, monkeypatch) -> None:
+    logs = tmp_path / "logs"
+    runtime = tmp_path / "runtime"
+    logs.mkdir(parents=True)
+    runtime.mkdir(parents=True)
+
+    monkeypatch.setattr("intune_manager.utils.crash.log_dir", lambda: logs)
+    monkeypatch.setattr("intune_manager.utils.crash.runtime_dir", lambda: runtime)
+
+    reporter = CrashReporter()
+    try:
+        raise RuntimeError("marker")
+    except RuntimeError as exc:  # pragma: no branch
+        reporter.capture_exception(exc)
+
+    info = reporter.pending_crash()
+    assert info is not None
+    assert "report_path" in info
+    reporter.clear_pending_crash()
+    assert reporter.pending_crash() is None

@@ -7,7 +7,7 @@ from intune_manager.services import (
     DiagnosticsService,
     ServiceRegistry,
 )
-from intune_manager.utils import get_logger
+from intune_manager.utils import get_logger, safe_mode_enabled
 
 
 logger = get_logger(__name__)
@@ -20,10 +20,13 @@ def build_services() -> ServiceRegistry:
     db.ensure_schema()
     attachments = AttachmentCache()
     diagnostics = DiagnosticsService(db, attachments)
-    try:
-        diagnostics.inspect_cache(auto_repair=True)
-    except Exception:  # noqa: BLE001 - diagnostics should not block startup
-        logger.exception("Cache integrity inspection failed during startup")
+    if safe_mode_enabled():
+        logger.warning("Safe mode active; skipping cache integrity inspection")
+    else:
+        try:
+            diagnostics.inspect_cache(auto_repair=True)
+        except Exception:  # noqa: BLE001 - diagnostics should not block startup
+            logger.exception("Cache integrity inspection failed during startup")
     logger.debug("Service registry initialised with diagnostics service")
     assignment_import = AssignmentImportService()
     return ServiceRegistry(

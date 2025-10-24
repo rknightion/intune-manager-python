@@ -48,14 +48,14 @@ jobs:
             arch: x64
             runner: macos-13
             artifact_name: IntuneManager
-            output_path: IntuneManager
+            output_path: intune_manager.app
 
           # macOS ARM64
           - os: macos
             arch: arm64
             runner: macos-latest
             artifact_name: IntuneManager
-            output_path: IntuneManager
+            output_path: intune_manager.app
 
     steps:
       - name: Checkout code

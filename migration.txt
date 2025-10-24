@@ -81,7 +81,7 @@ You are permitted to consume migration-done.txt to see what previous work has be
 
 - [x] P8.7.1: Implement global exception handler with crash log capture — NOTE: Added CrashReporter utility with sys/asyncio hooks, integrated into main startup, and validated via tests/utils/test_crash_reporter.py.
 - [x] P8.7.2: Add diagnostic bundle generation (logs, cache stats, config, system info) and expose it via a report a problem button somewhere. The output should be a highly compressed file (xz?) with all possible logs and data that would help troubleshooting. — NOTE: DiagnosticsService now emits tar.xz bundles (metadata/cache/attachments/crash logs/settings), UI adds “Diagnostic bundle” + “Report a problem” actions, covered by tests/services/test_diagnostics_service.py.
-- [>] P8.7.4: Add crash recovery flow (safe mode, cache purge option)
+- [x] P8.7.4: Add crash recovery flow (safe mode, cache purge option) — NOTE: CrashReporter now records crash markers; startup prompts with CrashRecoveryDialog offering Safe Mode + cache purge. Safe mode skips cache inspection, exposes banner actions, and purge hooks diagnostics; utilities covered via tests/utils/test_safe_mode.py & test_crash_reporter.py.
 
 
 
