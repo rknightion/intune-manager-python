@@ -1,31 +1,8 @@
 # nuitka-project-if: {OS} == "Darwin":
 #    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/../../assets/icons/icon.icns
-#    nuitka-project: --include-module=keyring.backends.macOS
-#    nuitka-project: --include-module=keyring.backends.macOS.api
-#    nuitka-project: --nofollow-import-to=keyring.backends.Windows
-#    nuitka-project: --nofollow-import-to=keyring.backends.SecretService
-#    nuitka-project: --nofollow-import-to=keyring.backends.kwallet
-#    nuitka-project: --nofollow-import-to=keyring.backends.libsecret
-#    nuitka-project: --nofollow-import-to=keyring.backends.null
-#    nuitka-project: --nofollow-import-to=keyring.backends.chainer
-#    nuitka-project: --nofollow-import-to=keyring.backends.fail
-#    nuitka-project: --static-libpython=yes
 #    nuitka-project: --lto=auto
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/../../assets/icons/icon.ico
-#    nuitka-project: --include-module=keyring.backends.Windows
-#    # Keyring on Windows prefers pywin32-ctypes; pull in the bits it imports.
-#    nuitka-project: --include-module=win32ctypes.pywin32
-#    nuitka-project: --include-module=win32ctypes.pywin32.win32cred
-#    nuitka-project: --include-module=win32ctypes.pywin32.pywintypes
-#    # Trim other backends:
-#    nuitka-project: --nofollow-import-to=keyring.backends.macOS
-#    nuitka-project: --nofollow-import-to=keyring.backends.SecretService
-#    nuitka-project: --nofollow-import-to=keyring.backends.kwallet
-#    nuitka-project: --nofollow-import-to=keyring.backends.libsecret
-#    nuitka-project: --nofollow-import-to=keyring.backends.null
-#    nuitka-project: --nofollow-import-to=keyring.backends.chainer
-#    nuitka-project: --nofollow-import-to=keyring.backends.fail
 #    nuitka-project: --windows-console-mode=disable
 #    nuitka-project: --product-name=IntuneManager
 #    nuitka-project: --file-description="Microsoft Intune Manager"
@@ -34,15 +11,6 @@
 #    nuitka-project: --lto=no
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
-#    nuitka-project: --include-module=keyring.backends.SecretService
-#    nuitka-project: --include-module=secretstorage
-#    # Trim other backends:
-#    nuitka-project: --nofollow-import-to=keyring.backends.Windows
-#    nuitka-project: --nofollow-import-to=keyring.backends.macOS
-#    nuitka-project: --nofollow-import-to=keyring.backends.kwallet
-#    nuitka-project: --nofollow-import-to=keyring.backends.null
-#    nuitka-project: --nofollow-import-to=keyring.backends.chainer
-#    nuitka-project: --nofollow-import-to=keyring.backends.fail
 #    nuitka-project: --static-libpython=yes
 #    nuitka-project: --lto=auto
 # nuitka-project: --mode=app
@@ -50,54 +18,6 @@
 # nuitka-project: --nofollow-import-to=pytest
 # nuitka-project: --nofollow-import-to=mypy
 # nuitka-project: --nofollow-import-to=ruff
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.oracle
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.mysql
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.postgresql
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.mssql
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.firebird
-# nuitka-project: --nofollow-import-to=sqlalchemy.dialects.sybase
-# nuitka-project: --nofollow-import-to=pymysql
-# nuitka-project: --nofollow-import-to=MySQLdb
-# nuitka-project: --nofollow-import-to=psycopg2
-# nuitka-project: --nofollow-import-to=psycopg
-# nuitka-project: --nofollow-import-to=pg8000
-# nuitka-project: --nofollow-import-to=asyncpg
-# nuitka-project: --nofollow-import-to=aiomysql
-# nuitka-project: --nofollow-import-to=oracledb
-# nuitka-project: --nofollow-import-to=cx_Oracle
-# nuitka-project: --nofollow-import-to=pymssql
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.automap
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.baked
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.horizontal_shard
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.indexable
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.instrumentation
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.mypy
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.orderinglist
-# nuitka-project: --nofollow-import-to=sqlalchemy.ext.serializer
-
-
-# httpx transports we don't use
-# nuitka-project: --nofollow-import-to=httpx._transports.asgi
-# nuitka-project: --nofollow-import-to=httpx._transports.wsgi
-
-# httpcore backends we don't use
-# nuitka-project: --nofollow-import-to=httpcore._backends.trio
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.decrepit
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.dh
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.dsa
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.x25519
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.x448
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.ed25519
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.ed448
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.backends.openssl.poly1305
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.kdf
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.twofactor
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.poly1305
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.keywrap
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.serialization.pkcs7
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.serialization.pkcs12
-# nuitka-project: --nofollow-import-to=cryptography.hazmat.primitives.serialization.ssh
-# nuitka-project: --nofollow-import-to=cryptography.fernet
 
 # nuitka-project: --python-flag=-OO
 
