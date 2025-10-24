@@ -12,7 +12,7 @@
 #    nuitka-project: --file-description="Microsoft Intune Manager"
 #    nuitka-project: --company-name="IntuneManager"
 #    nuitka-project: --windows-uac-admin
-#    nuitka-project: --windows-console-mode=disabled
+#    nuitka-project: --windows-console-mode=attach
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
 #    nuitka-project: --include-module=keyring.backends.SecretService
