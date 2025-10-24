@@ -49,6 +49,9 @@ releases/
 ._*
 intune_manager.app/Contents/MacOS/
 
+# Icon generation temporary files
+*.iconset/
+
 # Code signing and notarization
 *.p12
 *.provisionprofile

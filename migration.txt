@@ -76,30 +76,31 @@ You are permitted to consume migration-done.txt to see what previous work has be
 
 ## Phase 8 – Quality Assurance & Automation  ✳️ Goal: Confidence in regressions
 
+Make sure after each phase that 'uv run pytest -v' is passing and fix any broken tests that have been made
 
-- [ ] P8.1 Write unit tests for services, data models, auth flows using pytest + pytest-asyncio + respx/httpx mocking:
+- [x] P8.1 Write unit tests for services, data models, auth flows using pytest + pytest-asyncio + respx/httpx mocking — NOTE: Added comprehensive coverage across auth, rate limiter, device service, repository, model, and assignment diff tests with supporting fixtures/stubs.
 - [x] P8.1.1: Auth tests (token acquisition, refresh, expiry, multi-tenant) — NOTE: Added pytest coverage in tests/auth/test_auth_manager.py with msal stubs for silent + interactive flows, user state, and sign-out.
 - [x] P8.1.2: Rate limiter tests (window tracking, backoff calculation, batch splitting) — NOTE: Added async pytest coverage in tests/graph/test_rate_limiter.py validating limits, delays, retry jitter, and batch sizing.
 - [x] P8.1.3: Service tests (fetch, cache, events, error handling) using respx mocks — NOTE: Added tests/services/test_device_service.py with respx + sqlite fixtures and patched GraphClientFactory to delegate cancellation to RateLimitedAsyncClient.
 - [x] P8.1.4: Repository tests (CRUD, TTL expiry, cache invalidation) — NOTE: Added tests/data/test_device_repository.py covering replace_all, TTL expiry via monkeypatched clock, clear(), and async streaming persistence.
-- [>] P8.1.5: Model tests (serialization, Graph alias mapping, validation)
-- [ ] P8.1.6: Assignment diff tests (complex scenarios: conflicts, platform mismatches)
-- [ ] P8.2 Add UI tests with pytest-qt or squish-style smoke tests for critical workflows (login, device fetch, assignment edit).
-- [ ] P8.2.1: Auth → Graph → Service → Repository → Cache round-trip
-- [ ] P8.2.2: Bulk assignment workflow with retry/rollback
-- [ ] P8.2.3: Sync service multi-phase refresh with progress tracking
-- [ ] P8.2.5: Conflict resolution (local changes vs remote changes)
-- [ ] P8.3.1: MainWindow launch and navigation (pytest-qt)
-- [ ] P8.3.2: Settings dialog auth flow (mock MSAL)
-- [ ] P8.3.3: Dashboard refresh and metric updates
-- [ ] P8.3.4: Device list load and filter
+- [x] P8.1.5: Model tests (serialization, Graph alias mapping, validation) — NOTE: Added tests/data/test_domain_models.py for ManagedDevice round-trip, assignment target aliases, validation errors, and GraphResponseValidator issues.
+- [x] P8.1.6: Assignment diff tests (complex scenarios: conflicts, platform mismatches) — NOTE: Added tests/services/test_assignment_diff.py covering create/update/delete diffing, identity matching, and noop handling.
+- [x] P8.2 Add UI tests with pytest-qt or squish-style smoke tests for critical workflows (login, device fetch, assignment edit). — NOTE: Added integration tests for auth/device round-trip, bulk assignment failure retry, sync progress, and wizard conflict resolution using pytest-qt compatible fixtures.
+- [x] P8.2.1: Auth → Graph → Service → Repository → Cache round-trip — NOTE: Added tests/ui/test_integration_roundtrip.py covering AuthManager + GraphClient + DeviceService + repository with Qt model assertions via pytest-qt.
+- [x] P8.2.2: Bulk assignment workflow with retry/rollback — NOTE: Added tests/ui/assignments/test_bulk_workflow.py covering failure + retry sequences via AssignmentCenterController and AssignmentService with mocked Graph client.
+- [x] P8.2.3: Sync service multi-phase refresh with progress tracking — NOTE: Added tests/ui/sync/test_sync_service.py validating ordered progress events and error propagation with mocked phases via monkeypatching.
+- [x] P8.2.5: Conflict resolution (local changes vs remote changes) — NOTE: Added tests/ui/assignments/test_bulk_workflow.py verifying AssignmentService retry flow and BulkAssignmentWizard conflict toggles dropping remote updates.
+- [x] P8.3.1: MainWindow launch and navigation (pytest-qt) — NOTE: Added pytest-qt smoke coverage in tests/ui/main/test_main_window.py verifying navigation stack wiring and onboarding launch hook.
+- [x] P8.3.2: Settings dialog auth flow (mock MSAL) — NOTE: Added SettingsWidget controller double tests in tests/ui/settings/test_settings_widget.py covering sign-in/save flow and missing-scope status updates.
+- [x] P8.3.3: Dashboard refresh and metric updates — NOTE: Patched DashboardWidget snapshot handling tests in tests/ui/dashboard/test_dashboard_widget.py verifying metric cards, warnings list, and banner state.
+- [x] P8.3.4: Device list load and filter — NOTE: Added DeviceFilterProxyModel coverage in tests/ui/devices/test_device_filters.py exercising search text and platform filtering logic.
 - [ ] P8.4.1: Load test with 10K devices (table virtualization)
 - [ ] P8.4.2: Memory profiling with large cache (5K devices, 2K apps)
 - [ ] P8.4.3: Batch operation performance (1000 assignments)
 - [ ] P8.4.4: Cache query performance (SQLite indexes)
-- [ ] P8.3.5: Assignment wizard full workflow
-- [ ] P8.3.6: Toast dismissal and overlay focus blocking (shared components)
-- [ ] P8.3.7: Wizard flow coverage (source select → preview → apply)
+- [x] P8.3.5: Assignment wizard full workflow — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py with end-to-end BulkAssignmentWizard flow exercising all pages and plan generation.
+- [x] P8.3.6: Toast dismissal and overlay focus blocking (shared components) — NOTE: Added tests/ui/components/test_notifications.py ensuring toasts auto-dismiss and BusyOverlay suppresses button interactions.
+- [x] P8.3.7: Wizard flow coverage (source select → preview → apply) — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py to verify filtered diffs respond to app selection, group filters, and conflict choices across the wizard flow.
 - [ ] P8.4 Add static analysis gates (ruff + mypy) and maintain coverage thresholds.
 - [ ] P8.5 Implement test doubles or mock server for Graph API to enable offline development.
 - [ ] P8.5.1: Token storage security audit (keyring encryption)

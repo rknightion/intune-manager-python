@@ -4,6 +4,9 @@ import time
 from datetime import datetime
 from typing import Iterable
 
+import msal
+import pytest
+
 from intune_manager.auth.types import AccessToken
 from intune_manager.config.settings import Settings
 from intune_manager.data import (
@@ -108,3 +111,25 @@ def bulk_devices(count: int) -> Iterable[ManagedDevice]:
             device_name=f"Device {index}",
             operating_system="Windows",
         )
+
+
+def configure_auth_manager(
+    *,
+    settings: Settings,
+    stub_app,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Configure AuthManager with a stubbed PublicClientApplication."""
+
+    from intune_manager.auth.auth_manager import AuthManager
+
+    def _factory(client_id: str, authority: str, token_cache):
+        stub_app.client_id = client_id
+        stub_app.authority = authority
+        stub_app.token_cache = token_cache
+        return stub_app
+
+    monkeypatch.setattr(msal, "PublicClientApplication", _factory)
+    manager = AuthManager()
+    manager.configure(settings)
+    return manager

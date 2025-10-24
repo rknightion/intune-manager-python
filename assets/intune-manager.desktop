@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Intune Manager
+GenericName=Microsoft Intune Management Tool
+Comment=Cross-platform GUI for managing Microsoft Intune devices and applications
+Icon=intune-manager
+Exec=/usr/local/bin/intune_manager.bin
+Terminal=false
+Categories=System;Settings;
+Keywords=intune;microsoft;mdm;device;management;endpoint;azure;
+StartupWMClass=IntuneManager

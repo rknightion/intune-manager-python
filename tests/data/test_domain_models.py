@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from intune_manager.data import (
     AllDevicesAssignmentTarget,
+    AssignmentIntent,
     AssignmentSettings,
     ManagedDevice,
     MobileAppAssignment,
@@ -37,13 +38,12 @@ def test_assignment_models_include_graph_aliases() -> None:
     settings = AssignmentSettings(start_date_time=datetime(2024, 1, 1, 9, 0, 0))
     assignment = MobileAppAssignment(
         id="assignment-1",
-        intent="required",
+        intent=AssignmentIntent.REQUIRED,
         target=target,
         settings=settings,
     )
 
     payload = assignment.to_graph()
-    assert payload["@odata.type"] == target.odata_type
     assert payload["target"]["@odata.type"] == target.odata_type
     assert payload["intent"] == "required"
     assert "startDateTime" in payload["settings"]

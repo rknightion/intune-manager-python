@@ -51,7 +51,19 @@ class StubPublicClientApplication:
         self.acquire_token_interactive_calls.append((tuple(scopes), {"prompt": prompt}))
         if not self._interactive_results:
             raise RuntimeError("No interactive result configured")
-        return self._interactive_results.pop(0)
+        result = self._interactive_results.pop(0)
+        if isinstance(result, dict):
+            claims = result.get("id_token_claims", {}) if isinstance(result, dict) else {}
+            account = {
+                "name": claims.get("name"),
+                "username": claims.get("preferred_username"),
+                "home_account_id": claims.get("oid"),
+                "environment": claims.get("tid"),
+            }
+            if account["username"]:
+                self._accounts.append(account)
+            self._silent_results.append(result)
+        return result
 
     def remove_account(self, account: dict[str, Any]) -> None:
         self.remove_account_calls.append(account)
