@@ -8,6 +8,7 @@ from typing import Iterable, List
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QFileDialog,
     QFormLayout,
@@ -43,6 +44,7 @@ from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.applications import InstallSummaryEvent
 from intune_manager.ui.components import (
     CommandAction,
+    InlineStatusMessage,
     PageScaffold,
     ToastLevel,
     UIContext,
@@ -438,6 +440,9 @@ class ApplicationsWidget(PageScaffold):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
 
+        self._list_message = InlineStatusMessage(parent=table_container)
+        table_layout.addWidget(self._list_message)
+
         self._table = QTableView()
         self._table.setModel(self._proxy)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -477,9 +482,14 @@ class ApplicationsWidget(PageScaffold):
         )
         self._command_unregister = self._context.command_registry.register(action)
 
+    def focus_search(self) -> None:
+        self._search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_input.selectAll()
+
     # ----------------------------------------------------------------- Data flow
 
     def _load_cached_apps(self) -> None:
+        self._list_message.clear()
         apps = self._controller.list_cached()
         self._model.set_apps(apps)
         self._apply_filter_options(apps)
@@ -492,6 +502,7 @@ class ApplicationsWidget(PageScaffold):
         apps: Iterable[MobileApp],
         from_cache: bool,
     ) -> None:
+        self._list_message.clear()
         apps_list = list(apps)
         selected_id = self._selected_app.id if self._selected_app else None
         self._model.set_apps(apps_list)
@@ -514,8 +525,14 @@ class ApplicationsWidget(PageScaffold):
         self._context.clear_busy()
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
+        detail = f"{type(event.error).__name__}: {event.error}"
+        self._list_message.display(
+            "Application operation failed. Review the inline details and retry when resolved.",
+            level=ToastLevel.ERROR,
+            detail=detail,
+        )
         self._context.show_notification(
-            f"Application operation failed: {event.error}",
+            "Application operation failed. See inline details for more information.",
             level=ToastLevel.ERROR,
             duration_ms=8000,
         )
@@ -561,11 +578,16 @@ class ApplicationsWidget(PageScaffold):
 
     def _start_refresh(self, *, force: bool = False) -> None:
         if self._services.applications is None:
+            self._list_message.display(
+                "Application service unavailable. Configure Microsoft Graph dependencies to refresh the catalog.",
+                level=ToastLevel.WARNING,
+            )
             self._context.show_notification(
                 "Application service not configured. Configure tenant services to continue.",
                 level=ToastLevel.WARNING,
             )
             return
+        self._list_message.clear()
         self._context.set_busy("Refreshing applications…")
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
@@ -578,6 +600,11 @@ class ApplicationsWidget(PageScaffold):
             self._context.clear_busy()
             self._refresh_button.setEnabled(True)
             self._force_refresh_button.setEnabled(True)
+            self._list_message.display(
+                "Application refresh failed. Review the error details below before retrying.",
+                level=ToastLevel.ERROR,
+                detail=f"{type(exc).__name__}: {exc}",
+            )
             self._context.show_notification(
                 f"Failed to refresh applications: {exc}",
                 level=ToastLevel.ERROR,
@@ -591,12 +618,24 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
+        force_refresh = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if app.id:
+            cached = self._install_summaries.get(app.id)
+        else:
+            cached = None
+        if cached and not force_refresh:
+            self._detail_pane.update_install_summary(cached)
+            self._context.show_notification(
+                "Install summary loaded from cache. Hold Shift and click to force a refresh.",
+                level=ToastLevel.INFO,
+            )
+            return
         self._context.set_busy("Fetching install summary…")
-        self._context.run_async(self._fetch_install_summary_async(app.id))
+        self._context.run_async(self._fetch_install_summary_async(app.id, force=force_refresh))
 
-    async def _fetch_install_summary_async(self, app_id: str) -> None:
+    async def _fetch_install_summary_async(self, app_id: str, *, force: bool = False) -> None:
         try:
-            await self._controller.fetch_install_summary(app_id)
+            await self._controller.fetch_install_summary(app_id, force=force)
         except Exception as exc:  # noqa: BLE001
             self._context.clear_busy()
             self._context.show_notification(
@@ -1030,6 +1069,10 @@ class ApplicationsWidget(PageScaffold):
     def _handle_service_unavailable(self) -> None:
         self._table.setEnabled(False)
         self._detail_pane.display_app(None, None)
+        self._list_message.display(
+            "Application service unavailable. Configure Microsoft Graph dependencies to load applications.",
+            level=ToastLevel.WARNING,
+        )
         self._context.show_banner(
             "Application service unavailable — configure Microsoft Graph dependencies to continue.",
             level=ToastLevel.WARNING,

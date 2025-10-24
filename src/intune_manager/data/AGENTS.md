@@ -10,6 +10,8 @@
 - **`sql/`**: SQLModel table definitions, schema versioning, database session management
 - **`repositories/`**: Cache-aware APIs over SQLModel tables (list, upsert, delete, TTL tracking)
 - **`storage/`**: Binary attachment handling (icons, exports, logs) with disk quota enforcement
+- **`validation.py`**: Graph payload validation helpers (schema enforcement, issue tracking)
+- **`cache_health.py`**: Cache integrity inspection + automatic repair tooling
 
 ## Conventions
 - **Models**: Pydantic-based with Graph API aliases; immutable where possible; use frozen=True for output models.

@@ -26,14 +26,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from intune_manager.services import ServiceRegistry
+from intune_manager.services import ServiceErrorEvent, ServiceRegistry, SyncProgressEvent
 from intune_manager.ui.components import (
     CommandAction,
     PageScaffold,
+    ProgressDialog,
     ToastLevel,
     UIContext,
 )
 from intune_manager.ui.dashboard.controller import DashboardController, DashboardSnapshot, ResourceMetric, TenantStatus
+from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
 from intune_manager.utils.asyncio import AsyncBridge
 
 
@@ -262,6 +264,16 @@ class DashboardWidget(PageScaffold):
         self._pending_action: str | None = None
         self._latest_snapshot: DashboardSnapshot | None = None
         self._command_unregister: Callable[[], None] | None = None
+        self._sync_token_source: CancellationTokenSource | None = None
+        self._sync_dialog: ProgressDialog | None = None
+        self._sync_subscriptions: list[Callable[[], None]] = []
+        if self._services.sync is not None:
+            self._sync_subscriptions.append(
+                self._services.sync.progress.subscribe(self._handle_sync_progress_event)
+            )
+            self._sync_subscriptions.append(
+                self._services.sync.errors.subscribe(self._handle_sync_error_event)
+            )
 
         self._status_frame = QWidget()
         self._status_layout = QHBoxLayout(self._status_frame)
@@ -311,6 +323,7 @@ class DashboardWidget(PageScaffold):
         self._ensure_metric_cards()
         self.refresh_snapshot()
         self._register_commands()
+        self.destroyed.connect(lambda *_: self._cleanup())
 
     def _register_commands(self) -> None:
         action = CommandAction(
@@ -392,16 +405,81 @@ class DashboardWidget(PageScaffold):
         action = self._pending_action
         if action is None:
             return
-        self._pending_action = None
-        self._refresh_button.setEnabled(True)
-        self._context.clear_busy()
-
-        if action == "sync":
-            if error:
+        if isinstance(error, CancellationError):
+            self._finish_sync(mark_finished=False, action=action)
+            if action == "sync":
+                self._notify("Tenant refresh cancelled.", ToastLevel.INFO)
+            return
+        if error:
+            self._finish_sync(mark_finished=False, action=action)
+            if action == "sync":
                 self._notify(f"Tenant refresh failed: {error}", ToastLevel.ERROR)
-                return
+            return
+
+        self._finish_sync(mark_finished=True, action=action)
+        if action == "sync":
             self._notify("Tenant data refreshed", ToastLevel.SUCCESS)
             self.refresh_snapshot()
+
+    def _handle_sync_progress_event(self, event: SyncProgressEvent) -> None:
+        if self._pending_action != "sync":
+            return
+        phase = event.phase.replace("_", " ").title()
+        if event.total > 0:
+            message = f"Refreshing {phase} ({event.completed}/{event.total})"
+            total_value = event.total
+        else:
+            message = f"Refreshing {phase} ({event.completed})"
+            total_value = None
+        self._context.set_busy(message)
+        dialog = self._sync_dialog
+        if dialog is not None:
+            dialog.update_progress(
+                ProgressUpdate(
+                    total=total_value,
+                    completed=event.completed,
+                    failed=0,
+                    current=message,
+                ),
+            )
+            if total_value is not None and event.completed >= total_value:
+                dialog.mark_finished()
+
+    def _handle_sync_error_event(self, event: ServiceErrorEvent) -> None:
+        self._finish_sync(mark_finished=False, action="sync")
+        self._notify(f"Tenant refresh failed: {event.error}", ToastLevel.ERROR)
+
+    def _finish_sync(self, *, mark_finished: bool, action: str | None = None) -> None:
+        if action is not None and self._pending_action != action:
+            return
+        if (
+            self._sync_token_source is None
+            and self._sync_dialog is None
+            and (action is None or self._pending_action != action)
+        ):
+            return
+        dialog = self._sync_dialog
+        if dialog is not None:
+            if mark_finished:
+                dialog.mark_finished()
+            dialog.close()
+            self._sync_dialog = None
+        if self._sync_token_source is not None:
+            self._sync_token_source.dispose()
+            self._sync_token_source = None
+        self._context.clear_busy()
+        self._refresh_button.setEnabled(True)
+        if action is None or self._pending_action == action:
+            self._pending_action = None
+
+    def _cleanup(self) -> None:
+        self._finish_sync(mark_finished=False)
+        while self._sync_subscriptions:
+            unsubscribe = self._sync_subscriptions.pop()
+            try:
+                unsubscribe()
+            except Exception:  # pragma: no cover - defensive cleanup
+                pass
 
     # ---------------------------------------------------------------- Utilities
 
@@ -415,14 +493,27 @@ class DashboardWidget(PageScaffold):
                 ToastLevel.WARNING,
             )
             return
-        if self._pending_action is not None:
+        if self._pending_action is not None or self._sync_token_source is not None:
             return
 
+        token_source = CancellationTokenSource()
+        dialog = ProgressDialog(
+            title="Refreshing tenant data",
+            parent=self,
+            message="Preparing tenant sync…",
+            token_source=token_source,
+        )
+        dialog.show()
+        self._sync_token_source = token_source
+        self._sync_dialog = dialog
         self._pending_action = "sync"
         self._refresh_button.setEnabled(False)
         self._context.set_busy("Starting tenant sync…")
+        dialog.set_message("Refreshing tenant data…")
         self._notify("Refreshing tenant data…", ToastLevel.INFO)
-        self._bridge.run_coroutine(self._controller.refresh_all(force=True))
+        self._bridge.run_coroutine(
+            self._controller.refresh_all(force=True, cancellation_token=token_source.token)
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         if self._command_unregister:

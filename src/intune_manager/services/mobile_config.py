@@ -6,8 +6,8 @@ from typing import Iterable
 
 from intune_manager.data import ConfigurationProfile
 from intune_manager.graph.client import GraphClientFactory
-from intune_manager.services.base import ServiceErrorEvent, EventHook
-from intune_manager.utils import get_logger
+from intune_manager.services.base import EventHook, ServiceErrorEvent
+from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
@@ -32,6 +32,7 @@ class MobileConfigService:
         payload_bytes: bytes,
         description: str | None = None,
         assignments: Iterable[dict] | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> ConfigurationProfile:
         body: dict = {
             "@odata.type": "#microsoft.graph.macOSCustomConfiguration",
@@ -43,11 +44,16 @@ class MobileConfigService:
             body["assignments"] = list(assignments)
 
         try:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             response = await self._client_factory.request_json(
                 "POST",
                 "/deviceManagement/deviceConfigurations",
                 json_body=body,
+                cancellation_token=cancellation_token,
             )
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to create macOS custom configuration")
             self.errors.emit(ServiceErrorEvent(tenant_id=None, error=exc))
@@ -63,6 +69,7 @@ class MobileConfigService:
         *,
         payload_bytes: bytes,
         description: str | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         body: dict = {
             "payload": base64.b64encode(payload_bytes).decode("ascii"),
@@ -71,11 +78,16 @@ class MobileConfigService:
             body["description"] = description
 
         try:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             await self._client_factory.request(
                 "PATCH",
                 f"/deviceManagement/deviceConfigurations/{profile_id}",
                 json_body=body,
+                cancellation_token=cancellation_token,
             )
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to update custom configuration payload", profile_id=profile_id)
             self.errors.emit(ServiceErrorEvent(tenant_id=None, error=exc))

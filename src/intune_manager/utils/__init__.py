@@ -8,7 +8,9 @@ from .asyncio import (
     schedule_interval,
 )
 from .background import BackgroundTask, run_background
+from .cancellation import CancellationError, CancellationToken, CancellationTokenSource
 from .logging import LoggingOptions, configure_logging, get_logger, log_file_path
+from .progress import ProgressCallback, ProgressReporter, ProgressTracker, ProgressUpdate
 
 __all__ = [
     "LoggingOptions",
@@ -22,4 +24,11 @@ __all__ = [
     "call_later",
     "BackgroundTask",
     "run_background",
+    "CancellationToken",
+    "CancellationTokenSource",
+    "CancellationError",
+    "ProgressUpdate",
+    "ProgressTracker",
+    "ProgressReporter",
+    "ProgressCallback",
 ]

@@ -6,10 +6,11 @@ from datetime import timedelta
 from typing import Any
 
 from intune_manager.data import DeviceRepository, ManagedDevice
+from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.requests import DeviceActionName, device_action_request
 from intune_manager.services.base import EventHook, RefreshEvent, ServiceErrorEvent
-from intune_manager.utils import get_logger
+from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ class DeviceService:
         self._client_factory = client_factory
         self._repository = repository
         self._default_ttl = timedelta(minutes=15)
+        self._validator = GraphResponseValidator("devices")
         self._chunk_size = 200
 
         self.refreshed: EventHook[RefreshEvent[list[ManagedDevice]]] = EventHook()
@@ -70,7 +72,7 @@ class DeviceService:
     def count_cached(self, tenant_id: str | None = None) -> int:
         """Return cached device count without materialising rows."""
 
-        return self._repository.count(tenant_id=tenant_id)
+        return self._repository.cached_count(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 
@@ -80,9 +82,12 @@ class DeviceService:
         *,
         force: bool = False,
         expand_related: bool = True,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[ManagedDevice]:
         """Refresh devices from Graph when cache is stale or force requested."""
 
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         if not force and not self.is_cache_stale(tenant_id=tenant_id):
             cached = self.list_cached(tenant_id=tenant_id)
             self.refreshed.emit(
@@ -100,14 +105,20 @@ class DeviceService:
 
         processed = 0
         interval = max(50, self._chunk_size // 2)
+        self._validator.reset()
+        invalid_count = 0
 
         async def device_iterator() -> AsyncIterator[ManagedDevice]:
             nonlocal processed
+            nonlocal invalid_count
             async for item in self._client_factory.iter_collection(
                 "GET",
                 "/deviceManagement/managedDevices",
                 params=params,
+                cancellation_token=cancellation_token,
             ):
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
                 processed += 1
                 if processed % interval == 0:
                     self.refresh_progress.emit(
@@ -117,7 +128,12 @@ class DeviceService:
                             finished=False,
                         ),
                     )
-                yield ManagedDevice.from_graph(item)
+                payload = item if isinstance(item, dict) else {"value": item}
+                model = self._validator.parse(ManagedDevice, payload)
+                if model is None:
+                    invalid_count += 1
+                    continue
+                yield model
 
         try:
             count = await self._repository.replace_all_async(
@@ -125,6 +141,7 @@ class DeviceService:
                 tenant_id=tenant_id,
                 expires_in=self._default_ttl,
                 chunk_size=self._chunk_size,
+                cancellation_token=cancellation_token,
             )
             processed = max(processed, count)
             self.refresh_progress.emit(
@@ -142,7 +159,15 @@ class DeviceService:
                     from_cache=False,
                 ),
             )
+            if invalid_count:
+                logger.warning(
+                    "Device refresh skipped invalid payloads",
+                    tenant_id=tenant_id,
+                    invalid=invalid_count,
+                )
             return items
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to refresh devices", tenant_id=tenant_id)
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
@@ -155,9 +180,12 @@ class DeviceService:
         *,
         tenant_id: str | None = None,
         parameters: dict[str, Any] | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         """Execute a device management action (sync, wipe, retire, reboot, shutdown)."""
 
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         payload = parameters or {}
         request = device_action_request(device_id, action, body=payload)
         try:
@@ -167,6 +195,7 @@ class DeviceService:
                 json_body=request.body,
                 headers=request.headers,
                 api_version=request.api_version,
+                cancellation_token=cancellation_token,
             )
             event = DeviceActionEvent(
                 tenant_id=tenant_id,
@@ -176,6 +205,8 @@ class DeviceService:
                 success=True,
             )
             self.actions.emit(event)
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "Device action failed",

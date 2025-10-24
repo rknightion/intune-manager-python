@@ -79,6 +79,26 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
                 stmt = stmt.where(self._record_model.tenant_id == tenant_id)
             return session.exec(stmt).one()
 
+    def cached_count(
+        self,
+        *,
+        tenant_id: str | None = None,
+        fallback: bool = True,
+    ) -> int:
+        entry = self.cache_entry(tenant_id=tenant_id)
+        if entry and entry.item_count is not None:
+            return entry.item_count
+        if not fallback:
+            return 0
+        computed = self.count(tenant_id=tenant_id)
+        with self._db.session() as session:
+            scoped = session.get(CacheEntry, (self._resource, self._scope(tenant_id)))
+            if scoped is not None:
+                scoped.item_count = computed
+                session.add(scoped)
+                session.commit()
+        return computed
+
     def clear(self, *, tenant_id: str | None = None) -> None:
         with self._db.session() as session:
             self._replace_records(session, [], tenant_id)

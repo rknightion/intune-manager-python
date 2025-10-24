@@ -5,6 +5,108 @@ build/
 dist/
 wheels/
 *.egg-info
+*.egg
+.eggs/
+*.manifest
+*.spec
 
 # Virtual environments
 .venv
+venv/
+env/
+ENV/
+
+# Nuitka compilation artifacts
+*.build/
+*.dist/
+*.onefile-build/
+nuitka-crash-report.xml
+*.so
+*.pyd
+*.dylib
+*.dll
+
+# Packaging and distribution
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+*.msi
+*.exe
+*.app
+*.AppImage
+*.flatpak
+*.snap
+installer/
+releases/
+
+# macOS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+intune_manager.app/Contents/MacOS/
+
+# Code signing and notarization
+*.p12
+*.provisionprofile
+*.mobileprovision
+*.entitlements
+codesign/
+notarize/
+
+# Build caches and temporary files
+*.bin
+*.cache
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# Logs and debugging
+*.log
+logs/
+crash-reports/
+diagnostic-bundles/
+
+# SQLite databases (cache files)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Qt translation compiled files
+*.qm
+
+# Temporary test artifacts
+test-output/
+test-reports/
+.test-cache/

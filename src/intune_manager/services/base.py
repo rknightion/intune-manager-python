@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from enum import StrEnum
+from typing import Awaitable, Callable, Generic, TypeVar
 
-from intune_manager.utils import get_logger
+from intune_manager.utils import CancellationError, get_logger
 
 
 logger = get_logger(__name__)
 
 T_co = TypeVar("T_co", covariant=True)
+PayloadT = TypeVar("PayloadT")
+ReturnT = TypeVar("ReturnT")
+
+
+class MutationStatus(StrEnum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class EventHook(Generic[T_co]):
@@ -36,6 +45,27 @@ class EventHook(Generic[T_co]):
                 logger.exception("Service event callback failed")
 
 
+async def run_optimistic_mutation(
+    *,
+    emitter: "EventHook[PayloadT]",
+    event_builder: Callable[[MutationStatus, Exception | None], PayloadT],
+    operation: Callable[[], Awaitable[ReturnT]],
+) -> ReturnT:
+    """Emit pending/success/failure events while executing a mutation."""
+
+    emitter.emit(event_builder(MutationStatus.PENDING, None))
+    try:
+        result = await operation()
+    except CancellationError as exc:
+        emitter.emit(event_builder(MutationStatus.FAILED, exc))
+        raise
+    except Exception as exc:  # noqa: BLE001
+        emitter.emit(event_builder(MutationStatus.FAILED, exc))
+        raise
+    emitter.emit(event_builder(MutationStatus.SUCCEEDED, None))
+    return result
+
+
 @dataclass(slots=True)
 class RefreshEvent(Generic[T_co]):
     tenant_id: str | None
@@ -49,4 +79,10 @@ class ServiceErrorEvent:
     error: Exception
 
 
-__all__ = ["EventHook", "RefreshEvent", "ServiceErrorEvent"]
+__all__ = [
+    "EventHook",
+    "RefreshEvent",
+    "ServiceErrorEvent",
+    "MutationStatus",
+    "run_optimistic_mutation",
+]

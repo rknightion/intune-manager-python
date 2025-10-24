@@ -10,8 +10,13 @@ from intune_manager.graph.requests import (
     mobile_app_assign_request,
     mobile_app_assignment_delete_request,
 )
-from intune_manager.services.base import EventHook, ServiceErrorEvent
-from intune_manager.utils import get_logger
+from intune_manager.services.base import (
+    EventHook,
+    MutationStatus,
+    ServiceErrorEvent,
+    run_optimistic_mutation,
+)
+from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
@@ -38,6 +43,8 @@ class AssignmentDiff:
 class AssignmentAppliedEvent:
     app_id: str
     diff: AssignmentDiff
+    status: MutationStatus
+    error: Exception | None = None
 
 
 class AssignmentService:
@@ -105,16 +112,60 @@ class AssignmentService:
 
     # ---------------------------------------------------------------- Apply ops
 
-    async def apply_diff(self, app_id: str, diff: AssignmentDiff) -> None:
+    async def apply_diff(
+        self,
+        app_id: str,
+        diff: AssignmentDiff,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        def event_builder(status: MutationStatus, error: Exception | None = None) -> AssignmentAppliedEvent:
+            return AssignmentAppliedEvent(
+                app_id=app_id,
+                diff=diff,
+                status=status,
+                error=error,
+            )
+
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
+        if diff.is_noop:
+            logger.debug("Assignment diff is noop", app_id=app_id)
+            self.applied.emit(event_builder(MutationStatus.SUCCEEDED, None))
+            return
+
+        async def operation() -> None:
+            await self._apply(app_id, diff, cancellation_token=cancellation_token)
+
         try:
-            await self._apply(app_id, diff)
-            self.applied.emit(AssignmentAppliedEvent(app_id=app_id, diff=diff))
+            await run_optimistic_mutation(
+                emitter=self.applied,
+                event_builder=event_builder,
+                operation=operation,
+            )
+            logger.debug(
+                "Assignment diff applied",
+                app_id=app_id,
+                creates=len(diff.to_create),
+                updates=len(diff.to_update),
+                deletes=len(diff.to_delete),
+            )
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to apply assignment diff", app_id=app_id)
             self.errors.emit(ServiceErrorEvent(tenant_id=None, error=exc))
             raise
 
-    async def _apply(self, app_id: str, diff: AssignmentDiff) -> None:
+    async def _apply(
+        self,
+        app_id: str,
+        diff: AssignmentDiff,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         if diff.is_noop:
             logger.debug("Assignment diff is noop", app_id=app_id)
             return
@@ -134,6 +185,7 @@ class AssignmentService:
                 json_body=request.body,
                 headers=request.headers,
                 api_version=request.api_version,
+                cancellation_token=cancellation_token,
             )
             logger.debug(
                 "Assignments upserted",
@@ -151,7 +203,10 @@ class AssignmentService:
             )
 
         if delete_requests:
-            await self._client_factory.execute_batch(delete_requests)
+            await self._client_factory.execute_batch(
+                delete_requests,
+                cancellation_token=cancellation_token,
+            )
             logger.debug("Assignments deleted", app_id=app_id, deleted=len(delete_requests))
 
     # ---------------------------------------------------------------- Backups

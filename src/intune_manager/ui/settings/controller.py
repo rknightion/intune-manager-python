@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import httpx
 
 from PySide6.QtCore import QObject, Signal
-from azure.core.credentials import AccessToken
 
 from intune_manager.auth import (
     AuthManager,
@@ -16,6 +15,7 @@ from intune_manager.auth import (
     auth_manager,
 )
 from intune_manager.auth.auth_manager import AuthenticatedUser
+from intune_manager.auth.types import AccessToken
 from intune_manager.config import Settings, SettingsManager
 from intune_manager.graph.errors import AuthenticationError
 from intune_manager.utils import get_logger
@@ -281,12 +281,29 @@ class SettingsController(QObject):
         self._last_token = result
         status = self._build_status(result)
 
-        if action == "sign_in":
-            self.infoMessage.emit("Sign-in complete.")
-        elif action == "check_permissions":
-            self.infoMessage.emit("Permissions refreshed.")
-
         self.authStatusChanged.emit(status)
+        message: str | None = None
+        if action == "sign_in":
+            if status.missing_scopes:
+                scopes = ", ".join(status.missing_scopes)
+                message = (
+                    "Sign-in succeeded, but the token is missing Microsoft Graph permissions: "
+                    f"{scopes}. Grant these scopes to the Intune Manager app registration in Azure."
+                )
+            else:
+                message = "Sign-in complete. All required Microsoft Graph permissions are present."
+        elif action == "check_permissions":
+            if status.missing_scopes:
+                scopes = ", ".join(status.missing_scopes)
+                message = (
+                    "Permission check complete. The current token is missing Microsoft Graph permissions: "
+                    f"{scopes}. Update the Azure app registration to grant these scopes."
+                )
+            else:
+                message = "Permission check successful. Microsoft Graph permissions look good."
+
+        if message:
+            self.infoMessage.emit(message)
 
     def _set_busy(self, is_busy: bool, message: str) -> None:
         self.busyStateChanged.emit(is_busy, message)

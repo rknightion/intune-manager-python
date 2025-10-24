@@ -10,7 +10,7 @@ from intune_manager.services.devices import DeviceService
 from intune_manager.services.filters import AssignmentFilterService
 from intune_manager.services.groups import GroupService
 from intune_manager.services.base import EventHook, ServiceErrorEvent
-from intune_manager.utils import get_logger
+from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
@@ -53,6 +53,7 @@ class SyncService:
         tenant_id: str | None = None,
         services: Sequence[str] | None = None,
         force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         target_names = list(services or self._services.keys())
         targets: Iterable[tuple[str, object]] = (
@@ -62,12 +63,21 @@ class SyncService:
         completed = 0
 
         for name, service in targets:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             try:
-                await self._refresh_single(service, tenant_id=tenant_id, force=force)
+                await self._refresh_single(
+                    service,
+                    tenant_id=tenant_id,
+                    force=force,
+                    cancellation_token=cancellation_token,
+                )
                 completed += 1
                 self.progress.emit(
                     SyncProgressEvent(phase=name, completed=completed, total=total),
                 )
+            except CancellationError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Sync phase failed", phase=name)
                 self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
@@ -79,19 +89,20 @@ class SyncService:
         *,
         tenant_id: str | None,
         force: bool,
+        cancellation_token: CancellationToken | None,
     ) -> None:
         if isinstance(service, DeviceService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         elif isinstance(service, ApplicationService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         elif isinstance(service, GroupService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         elif isinstance(service, AssignmentFilterService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         elif isinstance(service, ConfigurationService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         elif isinstance(service, AuditLogService):
-            await service.refresh(tenant_id=tenant_id, force=force)
+            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
         else:  # pragma: no cover - future extension
             raise TypeError(f"Unsupported service type: {service!r}")
 

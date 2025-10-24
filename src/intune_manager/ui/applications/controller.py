@@ -12,6 +12,7 @@ from intune_manager.services import (
 )
 from intune_manager.services.applications import InstallSummaryEvent
 from intune_manager.services.assignments import AssignmentDiff
+from intune_manager.utils import CancellationToken
 
 
 class ApplicationController:
@@ -79,6 +80,7 @@ class ApplicationController:
         *,
         force: bool = False,
         include_assignments: bool = True,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[MobileApp]:
         if self._app_service is None:
             raise RuntimeError("Application service not configured")
@@ -86,12 +88,18 @@ class ApplicationController:
             tenant_id=tenant_id,
             force=force,
             include_assignments=include_assignments,
+            cancellation_token=cancellation_token,
         )
 
-    async def fetch_assignments(self, app_id: str) -> list[MobileAppAssignment]:
+    async def fetch_assignments(
+        self,
+        app_id: str,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[MobileAppAssignment]:
         if self._app_service is None:
             raise RuntimeError("Application service not configured")
-        return await self._app_service.fetch_assignments(app_id)
+        return await self._app_service.fetch_assignments(app_id, cancellation_token=cancellation_token)
 
     async def cache_icon(
         self,
@@ -100,6 +108,7 @@ class ApplicationController:
         size: str = "large",
         tenant_id: str | None = None,
         force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ):
         if self._app_service is None:
             raise RuntimeError("Application service not configured")
@@ -108,6 +117,7 @@ class ApplicationController:
             tenant_id=tenant_id,
             size=size,
             force=force,
+            cancellation_token=cancellation_token,
         )
 
     async def fetch_install_summary(
@@ -115,12 +125,16 @@ class ApplicationController:
         app_id: str,
         *,
         tenant_id: str | None = None,
+        force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, object]:
         if self._app_service is None:
             raise RuntimeError("Application service not configured")
         return await self._app_service.fetch_install_summary(
             app_id,
             tenant_id=tenant_id,
+            force=force,
+            cancellation_token=cancellation_token,
         )
 
     def diff_assignments(
@@ -133,10 +147,16 @@ class ApplicationController:
             return None
         return self._assignment_service.diff(current=current, desired=desired)
 
-    async def apply_diff(self, app_id: str, diff: AssignmentDiff) -> None:
+    async def apply_diff(
+        self,
+        app_id: str,
+        diff: AssignmentDiff,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
         if self._assignment_service is None:
             raise RuntimeError("Assignment service not configured")
-        await self._assignment_service.apply_diff(app_id, diff)
+        await self._assignment_service.apply_diff(app_id, diff, cancellation_token=cancellation_token)
 
     def export_assignments(
         self,

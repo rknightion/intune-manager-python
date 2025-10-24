@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Callable, Iterable, List
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDateTime, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QDateTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +41,18 @@ from intune_manager.data.models.assignment import (
 
 
 AssignmentExportCallback = Callable[[Iterable[MobileAppAssignment]], None]
+
+
+def _qdatetime_from_datetime(value: datetime | None) -> QDateTime:
+    if value is None:
+        return QDateTime.currentDateTime()
+    return QDateTime(value)
+
+
+def _qdatetime_to_datetime(value: QDateTime) -> datetime:
+    if hasattr(value, "toPython"):
+        return value.toPython()
+    return datetime.fromtimestamp(value.toSecsSinceEpoch())
 
 
 class AssignmentCreateDialog(QDialog):
@@ -174,8 +188,8 @@ class AssignmentEditorDialog(QDialog):
         header.setWordWrap(True)
         layout.addWidget(header)
 
-        self._table = QTableWidget(0, 4, parent=self)
-        self._table.setHorizontalHeaderLabels(["Target", "Intent", "Filter", "Type"])
+        self._table = QTableWidget(0, 5, parent=self)
+        self._table.setHorizontalHeaderLabels(["Target", "Intent", "Filter", "Type", "Schedule"])
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -191,6 +205,23 @@ class AssignmentEditorDialog(QDialog):
         controls_layout.addStretch()
         controls_layout.addWidget(self._apply_settings_button)
         layout.addLayout(controls_layout)
+
+        schedule_box = QGroupBox("Scheduling window (optional)")
+        schedule_layout = QGridLayout(schedule_box)
+        schedule_layout.setSpacing(8)
+        self._start_checkbox = QCheckBox("Start at", parent=schedule_box)
+        self._start_edit = QDateTimeEdit(parent=schedule_box)
+        self._start_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self._start_edit.setCalendarPopup(True)
+        self._deadline_checkbox = QCheckBox("Deadline", parent=schedule_box)
+        self._deadline_edit = QDateTimeEdit(parent=schedule_box)
+        self._deadline_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self._deadline_edit.setCalendarPopup(True)
+        schedule_layout.addWidget(self._start_checkbox, 0, 0)
+        schedule_layout.addWidget(self._start_edit, 0, 1)
+        schedule_layout.addWidget(self._deadline_checkbox, 1, 0)
+        schedule_layout.addWidget(self._deadline_edit, 1, 1)
+        layout.addWidget(schedule_box)
 
         settings_box = QGroupBox("Assignment settings (JSON)")
         settings_layout = QVBoxLayout(settings_box)
@@ -234,11 +265,15 @@ class AssignmentEditorDialog(QDialog):
         self._remove_button.clicked.connect(self._handle_remove_assignment)
         self._apply_settings_button.clicked.connect(self._apply_settings_clicked)
         self._table.currentCellChanged.connect(self._handle_selection_changed)
+        self._start_checkbox.toggled.connect(self._sync_schedule_inputs)
+        self._deadline_checkbox.toggled.connect(self._sync_schedule_inputs)
 
         self._rebuild_table()
         if self._table.rowCount() > 0:
             self._table.selectRow(0)
             self._load_settings_for_row(0)
+        else:
+            self._set_schedule_controls(None)
 
     # ----------------------------------------------------------------- Helpers
 
@@ -287,18 +322,44 @@ class AssignmentEditorDialog(QDialog):
             QMessageBox.information(self, "No selection", "Select a target before applying settings.")
             return
         text = self._settings_edit.toPlainText().strip()
-        if not text:
-            self._assignments[row] = self._assignments[row].model_copy(update={"settings": None})
+        existing = self._assignments[row].settings
+
+        start_dt = _qdatetime_to_datetime(self._start_edit.dateTime()) if self._start_checkbox.isChecked() else None
+        deadline_dt = _qdatetime_to_datetime(self._deadline_edit.dateTime()) if self._deadline_checkbox.isChecked() else None
+        if start_dt and deadline_dt and start_dt >= deadline_dt:
+            QMessageBox.warning(self, "Invalid schedule", "The deadline must be after the start time.")
+            return
+
+        if text:
+            try:
+                payload = json.loads(text)
+                base_settings = AssignmentSettings.model_validate(payload)
+            except (json.JSONDecodeError, ValidationError) as exc:
+                QMessageBox.warning(self, "Invalid settings", f"Unable to parse settings JSON: {exc}")
+                return
+        else:
+            base_settings = existing or AssignmentSettings()
+
+        if not text and start_dt is None and deadline_dt is None:
+            settings_obj: AssignmentSettings | None = None
+        else:
+            settings_obj = base_settings.model_copy(
+                update={
+                    "start_date_time": start_dt,
+                    "deadline_date_time": deadline_dt,
+                },
+            )
+
+        self._assignments[row] = self._assignments[row].model_copy(update={"settings": settings_obj})
+        self._rebuild_table()
+        if self._table.rowCount() > 0:
+            self._table.selectRow(min(row, self._table.rowCount() - 1))
+            self._load_settings_for_row(min(row, self._table.rowCount() - 1))
+
+        if settings_obj is None:
             QMessageBox.information(self, "Settings cleared", "Advanced settings removed for the selected assignment.")
-            return
-        try:
-            payload = json.loads(text)
-            settings = AssignmentSettings.model_validate(payload)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            QMessageBox.warning(self, "Invalid settings", f"Unable to parse settings JSON: {exc}")
-            return
-        self._assignments[row] = self._assignments[row].model_copy(update={"settings": settings})
-        QMessageBox.information(self, "Settings updated", "Advanced settings applied to the selected assignment.")
+        else:
+            QMessageBox.information(self, "Settings updated", "Advanced settings applied to the selected assignment.")
 
     def _handle_selection_changed(self, current_row: int, _current_col: int, _prev_row: int, _prev_col: int) -> None:
         if current_row < 0:
@@ -309,6 +370,7 @@ class AssignmentEditorDialog(QDialog):
     def _load_settings_for_row(self, row: int) -> None:
         if row < 0 or row >= len(self._assignments):
             self._settings_edit.clear()
+            self._set_schedule_controls(None)
             return
         assignment = self._assignments[row]
         self._updating_settings = True
@@ -317,6 +379,7 @@ class AssignmentEditorDialog(QDialog):
             self._settings_edit.setPlainText(json.dumps(payload, indent=2) if payload else "")
         finally:
             self._updating_settings = False
+        self._set_schedule_controls(assignment)
 
     def _rebuild_table(self) -> None:
         self._table.setRowCount(len(self._assignments))
@@ -337,6 +400,9 @@ class AssignmentEditorDialog(QDialog):
             self._combos.append(combo)
             self._table.setItem(row, 2, filter_item)
             self._table.setItem(row, 3, type_item)
+            schedule_item = QTableWidgetItem(self._schedule_label(assignment))
+            schedule_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self._table.setItem(row, 4, schedule_item)
 
         self._table.resizeColumnsToContents()
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -358,6 +424,9 @@ class AssignmentEditorDialog(QDialog):
         if selected == assignment.intent.value:
             return
         self._assignments[row] = assignment.model_copy(update={"intent": AssignmentIntent(selected)})
+        schedule_item = self._table.item(row, 4)
+        if schedule_item is not None:
+            schedule_item.setText(self._schedule_label(self._assignments[row]))
 
     def _target_label(self, assignment: MobileAppAssignment) -> str:
         target = assignment.target
@@ -383,6 +452,40 @@ class AssignmentEditorDialog(QDialog):
         if odata_type.startswith("#microsoft.graph."):
             return odata_type.split(".")[-1]
         return odata_type or "Unknown"
+
+    def _schedule_label(self, assignment: MobileAppAssignment) -> str:
+        settings = assignment.settings
+        if not settings:
+            return "—"
+        start = settings.start_date_time
+        deadline = settings.deadline_date_time
+        fragments: list[str] = []
+        if start:
+            fragments.append(f"Start {start:%Y-%m-%d %H:%M}")
+        if deadline:
+            fragments.append(f"Due {deadline:%Y-%m-%d %H:%M}")
+        return " / ".join(fragments) if fragments else "—"
+
+    def _set_schedule_controls(self, assignment: MobileAppAssignment | None) -> None:
+        start = None
+        deadline = None
+        if assignment and assignment.settings:
+            start = assignment.settings.start_date_time
+            deadline = assignment.settings.deadline_date_time
+        self._start_checkbox.blockSignals(True)
+        self._deadline_checkbox.blockSignals(True)
+        self._start_checkbox.setChecked(start is not None)
+        self._deadline_checkbox.setChecked(deadline is not None)
+        self._start_checkbox.blockSignals(False)
+        self._deadline_checkbox.blockSignals(False)
+        self._start_edit.setDateTime(_qdatetime_from_datetime(start))
+        self._deadline_edit.setDateTime(_qdatetime_from_datetime(deadline))
+        self._sync_schedule_inputs()
+
+    def _sync_schedule_inputs(self) -> None:
+        self._start_edit.setEnabled(self._start_checkbox.isChecked())
+        self._deadline_edit.setEnabled(self._deadline_checkbox.isChecked())
+
 
 
 __all__ = [

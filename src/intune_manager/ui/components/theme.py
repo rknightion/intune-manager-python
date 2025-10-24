@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
-ThemeName = Literal["light", "dark"]
+ThemeName = Literal["light"]
 
 
 class ThemeTokens(TypedDict):
@@ -41,20 +41,6 @@ _THEME_MAP: Dict[ThemeName, ThemeTokens] = {
         warning="#c15d12",
         error="#c92a2a",
         shadow="rgba(15, 23, 42, 0.18)",
-    ),
-    "dark": ThemeTokens(
-        background="#10131a",
-        surface="#161b22",
-        surface_alt="#1f242d",
-        border="#292f3b",
-        text="#e6ebf5",
-        text_muted="#a0a8b8",
-        accent="#3399ff",
-        accent_contrast="#05101a",
-        success="#2fc978",
-        warning="#ffa24c",
-        error="#ff6b6b",
-        shadow="rgba(8, 11, 19, 0.72)",
     ),
 }
 
@@ -94,7 +80,7 @@ class ThemeState:
 
 
 class ThemeManager(QObject):
-    """Manage application theme (light/dark) and notify listeners."""
+    """Manage the application light theme and notify listeners."""
 
     themeChanged = Signal(str)
 
@@ -102,11 +88,10 @@ class ThemeManager(QObject):
         self,
         *,
         app: QApplication | None = None,
-        default: ThemeName = "light",
     ) -> None:
         super().__init__()
         self._app = app or QApplication.instance()
-        self._state = ThemeState(name=default, tokens=_THEME_MAP[default])
+        self._state = ThemeState(name="light", tokens=_THEME_MAP["light"])
         if self._app is not None:
             self._app.setStyle("Fusion")
             self._app.setPalette(_palette_from_tokens(self._state.tokens))
@@ -122,23 +107,15 @@ class ThemeManager(QObject):
 
     # --------------------------------------------------------------- Manipulators
 
-    def set_theme(self, name: ThemeName) -> None:
-        if name == self._state.name:
+    def set_theme(self, name: str) -> None:
+        target = name if name in _THEME_MAP else "light"
+        if target == self._state.name:
             return
-        tokens = _THEME_MAP.get(name)
-        if tokens is None:
-            raise ValueError(f"Unsupported theme name: {name}")
-        self._state = ThemeState(name=name, tokens=tokens)
+        tokens = _THEME_MAP["light"]
+        self._state = ThemeState(name="light", tokens=tokens)
         if self._app is not None:
             self._app.setPalette(_palette_from_tokens(tokens))
-        self.themeChanged.emit(name)
-
-    def toggle(self) -> ThemeName:
-        """Toggle between light and dark themes."""
-
-        next_theme: ThemeName = "dark" if self._state.name == "light" else "light"
-        self.set_theme(next_theme)
-        return next_theme
+        self.themeChanged.emit("light")
 
     # ---------------------------------------------------------------- Utilities
 
@@ -173,6 +150,7 @@ class ThemeManager(QObject):
         return f"""
             QWidget {{
                 color: {tokens['text']};
+                background-color: {tokens['background']};
             }}
             QFrame#Card {{
                 background-color: {tokens['surface']};
@@ -185,6 +163,40 @@ class ThemeManager(QObject):
             }}
             QLabel[class='page-subtitle'] {{
                 color: {tokens['text_muted']};
+            }}
+            QPushButton, QToolButton {{
+                background-color: {tokens['surface']};
+                border: 1px solid {tokens['border']};
+                border-radius: 6px;
+                padding: 6px 12px;
+            }}
+            QPushButton:disabled, QToolButton:disabled {{
+                color: {tokens['text_muted']};
+                border-color: {tokens['border']};
+            }}
+            QPushButton:focus, QToolButton:focus {{
+                border: 2px solid {tokens['accent']};
+            }}
+            QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {{
+                background-color: {tokens['surface']};
+                border: 1px solid {tokens['border']};
+                border-radius: 6px;
+                padding: 6px 8px;
+            }}
+            QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
+                border: 2px solid {tokens['accent']};
+            }}
+            QFocusFrame {{
+                border: 2px solid {tokens['accent']};
+                border-radius: 6px;
+            }}
+            QListWidget, QTreeWidget, QTableView {{
+                background-color: {tokens['surface']};
+                border: 1px solid {tokens['border']};
+                border-radius: 6px;
+            }}
+            QListWidget:focus, QTreeWidget:focus, QTableView:focus {{
+                border: 2px solid {tokens['accent']};
             }}
             QListWidget#NavigationList::item:selected {{
                 background-color: {tokens['accent']};

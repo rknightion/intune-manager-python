@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .applications import ApplicationService
+from .assignment_import import AssignmentImportService
 from .assignments import AssignmentService
 from .audit import AuditLogService
 from .configurations import ConfigurationService
@@ -23,6 +24,7 @@ class ServiceRegistry:
     applications: ApplicationService | None = None
     groups: GroupService | None = None
     assignments: AssignmentService | None = None
+    assignment_import: AssignmentImportService | None = None
     assignment_filters: AssignmentFilterService | None = None
     configurations: ConfigurationService | None = None
     mobile_config: MobileConfigService | None = None

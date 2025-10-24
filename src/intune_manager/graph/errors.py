@@ -23,9 +23,17 @@ class GraphAPIError(Exception):
     code: str | None = None
     retry_after: str | None = None
     inner_error: Exception | None = None
+    cli_example: str | None = None
+    request_url: str | None = None
+    request_method: str | None = None
 
     def __str__(self) -> str:  # pragma: no cover - trivial
-        return self.message
+        base = self.message
+        if self.status_code and str(self.status_code) not in base:
+            base = f"{base} (HTTP {self.status_code})"
+        if self.cli_example:
+            return f"{base}\n\nReproduce via CLI:\n{self.cli_example}"
+        return base
 
     @property
     def recovery_suggestion(self) -> str | None:

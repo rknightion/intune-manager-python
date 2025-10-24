@@ -6,8 +6,9 @@ import sys
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 
-from intune_manager.services import ServiceRegistry
+from intune_manager.bootstrap import build_services
 from intune_manager.ui import MainWindow
+from intune_manager.ui.i18n import TranslationManager
 from intune_manager.utils import configure_logging, get_logger
 
 
@@ -17,10 +18,12 @@ def main() -> None:
     logger.info("Starting Intune Manager UI shell")
 
     app = QApplication(sys.argv)
+    _translations = TranslationManager(app)
+    _translations.load()
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    services = ServiceRegistry()
+    services = build_services()
     window = MainWindow(services)
     window.show()
 

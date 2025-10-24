@@ -8,6 +8,7 @@ from sqlalchemy import delete
 
 from intune_manager.data.sql import DeviceRecord
 from intune_manager.data.sql.mapper import device_to_record, record_to_device
+from intune_manager.utils import CancellationToken
 
 from .base import BaseCacheRepository
 
@@ -34,6 +35,7 @@ class DeviceRepository(BaseCacheRepository[ManagedDevice, DeviceRecord]):
         tenant_id: str | None = None,
         expires_in: timedelta | None = None,
         chunk_size: int = 250,
+        cancellation_token: CancellationToken | None = None,
     ) -> int:
         """Persist devices from an async iterator without materialising the full collection."""
 
@@ -50,6 +52,8 @@ class DeviceRepository(BaseCacheRepository[ManagedDevice, DeviceRecord]):
             buffer: list[DeviceRecord] = []
             count = 0
             async for device in items:
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
                 buffer.append(self._to_record(device, tenant_id))
                 count += 1
                 if len(buffer) >= chunk_size:
@@ -60,6 +64,8 @@ class DeviceRepository(BaseCacheRepository[ManagedDevice, DeviceRecord]):
             if buffer:
                 for record in buffer:
                     session.merge(record)
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
 
             self._update_cache_entry(session, tenant_id, count, now, expires_at)
             session.commit()

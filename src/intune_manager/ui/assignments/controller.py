@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp, MobileAppAssignment
 from intune_manager.services import (
     ApplicationService,
     AssignmentFilterService,
+    AssignmentImportResult,
+    AssignmentImportService,
     AssignmentService,
     GroupService,
     ServiceErrorEvent,
     ServiceRegistry,
 )
 from intune_manager.services.assignments import AssignmentAppliedEvent, AssignmentDiff
+from intune_manager.utils import CancellationToken, ProgressCallback
 
 
 class AssignmentCenterController:
@@ -23,6 +27,7 @@ class AssignmentCenterController:
         self._assignment_service: AssignmentService | None = services.assignments
         self._group_service: GroupService | None = services.groups
         self._filter_service: AssignmentFilterService | None = services.assignment_filters
+        self._import_service: AssignmentImportService | None = services.assignment_import
         self._subscriptions: list[Callable[[], None]] = []
 
     # ----------------------------------------------------------------- Events
@@ -116,6 +121,24 @@ class AssignmentCenterController:
             raise RuntimeError("Assignment service not configured")
         return self._assignment_service.export_assignments(assignments)
 
+    def parse_import_csv(
+        self,
+        path: Path,
+        *,
+        apps: Iterable[MobileApp],
+        groups: Iterable[DirectoryGroup],
+        progress: ProgressCallback | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> AssignmentImportResult:
+        if self._import_service is None:
+            raise RuntimeError("Assignment import service not configured")
+        return self._import_service.parse_csv(
+            path,
+            apps=apps,
+            groups=groups,
+            progress=progress,
+            cancellation_token=cancellation_token,
+        )
+
 
 __all__ = ["AssignmentCenterController"]
-

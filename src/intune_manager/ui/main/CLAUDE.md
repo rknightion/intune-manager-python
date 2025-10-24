@@ -46,7 +46,7 @@ class ServiceRegistry:
 ### Global State Management
 - Auth state changes (login/logout)
 - Config changes (tenant, permissions)
-- Theme changes (light/dark)
+- Theme refresh (light theme only)
 - All child widgets listen via `UIContext` signals
 
 ### Error Handling

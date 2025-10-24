@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
@@ -55,6 +56,8 @@ class AssignmentSettings(GraphBaseModel):
     """Placeholder for strongly typed assignment settings."""
 
     odata_type: str | None = Field(default=None, alias="@odata.type")
+    start_date_time: datetime | None = Field(default=None, alias="startDateTime")
+    deadline_date_time: datetime | None = Field(default=None, alias="deadlineDateTime")
 
 
 class MobileAppAssignment(GraphResource):

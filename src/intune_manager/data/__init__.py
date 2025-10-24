@@ -1,5 +1,12 @@
 """Data access models and helpers."""
 
+from .cache_health import (
+    CacheEntryStatus,
+    CacheHealthReport,
+    CacheIntegrityChecker,
+    CacheIssue,
+    CacheIssueSeverity,
+)
 from .models import (
     AllDevicesAssignmentTarget,
     AssignmentFilter,
@@ -42,6 +49,7 @@ from .repositories import (
     MobileAppRepository,
 )
 from .storage import AttachmentCache, AttachmentMetadata
+from .validation import GraphResponseValidator, ValidationIssue
 
 __all__ = [
     "GraphBaseModel",
@@ -81,4 +89,11 @@ __all__ = [
     "AssignmentFilterRepository",
     "AttachmentCache",
     "AttachmentMetadata",
+    "CacheIntegrityChecker",
+    "CacheHealthReport",
+    "CacheIssue",
+    "CacheIssueSeverity",
+    "CacheEntryStatus",
+    "GraphResponseValidator",
+    "ValidationIssue",
 ]

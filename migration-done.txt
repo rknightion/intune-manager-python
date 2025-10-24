@@ -243,3 +243,70 @@ src/intune_manager/
 - [x] P6.12.1: Implement a mechanism that allows us to use both the MS Graph v1.0 GA API (stable) for API calls where the functionality we require is present in 1.0 GA version but allows us to override for specific API calls to the MS Graph Beta API where that functionality we need is only implemented in the Graph BETA API. Effectively allowing the app to make use of both API versions depending on the path called. We should be defaulting to the v1 GA API for stability and only using the beta APIs where we require the functionality. Alternatively if the existing functionality we're utilising is in the majority in the beta API then instead default to the beta API and override for v1 (you decice) — NOTE: Added GraphAPIVersion resolver with per-path overrides, batch safeguards, and public helpers (src/intune_manager/graph/client.py, src/intune_manager/graph/__init__.py).
 - [x] P6.12.2: Review all current API calls made by our app to ensure we are using the right version of the MS Graph API (beta or GA depending on functionality required). We should validate our calls and contents and expected returns against the context7 MCP docs for graph API or other MS Graph API documentation and pay special attention to noting if functionality we need is only in the beta version or not — NOTE: Audited Intune endpoints against MS Graph docs; defaulted to GA with targeted beta on assignment filters, configuration policies, audit events, mobile app assign/icon/installSummary (src/intune_manager/graph/requests.py, services/audit.py, services/configurations.py, services/filters.py). References: intune-devices-manageddevice-get (v1.0), intune-apps-mobileappassignment-list (v1.0), intune-policyset-assignmentfilteroperator (beta), intune-deviceconfigv2-devicemanagementconfigurationsetting-create (beta), intune-apps-mobileappinstallsummary-get (beta).
 
+- [x] P6.9 Build Settings/Configuration views (auth status, tenant config, cache management, theme selection, log export, about dialog) reusing the Phase 3 `SettingsWidget` and extending with cache/log controls plus navigation wiring. — NOTE: Added tabbed SettingsPage with cache diagnostics, log export, telemetry opt-in, appearance/about panels (ui/settings/page.py, ui/main/window.py, services/diagnostics.py).
+  - Embed existing settings widget inside shell tab, add sub-pages for cache inspection, log export, keyring inspection, theme toggle, and about/license info.
+  - Hook cache clear / attachment purge to repositories + `AttachmentCache`, surface telemetry opt-in.
+- [x] P6.9.1 Add data validation layer for Graph responses (schema checks) — NOTE: Introduced `GraphResponseValidator` (data/validation.py) and wired through device/app/group/config/audit/filter services to skip+log invalid payloads.
+- [x] P6.9.2 Implement cache integrity checks on startup (orphaned records, corrupted data) — NOTE: Added `CacheIntegrityChecker` (data/cache_health.py) and run during bootstrap (bootstrap.py) before UI loads.
+- [x] P6.9.3 Add automatic cache repair or purge on validation failure — NOTE: Cache inspection now removes invalid rows + normalises metadata (data/cache_health.py, services/diagnostics.py).
+- [x] P6.9.4 Log validation errors for diagnostics — NOTE: Validation issues emit structured warnings and telemetry via GraphResponseValidator callbacks (data/validation.py, services/*).
+- [x] P6.9.5 Add user-facing cache health status indicator — NOTE: Settings cache tab shows severity badge + table and integrates with diagnostics service (ui/settings/page.py).
+
+- [x] P6.11.0: Expand editor for target creation/deletion, advanced settings, and batch operation — NOTE: Reused AssignmentEditorDialog for desired template editing, added staged group batch creation dialog, and refreshed toolbar flows (ui/assignments/widgets.py, ui/assignments/assignment_editor.py)
+- [x] P6.11.1: Design first-run detection (check for empty settings + no token cache) — NOTE: Added config.onboarding.detect_first_run with FirstRunStatus, MainWindow shows setup banner when tenant config missing and no token cache (ui/main/window.py, config/onboarding.py)
+- [x] P6.11.2: Implement multi-step setup wizard (Welcome → Azure Config → Permission Grant → Test Auth → Complete) — NOTE: Added PySide6 SetupWizard covering onboarding sequence with dedicated pages (ui/settings/setup_wizard.py, ui/settings/widgets.py)
+- [x] P6.11.3: Add Azure app registration instructions with deep links to Azure Portal — NOTE: Wizard welcome/configuration pages include rich-text guidance and Azure portal deep links (ui/settings/setup_wizard.py)
+- [x] P6.11.4: Implement copy-to-clipboard helpers for redirect URI and scopes — NOTE: Configuration page exposes copy actions for redirect URI and recommended scopes (ui/settings/setup_wizard.py)
+- [x] P6.11.5: Add interactive permission grant flow with real-time scope validation — NOTE: Wizard permission page ties into SettingsController authStatusChanged for live scope status updates (ui/settings/setup_wizard.py, ui/settings/controller.py)
+- [x] P6.11.6: Build test connection flow that validates auth + basic Graph query — NOTE: Introduced SettingsController.test_graph_connection with Graph probe powering wizard test page (ui/settings/controller.py, ui/settings/setup_wizard.py)
+- [x] P6.11.7: Add ability to reset/reconfigure without app reinstall — NOTE: Settings UI now offers reset action clearing env, secrets, and token cache (ui/settings/controller.py, ui/settings/widgets.py)
+
+
+
+
+
+
+
+NOT DONE INTENTIONALLY EXCLUDED (for now!):
+ [ ] P6.8 Build Reports module (audit log viewer, export buttons, filter controls).
+  - Table view for audit events with filter toolbar (date range, actor, category) and integration with `ExportService`.
+  - Provide quick actions: export CSV/JSON, copy row, link to Azure portal entry.
+**P6.8 Reports Module** should expand to:
+- [ ] P6.8.1: Implement audit log table with pagination
+- [ ] P6.8.2: Add filter toolbar (date range picker, actor search, category dropdown)
+- [ ] P6.8.3: Build detail panel with full audit event JSON viewer
+- [ ] P6.8.4: Add export buttons (CSV, JSON) with range selection
+- [ ] P6.8.5: Implement copy row action for sharing
+- [ ] P6.8.6: Add deep link to Azure Portal audit entry
+- [ ] P6.8.7: Build compliance dashboard with charts (if Phase 6.3 charts implemented)
+
+
+- [x] P6.10.0 Ensure usability, keyboard shortcuts, light theme throughout (no dark theme). — NOTE: Added centralized shortcut map + overlay (src/intune_manager/ui/main/window.py, ui/components/shortcuts.py), enforced light-only theme with focus styling and removed toggles (ui/components/theme.py, ui/settings/page.py, ui/main/window.py), bootstrapped Qt translation manager + cached count optimisations for dashboard metrics (intune_manager/__init__.py, ui/i18n/manager.py, data/repositories/base.py, services/*/count_cached).
+  - Define cross-platform shortcut map (navigation, refresh, search, actions) and expose to help overlay.
+  - Audit tab order, focus cues, and high-contrast palette
+  - optimise metric counts via repository helpers (`cached_count`) to avoid materialising full datasets during dashboard refresh.
+
+
+- [x] P6.10.1 Implement optimistic update pattern in services — NOTE: Added `MutationStatus` lifecycle helper + `run_optimistic_mutation`, updated group/config/assignment services to emit pending/success/failure events, refreshed UI handling, and covered helper behaviour with new tests (`tests/services/test_base.py`).
+- [x] P6.10.2 Ensure correct error handling on graph API updates so the user is presented with the full error message as well as the attempted CLI for easier debugging if not already implemented — NOTE: Enriched `GraphAPIError` with request context + CLI reproduction command, updated `GraphClientFactory` to attach details, and UI now surfaces expanded error text.
+
+- [x] P7.6.1: Implement CSV parser for assignment import (columns: AppName, GroupName, Intent, Settings) — NOTE: 2025-10-23 Added `AssignmentImportService.parse_csv` with per-row validation + progress callbacks (`services/assignment_import.py`), wired through controller/UI with new CSV import toolbar flow (`ui/assignments/widgets.py`, `ui/assignments/import_dialog.py`).
+- [x] P7.6.2: Add import preview with validation warnings (missing apps/groups, platform conflicts) — NOTE: 2025-10-23 Added `AssignmentImportDialog` preview with row status + warning summaries and platform hints, integrated into CSV import flow.
+- [x] P7.6.3: Implement dry-run mode showing changes before execution — NOTE: 2025-10-23 CSV import now stages desired assignments and automatically triggers dry-run diff preview when targets selected (reuses existing diff engine).
+- [x] P7.6.4: Add progress reporting for batch imports — NOTE: 2025-10-23 Import service emits `ImportProgress` per row, UI shows cancellable `QProgressDialog` during CSV parsing.
+- [x] P7.6.5: Build error log with row-level failures for user review — NOTE: 2025-10-23 Preview dialog aggregates row warnings/errors with copy/save log tooling (`ui/assignments/import_dialog.py`).
+
+**P7.7 UI Polish & Enhancements**:
+- [x] P7.7.1: Expand assignment editor per-target scheduling windows and richer settings validation — NOTE: 2025-10-23 Added scheduling UI + validation to assignment editor (`ui/assignments/assignment_editor.py`) with new fields on `AssignmentSettings` (`data/models/assignment.py`).
+- [x] P7.7.2: Add lazy loading/streaming for install summaries to avoid redundant Graph calls — NOTE: 2025-10-23 Added service-level caching with TTL + UI cache reuse/Shift-force refresh (`services/applications.py`, `ui/applications/widgets.py`, controller pass-through).
+
+## Phase 7.0:
+- [x] P7.0.1: Implement cancellation token system for async operations — NOTE: Added utils/cancellation with CancellationToken/Source + CancellationError
+- [x] P7.0.2: Add progress tracking protocol (total, completed, failed, current) — NOTE: Created utils/progress with ProgressUpdate/Tracker; assignment import now emits structured updates
+- [x] P7.0.4: Build reusable progress dialog with cancel button — NOTE: Added ui/components/progress.ProgressDialog (token-aware)
+
+- [x] P7.0.1: Implement cancellation token system for async operations — NOTE: Added utils/cancellation with CancellationToken/Source + CancellationError
+- [x] P7.0.2: Add progress tracking protocol (total, completed, failed, current) — NOTE: Introduced utils/progress ProgressUpdate/Tracker and refactored services to emit structured updates
+- [x] P7.0.3: Wire cancellation tokens into all long-running service operations — NOTE: Extended cancellation support across Graph client, repositories, services, and controllers (devices/apps/groups/filters/configs/audit/sync/import)
+- [x] P7.0.4: Build reusable progress dialog with cancel button — NOTE: Added ui/components/progress.ProgressDialog and token-aware helpers
+- [x] P7.0.5: Integrate progress tracking into bulk operations UI — NOTE: Shared progress dialog + cancellation for assignment import, device/group refresh, and dashboard sync flows

@@ -15,7 +15,10 @@ from .dialogs import (
 )
 from .layouts import PageScaffold, SectionHeader, make_toolbar_button
 from .notifications import ToastLevel, ToastManager
+from .status import InlineStatusMessage
+from .shortcuts import ShortcutDefinition, ShortcutHelpDialog
 from .overlays import BusyOverlay
+from .progress import ProgressDialog
 from .theme import ThemeManager, ThemeName
 
 __all__ = [
@@ -38,7 +41,11 @@ __all__ = [
     "make_toolbar_button",
     "ToastLevel",
     "ToastManager",
+    "InlineStatusMessage",
+    "ShortcutDefinition",
+    "ShortcutHelpDialog",
     "BusyOverlay",
+    "ProgressDialog",
     "ThemeManager",
     "ThemeName",
 ]

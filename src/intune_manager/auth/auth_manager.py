@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import msal
-from azure.core.credentials import AccessToken
 
+from intune_manager.auth.types import AccessToken
 from intune_manager.config.settings import DEFAULT_GRAPH_SCOPES, Settings
 from intune_manager.graph.client import TokenProvider
 from intune_manager.graph.errors import AuthenticationError
 from intune_manager.utils import get_logger
+
+from .permission_checker import PermissionChecker
 
 from .token_cache import TokenCacheManager
 
@@ -37,6 +39,8 @@ class AuthManager:
         self._settings: Settings | None = None
         self._lock = threading.RLock()
         self._user: AuthenticatedUser | None = None
+        self._permission_checker = PermissionChecker()
+        self._missing_scopes: list[str] = []
 
     def configure(self, settings: Settings) -> None:
         if not settings.client_id:
@@ -52,6 +56,9 @@ class AuthManager:
             token_cache=self._cache_manager.cache,
         )
         self._settings = settings
+        configured_scopes = list(settings.configured_scopes())
+        self._permission_checker = PermissionChecker(configured_scopes or None)
+        self._missing_scopes = []
         logger.info("Configured MSAL PublicClientApplication", authority=authority)
 
     def token_provider(self) -> TokenProvider:
@@ -84,6 +91,10 @@ class AuthManager:
 
     def current_user(self) -> AuthenticatedUser | None:
         return self._user
+
+    def missing_scopes(self) -> list[str]:
+        """Return last-evaluated missing Graph scopes for the active token."""
+        return list(self._missing_scopes)
 
     # Internal --------------------------------------------------------
 
@@ -129,6 +140,7 @@ class AuthManager:
             app.remove_account(account)
         self._cache_manager.save()
         self._user = None
+        self._missing_scopes = []
         logger.info("Signed out MSAL accounts")
 
     def _process_result(self, result: dict[str, object]) -> AccessToken:
@@ -155,6 +167,8 @@ class AuthManager:
                 home_account_id=id_claims.get("oid"),
                 tenant_id=id_claims.get("tid"),
             )
+
+        self._missing_scopes = list(self._permission_checker.missing_scopes(access_token))
 
         return AccessToken(access_token, expiry)
 

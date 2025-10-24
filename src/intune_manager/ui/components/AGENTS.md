@@ -10,6 +10,7 @@
 - **`layouts.py`**: `PageScaffold`, grid layouts, responsive containers
 - **`overlays.py`**: `BusyOverlay` (spinner), progress indicators
 - **`notifications.py`**: `ToastManager`, notification queues, auto-dismiss
+- **`status.py`**: Inline status banners for embedding within list/table views
 - **`dialogs.py`**: Reusable dialog templates (confirm, input, error, progress)
 - **`badges.py`**: Status badges, labels, tags
 - **`alerts.py`**: Alert banners (info, warning, error, success)
@@ -28,7 +29,7 @@
 
 ### UIContext (Global State)
 Singleton holding:
-- Current theme (light/dark)
+- Current theme (light only; no runtime switching)
 - Busy overlay state
 - Notification queue
 - Command registry

@@ -7,6 +7,7 @@ from intune_manager.data import ManagedDevice
 from intune_manager.graph.requests import DeviceActionName
 from intune_manager.services import DeviceService, ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.devices import DeviceActionEvent, DeviceRefreshProgressEvent
+from intune_manager.utils import CancellationToken
 
 
 class DeviceController:
@@ -72,10 +73,15 @@ class DeviceController:
         tenant_id: str | None = None,
         *,
         force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[ManagedDevice]:
         if self._service is None:
             raise RuntimeError("Device service is not configured")
-        return await self._service.refresh(tenant_id=tenant_id, force=force)
+        return await self._service.refresh(
+            tenant_id=tenant_id,
+            force=force,
+            cancellation_token=cancellation_token,
+        )
 
     async def perform_action(
         self,
@@ -84,6 +90,7 @@ class DeviceController:
         *,
         tenant_id: str | None = None,
         parameters: dict[str, object] | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         if self._service is None:
             raise RuntimeError("Device service is not configured")
@@ -92,6 +99,7 @@ class DeviceController:
             action,
             tenant_id=tenant_id,
             parameters=parameters,
+            cancellation_token=cancellation_token,
         )
 
 

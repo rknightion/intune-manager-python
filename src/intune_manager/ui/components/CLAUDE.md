@@ -28,7 +28,7 @@
 
 ### UIContext (Global State)
 Singleton holding:
-- Current theme (light/dark)
+- Current theme (light only; no runtime switching)
 - Busy overlay state
 - Notification queue
 - Command registry

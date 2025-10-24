@@ -3,11 +3,13 @@
 ## Purpose
 - Provide configuration experiences for tenant/app registration, MSAL authentication, and permission diagnostics.
 - Surface secure secret handling (keyring/OS credential store) with user-friendly workflows.
+- Surface cache health, diagnostics, and telemetry preferences alongside core settings.
 - Communicate configuration changes and auth state updates to the main application.
 
 ## Module Structure
 - **`controller.py`**: `SettingsController` — config management, auth flows, secret storage orchestration
 - **`widgets.py`**: Settings form, tenant/client config fields, secret input with visibility toggle
+- **`page.py`**: Tabbed settings shell with cache diagnostics, log export, telemetry toggle, and about panel
 - **`dialog.py`**: MSAL sign-in dialog, permission diagnostic dialog
 
 ## Conventions

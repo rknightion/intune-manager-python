@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
-    QProgressDialog,
     QSizePolicy,
     QSplitter,
     QTableView,
@@ -44,10 +43,12 @@ from intune_manager.data import (
 )
 from intune_manager.data.models.assignment import FilteredGroupAssignmentTarget, GroupAssignmentTarget
 from intune_manager.services.assignments import AssignmentAppliedEvent, AssignmentDiff
-from intune_manager.services.base import ServiceErrorEvent
-from intune_manager.services import ServiceRegistry
+from intune_manager.services.base import MutationStatus, ServiceErrorEvent
+from intune_manager.services import AssignmentImportError, ServiceRegistry
+from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
 from intune_manager.ui.components import (
     CommandAction,
+    ProgressDialog,
     PageScaffold,
     ToastLevel,
     UIContext,
@@ -59,6 +60,7 @@ from intune_manager.utils import get_logger
 from .bulk_wizard import BulkAssignmentPlan, BulkAssignmentWizard
 from .assignment_editor import AssignmentEditorDialog
 from .controller import AssignmentCenterController
+from .import_dialog import AssignmentImportDialog
 from .models import AssignmentTableModel, DiffDetailModel, DiffSummary, DiffSummaryModel
 
 
@@ -70,16 +72,6 @@ def _clone_for_desired(assignments: Iterable[MobileAppAssignment]) -> list[Mobil
     for assignment in assignments:
         cloned.append(assignment.model_copy(update={"id": None}))
     return cloned
-
-
-class _CancellationToken:
-    """Simple cancellation token for bulk apply flows."""
-
-    def __init__(self) -> None:
-        self.cancelled = False
-
-    def cancel(self) -> None:
-        self.cancelled = True
 
 
 @dataclass(slots=True)
@@ -223,6 +215,10 @@ class AssignmentsWidget(PageScaffold):
             "Import assignments",
             tooltip="Import assignments from a JSON export to use as the desired state.",
         )
+        self._csv_import_button = make_toolbar_button(
+            "Import CSV",
+            tooltip="Import assignments from a CSV template (AppName, GroupName, Intent, Settings).",
+        )
         self._edit_button = make_toolbar_button(
             "Edit desired",
             tooltip="Open the assignment editor to add/remove targets and adjust intents or settings.",
@@ -239,6 +235,7 @@ class AssignmentsWidget(PageScaffold):
             self._staged_apply_button,
             self._backup_button,
             self._restore_button,
+            self._csv_import_button,
         ]
 
         super().__init__(
@@ -457,6 +454,7 @@ class AssignmentsWidget(PageScaffold):
         self._apply_button.clicked.connect(self._handle_apply_clicked)
         self._backup_button.clicked.connect(self._handle_backup_clicked)
         self._restore_button.clicked.connect(self._handle_restore_clicked)
+        self._csv_import_button.clicked.connect(self._handle_csv_import_clicked)
         self._edit_button.clicked.connect(self._handle_edit_desired_clicked)
         self._staged_apply_button.clicked.connect(self._handle_apply_staged_groups_clicked)
 
@@ -495,6 +493,12 @@ class AssignmentsWidget(PageScaffold):
             applied=self._handle_assignment_applied,
             error=self._handle_service_error,
         )
+
+    def focus_search(self) -> None:
+        if self._search_input is None:
+            return
+        self._search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_input.selectAll()
 
     # ----------------------------------------------------------------- Data
 
@@ -769,54 +773,64 @@ class AssignmentsWidget(PageScaffold):
                 f"Bulk apply scoped to {len(plan.selected_group_ids)} specific group(s).",
             )
 
-        progress = QProgressDialog("Preparing bulk assignment apply…", "Cancel", 0, total, self)
-        progress.setWindowTitle("Applying assignments")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.setValue(0)
-
-        token = _CancellationToken()
-        progress.canceled.connect(token.cancel)
+        token_source = CancellationTokenSource()
+        progress = ProgressDialog(
+            title="Applying assignments",
+            parent=self,
+            message="Preparing bulk assignment apply…",
+            token_source=token_source,
+        )
+        progress.show()
 
         self._context.set_busy("Applying assignment changes…")
-        self._context.run_async(self._apply_async(plan, token, progress))
+        self._context.run_async(self._apply_async(plan, token_source, progress))
 
     async def _apply_async(
         self,
         plan: BulkAssignmentPlan,
-        token: _CancellationToken,
-        progress: QProgressDialog,
+        token_source: CancellationTokenSource,
+        progress: ProgressDialog,
     ) -> None:
         total = len(plan.diffs)
         successes = 0
         failures = 0
         applied_ids: list[str] = []
         cancelled = False
+        token = token_source.token
 
         try:
-            progress.setRange(0, total)
-            progress.setValue(0)
+            progress.update_progress(
+                ProgressUpdate(
+                    total=total,
+                    completed=0,
+                    failed=0,
+                    current="Preparing bulk assignment apply…",
+                ),
+            )
             for index, (app_id, diff) in enumerate(plan.diffs.items(), start=1):
                 if token.cancelled:
                     cancelled = True
                     break
 
-                app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
-                progress.setLabelText(f"Applying assignments for {app_name} ({index}/{total})")
+                app = self._app_index.get(app_id)
+                app_name = app.display_name if app and app.display_name else app_id
+                status_text = f"Applying assignments for {app_name} ({index}/{total})"
+                progress.set_message(status_text)
                 QApplication.processEvents()
 
                 succeeded = False
                 last_exc: Exception | None = None
                 try:
-                    await self._controller.apply_diff(app_id, diff)
+                    await self._controller.apply_diff(app_id, diff, cancellation_token=token)
                     succeeded = True
+                except CancellationError:
+                    cancelled = True
+                    break
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     if plan.options.retry_conflicts and not token.cancelled:
                         try:
-                            await self._controller.apply_diff(app_id, diff)
+                            await self._controller.apply_diff(app_id, diff, cancellation_token=token)
                         except Exception as retry_exc:  # noqa: BLE001
                             last_exc = retry_exc
                         else:
@@ -837,17 +851,30 @@ class AssignmentsWidget(PageScaffold):
                     )
                     successes += 1
                     applied_ids.append(app_id)
-                    self._assignment_cache[app_id] = await self._controller.fetch_assignments(app_id)
+                    try:
+                        assignments = await self._controller.fetch_assignments(app_id, cancellation_token=token)
+                    except CancellationError:
+                        cancelled = True
+                        break
+                    else:
+                        self._assignment_cache[app_id] = assignments
 
-                progress.setValue(index)
+                progress.update_progress(
+                    ProgressUpdate(
+                        total=total,
+                        completed=successes,
+                        failed=failures,
+                        current=status_text,
+                    ),
+                )
                 QApplication.processEvents()
 
             if token.cancelled:
                 cancelled = True
 
         finally:
-            progress.setValue(total)
             progress.close()
+            token_source.dispose()
             self._context.clear_busy()
             for app_id in applied_ids:
                 self._diff_cache.pop(app_id, None)
@@ -957,6 +984,135 @@ class AssignmentsWidget(PageScaffold):
             history_message=f"Imported assignments from {path}",
         )
 
+    def _handle_csv_import_clicked(self) -> None:
+        if not self._apps:
+            self._context.show_notification(
+                "Application cache is empty. Refresh applications before importing.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        if not self._groups:
+            self._context.show_notification(
+                "Group cache is empty. Refresh groups before importing assignments.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        if not self._source_app_id:
+            self._context.show_notification(
+                "Select a source application before importing CSV assignments.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        source_app = self._app_index.get(self._source_app_id)
+        if source_app is None or not source_app.id:
+            self._context.show_notification(
+                "Unable to determine the selected source application. Refresh the application list and try again.",
+                level=ToastLevel.ERROR,
+            )
+            return
+
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import assignments from CSV",
+            "",
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path_str:
+            return
+
+        source_path = Path(path_str)
+        token_source = CancellationTokenSource()
+        progress_dialog = ProgressDialog(
+            title="Parsing assignments…",
+            parent=self,
+            message="Preparing assignment import…",
+            token_source=token_source,
+        )
+        progress_dialog.show()
+        self._context.set_busy("Parsing CSV import…")
+
+        def update_progress(update: ProgressUpdate) -> None:
+            progress_dialog.update_progress(update)
+            QApplication.processEvents()
+
+        try:
+            result = self._controller.parse_import_csv(
+                source_path,
+                apps=self._apps,
+                groups=self._groups,
+                progress=update_progress,
+                cancellation_token=token_source.token,
+            )
+        except CancellationError:
+            self._context.show_notification("CSV import cancelled.", level=ToastLevel.INFO)
+            return
+        except AssignmentImportError as exc:
+            self._context.show_notification(f"Import failed: {exc}", level=ToastLevel.ERROR)
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("CSV assignment import failed", path=source_path)
+            self._context.show_notification(
+                f"CSV import failed unexpectedly: {exc}",
+                level=ToastLevel.ERROR,
+            )
+            return
+        finally:
+            token_source.dispose()
+            progress_dialog.close()
+            self._context.clear_busy()
+
+        if token_source.token.cancelled:
+            self._context.show_notification("CSV import cancelled.", level=ToastLevel.INFO)
+            return
+        if not result.rows:
+            self._context.show_notification(
+                "CSV file did not contain any data rows.",
+                level=ToastLevel.INFO,
+            )
+            return
+
+        dialog = AssignmentImportDialog(
+            result,
+            expected_app_name=source_app.display_name or source_app.id,
+            expected_app_id=source_app.id,
+            source_path=source_path,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        assignments = dialog.selected_assignments()
+        if not assignments:
+            self._context.show_notification(
+                "No assignments were available from the CSV import.",
+                level=ToastLevel.WARNING,
+            )
+            return
+
+        self._set_desired_assignments(
+            assignments,
+            origin=f"import:{source_path.name}",
+            status_message=f"{len(assignments):,} assignments imported from CSV ({source_path.name}).",
+            history_message=f"Imported assignments from {source_path}",
+        )
+
+        if result.warnings:
+            self._context.show_notification(
+                f"Import completed with {len(result.warnings)} warning(s). Review the preview for details.",
+                level=ToastLevel.WARNING,
+                duration_ms=6000,
+            )
+
+        self._context.show_notification(
+            f"Imported {len(assignments)} assignments from {source_path.name}.",
+            level=ToastLevel.SUCCESS,
+        )
+
+        if self._dry_run_checkbox is None or not self._dry_run_checkbox.isChecked():
+            return
+        if self._selected_target_ids():
+            self._handle_preview_clicked()
+
     def _handle_summary_selection(self) -> None:
         if self._summary_view is None:
             return
@@ -981,10 +1137,40 @@ class AssignmentsWidget(PageScaffold):
         self._diff_detail_model.set_details(details)
 
     def _handle_assignment_applied(self, event: AssignmentAppliedEvent) -> None:
-        app_name = self._app_index.get(event.app_id).display_name if event.app_id in self._app_index else event.app_id
-        self._append_history(
-            f"Assignments applied for {app_name}: +{len(event.diff.to_create)}/~{len(event.diff.to_update)}/-{len(event.diff.to_delete)}",
+        app_name = (
+            self._app_index.get(event.app_id).display_name
+            if event.app_id in self._app_index
+            else event.app_id
         )
+
+        if event.status is MutationStatus.PENDING:
+            self._append_history(f"Applying assignments for {app_name}…")
+            self._context.set_busy(f"Applying assignments to {app_name}…")
+            return
+
+        if event.status is MutationStatus.SUCCEEDED:
+            self._context.clear_busy()
+            self._append_history(
+                f"Assignments applied for {app_name}: +{len(event.diff.to_create)}/~{len(event.diff.to_update)}/-{len(event.diff.to_delete)}",
+            )
+            self._context.show_notification(
+                f"Assignments applied for {app_name}.",
+                level=ToastLevel.SUCCESS,
+            )
+            return
+
+        if event.status is MutationStatus.FAILED:
+            self._context.clear_busy()
+            detail = str(event.error) if event.error else "Unknown error"
+            self._append_history(
+                f"Assignment apply failed for {app_name}: {detail}",
+                warning=True,
+            )
+            self._context.show_notification(
+                f"Failed to apply assignments for {app_name}: {detail}",
+                level=ToastLevel.ERROR,
+                duration_ms=10000,
+            )
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
         detail = str(event.error)
@@ -1347,6 +1533,7 @@ class AssignmentsWidget(PageScaffold):
         self._apply_button.setEnabled(apply_enabled)
         self._backup_button.setEnabled(has_desired and self._controller.is_assignment_service_available())
         self._edit_button.setEnabled(bool(self._groups) or has_desired or bool(self._source_assignments))
+        self._csv_import_button.setEnabled(bool(self._apps) and bool(self._groups))
 
     # ----------------------------------------------------------------- Cleanup
 

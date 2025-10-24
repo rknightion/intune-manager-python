@@ -16,6 +16,7 @@
 - **`dashboard/`**: Tenant health overview, quick actions, cache status
 - **`settings/`**: Tenant/app config, MSAL sign-in, permission diagnostics, secret storage
 - **`components/`**: Reusable widgets (`BusyOverlay`, `ToastManager`, `PageScaffold`, dialogs, badges)
+- **`i18n/`**: Translation manager and catalog bootstrap (`TranslationManager`, `.ts/.qm` assets)
 
 ## Conventions
 - **Separation of concerns**: UI widgets stay declarative; delegate logic to controllers and services.

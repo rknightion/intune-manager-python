@@ -36,11 +36,14 @@ from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.devices import DeviceActionEvent, DeviceRefreshProgressEvent
 from intune_manager.ui.components import (
     CommandAction,
+    InlineStatusMessage,
     PageScaffold,
+    ProgressDialog,
     ToastLevel,
     UIContext,
     make_toolbar_button,
 )
+from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
 
 from .controller import DeviceController
 from .models import DeviceFilterProxyModel, DeviceTableModel
@@ -385,6 +388,9 @@ class DevicesWidget(PageScaffold):
         self._auto_select_first = False
         self._lazy_threshold = 1000
         self._lazy_chunk_size = 400
+        self._refresh_token_source: CancellationTokenSource | None = None
+        self._refresh_progress_dialog: ProgressDialog | None = None
+        self._refresh_in_progress = False
 
         self._refresh_button = make_toolbar_button(
             "Refresh",
@@ -519,6 +525,9 @@ class DevicesWidget(PageScaffold):
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
 
+        self._list_message = InlineStatusMessage(parent=table_container)
+        table_layout.addWidget(self._list_message)
+
         self._table = QTableView()
         self._table.setObjectName("DeviceTable")
         self._table.setModel(self._proxy)
@@ -561,6 +570,10 @@ class DevicesWidget(PageScaffold):
         )
         self._command_unregister = self._context.command_registry.register(action)
 
+    def focus_search(self) -> None:
+        self._search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_input.selectAll()
+
     # ----------------------------------------------------------------- Data flow
 
     def _handle_model_batch_appended(self, _: int) -> None:
@@ -582,6 +595,7 @@ class DevicesWidget(PageScaffold):
         preserve_selection: set[str] | None = None,
         auto_select_first: bool = True,
     ) -> None:
+        self._list_message.clear()
         device_list = list(devices)
         self._total_devices = len(device_list)
         self._detail_cache.clear()
@@ -617,6 +631,7 @@ class DevicesWidget(PageScaffold):
         devices: Iterable[ManagedDevice],
         from_cache: bool,
     ) -> None:
+        self._finish_refresh(mark_finished=True)
         devices_list = list(devices)
         previous_ids = set(self._selected_device_ids)
         auto_select_first = not previous_ids
@@ -630,17 +645,17 @@ class DevicesWidget(PageScaffold):
                 f"Loaded {len(devices_list):,} devices from Microsoft Graph.",
                 level=ToastLevel.SUCCESS,
             )
-        self._context.clear_busy()
-        self._refresh_button.setEnabled(True)
-        self._force_refresh_button.setEnabled(True)
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
-        self._context.clear_busy()
-        self._refresh_button.setEnabled(True)
-        self._force_refresh_button.setEnabled(True)
-        detail = str(event.error)
+        self._finish_refresh()
+        detail = f"{type(event.error).__name__}: {event.error}"
+        self._list_message.display(
+            "Device operation failed. Review the details below and retry when ready.",
+            level=ToastLevel.ERROR,
+            detail=detail,
+        )
         self._context.show_notification(
-            f"Device operation failed: {detail}",
+            "Device operation failed. See inline details for more information.",
             level=ToastLevel.ERROR,
             duration_ms=8000,
         )
@@ -700,9 +715,41 @@ class DevicesWidget(PageScaffold):
             self._update_action_buttons()
 
     def _handle_refresh_progress(self, event: DeviceRefreshProgressEvent) -> None:
-        self._context.set_busy_message(
-            f"Refreshing devices… {event.processed:,} processed",
-        )
+        message = f"Refreshing devices… {event.processed:,} processed"
+        self._context.set_busy_message(message)
+        dialog = self._refresh_progress_dialog
+        if dialog is not None:
+            dialog.update_progress(
+                ProgressUpdate(
+                    total=None,
+                    completed=event.processed,
+                    failed=0,
+                    current=message,
+                ),
+            )
+            if event.finished:
+                dialog.mark_finished()
+
+    def _finish_refresh(self, *, mark_finished: bool = False) -> None:
+        if (
+            not self._refresh_in_progress
+            and self._refresh_token_source is None
+            and self._refresh_progress_dialog is None
+        ):
+            return
+        dialog = self._refresh_progress_dialog
+        if dialog is not None:
+            if mark_finished:
+                dialog.mark_finished()
+            dialog.close()
+            self._refresh_progress_dialog = None
+        if self._refresh_token_source is not None:
+            self._refresh_token_source.dispose()
+            self._refresh_token_source = None
+        self._refresh_in_progress = False
+        self._context.clear_busy()
+        self._refresh_button.setEnabled(True)
+        self._force_refresh_button.setEnabled(True)
 
     # ----------------------------------------------------------------- Actions
 
@@ -714,27 +761,44 @@ class DevicesWidget(PageScaffold):
 
     def _start_refresh(self, *, force: bool = False) -> None:
         if self._services.devices is None:
+            self._list_message.display(
+                "Device service unavailable. Configure Microsoft Graph dependencies in Settings.",
+                level=ToastLevel.WARNING,
+            )
             self._context.show_notification(
                 "Device service not configured. Configure Graph dependencies in Settings.",
                 level=ToastLevel.WARNING,
             )
             return
+        self._list_message.clear()
+        if self._refresh_token_source is not None:
+            return
+        token_source = CancellationTokenSource()
+        dialog = ProgressDialog(
+            title="Refreshing devices",
+            parent=self,
+            message="Preparing device refresh…",
+            token_source=token_source,
+        )
+        dialog.show()
+        self._refresh_token_source = token_source
+        self._refresh_progress_dialog = dialog
+        self._refresh_in_progress = True
         self._context.set_busy("Refreshing devices…")
+        dialog.set_message("Refreshing devices…")
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
-        self._context.run_async(self._refresh_async(force=force))
+        self._context.run_async(self._refresh_async(force=force, token_source=token_source))
 
-    async def _refresh_async(self, *, force: bool) -> None:
+    async def _refresh_async(self, *, force: bool, token_source: CancellationTokenSource) -> None:
+        token = token_source.token
         try:
-            await self._controller.refresh(force=force)
-        except Exception as exc:  # noqa: BLE001
-            self._context.clear_busy()
-            self._refresh_button.setEnabled(True)
-            self._force_refresh_button.setEnabled(True)
-            self._context.show_notification(
-                f"Failed to refresh devices: {exc}",
-                level=ToastLevel.ERROR,
-            )
+            await self._controller.refresh(force=force, cancellation_token=token)
+        except CancellationError:
+            self._finish_refresh()
+            self._context.show_notification("Device refresh cancelled.", level=ToastLevel.INFO)
+        except Exception:  # noqa: BLE001
+            raise
 
     def _handle_device_action(self, action: DeviceActionName) -> None:
         if self._services.devices is None:
@@ -1108,6 +1172,10 @@ class DevicesWidget(PageScaffold):
         self._detail_pane.show_placeholder(
             "Device service not configured. Configure Microsoft Graph credentials in Settings.",
         )
+        self._list_message.display(
+            "Device service unavailable. Configure Microsoft Graph dependencies to load devices.",
+            level=ToastLevel.WARNING,
+        )
         self._context.show_banner(
             "Device service unavailable — configure data services before managing devices.",
             level=ToastLevel.WARNING,
@@ -1115,6 +1183,7 @@ class DevicesWidget(PageScaffold):
         self._update_action_buttons()
 
     def _cleanup(self) -> None:
+        self._finish_refresh()
         if self._command_unregister:
             try:
                 self._command_unregister()

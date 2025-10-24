@@ -7,6 +7,7 @@ from typing import Dict, List
 from intune_manager.config import DEFAULT_GRAPH_SCOPES, SettingsManager
 from intune_manager.auth import AuthManager, auth_manager
 from intune_manager.services import ServiceRegistry
+from intune_manager.utils import CancellationToken
 
 
 @dataclass(slots=True)
@@ -70,8 +71,9 @@ class DashboardController:
         if not tenant_status.signed_in:
             snapshot.warnings.append("User not signed in to Microsoft Graph.")
         if tenant_status.missing_scopes:
+            missing = ", ".join(tenant_status.missing_scopes)
             snapshot.warnings.append(
-                f"Missing recommended Graph scopes: {', '.join(tenant_status.missing_scopes)}",
+                f"Missing Microsoft Graph permissions: {missing}. Grant these scopes to the Intune Manager app registration.",
             )
 
         def add_metric(
@@ -146,10 +148,15 @@ class DashboardController:
         *,
         tenant_id: str | None = None,
         force: bool = True,
+        cancellation_token: CancellationToken | None = None,
     ) -> None:
         if not self._services.sync:
             raise RuntimeError("Sync service not configured")
-        await self._services.sync.refresh_all(tenant_id=tenant_id, force=force)
+        await self._services.sync.refresh_all(
+            tenant_id=tenant_id,
+            force=force,
+            cancellation_token=cancellation_token,
+        )
 
     # ----------------------------------------------------------------- Helpers
 
@@ -160,9 +167,22 @@ class DashboardController:
         configured = settings.is_configured
         signed_in = user is not None
         configured_scopes = list(settings.configured_scopes())
-        missing_scopes = [
+        token_missing = []
+        try:
+            token_missing = self._auth.missing_scopes()
+        except AttributeError:  # pragma: no cover - legacy auth manager without helper
+            token_missing = []
+
+        configured_missing = [
             scope for scope in DEFAULT_GRAPH_SCOPES if scope not in configured_scopes
         ]
+
+        seen: set[str] = set()
+        missing_scopes: list[str] = []
+        for scope in token_missing + configured_missing:
+            if scope and scope not in seen:
+                seen.add(scope)
+                missing_scopes.append(scope)
 
         status = TenantStatus(
             tenant_id=tenant_id,

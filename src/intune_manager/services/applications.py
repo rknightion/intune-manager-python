@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from intune_manager.data import (
@@ -11,6 +11,7 @@ from intune_manager.data import (
     MobileAppAssignment,
     MobileAppRepository,
 )
+from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph import GraphAPIError
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.requests import (
@@ -19,7 +20,7 @@ from intune_manager.graph.requests import (
     mobile_app_install_summary_request,
 )
 from intune_manager.services.base import EventHook, RefreshEvent, ServiceErrorEvent
-from intune_manager.utils import get_logger
+from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
@@ -44,11 +45,14 @@ class ApplicationService:
         self._repository = repository
         self._attachments = attachments
         self._default_ttl = timedelta(minutes=20)
+        self._validator = GraphResponseValidator("mobile_apps")
 
         self.refreshed: EventHook[RefreshEvent[list[MobileApp]]] = EventHook()
         self.errors: EventHook[ServiceErrorEvent] = EventHook()
         self.install_summary: EventHook[InstallSummaryEvent] = EventHook()
         self.icon_cached: EventHook[AttachmentMetadata] = EventHook()
+        self._install_summary_cache: dict[str, tuple[dict[str, Any], datetime]] = {}
+        self._summary_ttl = timedelta(minutes=15)
 
     # ------------------------------------------------------------------ Queries
 
@@ -65,7 +69,7 @@ class ApplicationService:
         return self._repository.is_cache_stale(tenant_id=tenant_id)
 
     def count_cached(self, tenant_id: str | None = None) -> int:
-        return self._repository.count(tenant_id=tenant_id)
+        return self._repository.cached_count(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 
@@ -76,7 +80,10 @@ class ApplicationService:
         force: bool = False,
         include_assignments: bool = True,
         include_categories: bool = True,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[MobileApp]:
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         if not force and not self.is_cache_stale(tenant_id=tenant_id):
             cached = self.list_cached(tenant_id=tenant_id)
             self.refreshed.emit(
@@ -97,13 +104,25 @@ class ApplicationService:
 
         try:
             apps: list[MobileApp] = []
+            self._validator.reset()
+            invalid_count = 0
             async for item in self._client_factory.iter_collection(
                 "GET",
                 "/deviceAppManagement/mobileApps",
                 params=params,
+                cancellation_token=cancellation_token,
             ):
-                apps.append(MobileApp.from_graph(item))
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
+                payload = item if isinstance(item, dict) else {"value": item}
+                model = self._validator.parse(MobileApp, payload)
+                if model is None:
+                    invalid_count += 1
+                    continue
+                apps.append(model)
 
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             self._repository.replace_all(
                 apps,
                 tenant_id=tenant_id,
@@ -116,7 +135,15 @@ class ApplicationService:
                     from_cache=False,
                 ),
             )
+            if invalid_count:
+                logger.warning(
+                    "Application refresh skipped invalid payloads",
+                    tenant_id=tenant_id,
+                    invalid=invalid_count,
+                )
             return apps
+        except CancellationError:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to refresh mobile applications", tenant_id=tenant_id)
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
@@ -127,16 +154,31 @@ class ApplicationService:
         app_id: str,
         *,
         tenant_id: str | None = None,
+        force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
+        if not force:
+            cached = self._install_summary_cache.get(app_id)
+            if cached:
+                payload, timestamp = cached
+                if datetime.utcnow() - timestamp < self._summary_ttl:
+                    self.install_summary.emit(InstallSummaryEvent(app_id=app_id, summary=payload))
+                    logger.debug("Install summary served from cache", app_id=app_id)
+                    return payload
+
         request = mobile_app_install_summary_request(app_id)
         summary = await self._client_factory.request_json(
             request.method,
             request.url,
             headers=request.headers,
             api_version=request.api_version,
+            cancellation_token=cancellation_token,
         )
         event = InstallSummaryEvent(app_id=app_id, summary=summary)
         self.install_summary.emit(event)
+        self._install_summary_cache[app_id] = (summary, datetime.utcnow())
         logger.debug(
             "Fetched install summary",
             app_id=app_id,
@@ -147,13 +189,20 @@ class ApplicationService:
     async def fetch_assignments(
         self,
         app_id: str,
+        *,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[MobileAppAssignment]:
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         request = mobile_app_assignments_request(app_id)
         assignments: list[MobileAppAssignment] = []
         async for item in self._client_factory.iter_collection(
             request.method,
             request.url,
+            cancellation_token=cancellation_token,
         ):
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             assignments.append(MobileAppAssignment.from_graph(item))
         logger.debug("Fetched app assignments", app_id=app_id, count=len(assignments))
         return assignments
@@ -165,7 +214,10 @@ class ApplicationService:
         tenant_id: str | None = None,
         size: str = "large",
         force: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> AttachmentMetadata | None:
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         cache_key = f"{app_id}:{size}"
         if not force:
             cached = self._attachments.get(cache_key, tenant_id=tenant_id)
@@ -179,13 +231,18 @@ class ApplicationService:
                 request.url,
                 headers=request.headers,
                 api_version=request.api_version,
+                cancellation_token=cancellation_token,
             )
+        except CancellationError:
+            raise
         except GraphAPIError as exc:
             if getattr(exc, "status_code", None) == 404:
                 logger.debug("App icon not available", app_id=app_id)
                 return None
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         metadata = self._attachments.store(
             cache_key,
             blob,

@@ -1,6 +1,12 @@
 """Business logic service layer for Intune Manager."""
 
 from .applications import ApplicationService, InstallSummaryEvent
+from .assignment_import import (
+    AssignmentImportError,
+    AssignmentImportResult,
+    AssignmentImportRowResult,
+    AssignmentImportService,
+)
 from .assignments import (
     AssignmentAppliedEvent,
     AssignmentDiff,
@@ -28,6 +34,10 @@ __all__ = [
     "AssignmentDiff",
     "AssignmentUpdate",
     "AssignmentAppliedEvent",
+    "AssignmentImportService",
+    "AssignmentImportResult",
+    "AssignmentImportRowResult",
+    "AssignmentImportError",
     "GroupService",
     "GroupMembershipEvent",
     "AssignmentFilterService",

@@ -28,6 +28,8 @@ from intune_manager.ui.components import (
     CommandPalette,
     CommandRegistry,
     PageScaffold,
+    ShortcutDefinition,
+    ShortcutHelpDialog,
     TenantBadge,
     ThemeManager,
     ToastLevel,
@@ -39,7 +41,7 @@ from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
 from intune_manager.ui.devices import DevicesWidget
 from intune_manager.ui.groups import GroupsWidget
-from intune_manager.ui.settings import SettingsWidget
+from intune_manager.ui.settings import SettingsPage
 from intune_manager.utils import get_logger
 from intune_manager.utils.asyncio import AsyncBridge
 
@@ -93,8 +95,11 @@ class MainWindow(QMainWindow):
         self._busy_default_message = "Working…"
         self._subscriptions: list[Callable[[], None]] = []
         self._shortcuts: list[QShortcut] = []
+        self._shortcut_definitions: list[ShortcutDefinition] = []
+        self._shortcuts_dialog: ShortcutHelpDialog | None = None
+        self._sync_in_progress = False
         self._dashboard_widget: DashboardWidget | None = None
-        self._settings_widget: SettingsWidget | None = None
+        self._settings_page: SettingsPage | None = None
         self._banner_action: Callable[[], None] | None = None
         self._first_run_status: FirstRunStatus | None = None
 
@@ -144,6 +149,7 @@ class MainWindow(QMainWindow):
         self._nav_list.setSpacing(2)
         self._nav_list.setAlternatingRowColors(True)
         self._nav_list.setSelectionMode(QListWidget.SingleSelection)
+        self._nav_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._nav_list.setSizePolicy(
             QSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding),
         )
@@ -211,23 +217,40 @@ class MainWindow(QMainWindow):
                 self._stack.setCurrentIndex(0)
 
     def _register_shortcuts(self) -> None:
-        sequences = ("Ctrl+K", "Meta+K")
-        for sequence in sequences:
-            shortcut = QShortcut(QKeySequence(sequence), self)
-            shortcut.activated.connect(self._open_command_palette)
-            self._shortcuts.append(shortcut)
+        self._shortcut_definitions = self._build_shortcut_definitions()
+
+        for shortcut in self._shortcuts:
+            shortcut.setParent(None)
+        self._shortcuts.clear()
+
+        for definition in self._shortcut_definitions:
+            for sequence in definition.sequences:
+                key_sequence = QKeySequence(sequence)
+                if key_sequence == QKeySequence():
+                    continue
+                shortcut = QShortcut(key_sequence, self)
+                shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                shortcut.activated.connect(definition.callback)
+                self._shortcuts.append(shortcut)
+
+        if self._shortcuts_dialog is not None:
+            self._shortcuts_dialog.set_shortcuts(self._shortcut_definitions)
 
     def _register_commands(self) -> None:
-        self._command_registry.register(
-            CommandAction(
-                id="appearance.toggle-theme",
-                title="Toggle theme",
-                callback=self._toggle_theme_from_command,
-                category="Appearance",
-                description="Switch between light and dark themes.",
-                shortcut="Ctrl+Shift+L",
-            ),
-        )
+        for definition in self._shortcut_definitions:
+            if not definition.show_in_palette:
+                continue
+            shortcut_text = definition.primary_sequence()
+            self._command_registry.register(
+                CommandAction(
+                    id=definition.id,
+                    title=definition.title,
+                    callback=definition.callback,
+                    category=definition.category,
+                    description=definition.description,
+                    shortcut=shortcut_text,
+                ),
+            )
 
     def _build_page_for_item(self, item: NavigationItem) -> QWidget:
         if item.key == "dashboard":
@@ -280,12 +303,70 @@ class MainWindow(QMainWindow):
                 ),
                 parent=self._stack,
             )
-            settings_widget = SettingsWidget(parent=page)
-            page.add_body_widget(settings_widget, stretch=1)
+            settings_page = SettingsPage(
+                diagnostics=self._services.diagnostics if self._services else None,
+                parent=page,
+            )
+            page.add_body_widget(settings_page, stretch=1)
             page.body_layout.addStretch()
-            self._settings_widget = settings_widget
+            self._settings_page = settings_page
             return page
         return self._create_placeholder_page(item)
+
+    def _build_shortcut_definitions(self) -> list[ShortcutDefinition]:
+        shortcuts = [
+            ShortcutDefinition(
+                id="command.palette",
+                title="Open command palette",
+                sequences=("Ctrl+K", "Meta+K"),
+                callback=self._open_command_palette,
+                category="Global",
+                description="Search for commands, navigation targets, and quick actions.",
+                show_in_palette=False,
+            ),
+            ShortcutDefinition(
+                id="help.shortcuts",
+                title="Show keyboard shortcuts",
+                sequences=("Ctrl+/", "Meta+/", "F1"),
+                callback=self._show_shortcuts_overlay,
+                category="Help",
+                description="Display the shortcut reference overlay.",
+            ),
+            ShortcutDefinition(
+                id="global.refresh",
+                title="Refresh data",
+                sequences=("Ctrl+R", "Meta+R", "F5"),
+                callback=self._refresh_active_view,
+                category="Global",
+                description="Refresh the active module or start a tenant sync.",
+            ),
+            ShortcutDefinition(
+                id="global.focus-search",
+                title="Focus search",
+                sequences=("Ctrl+F", "Meta+F"),
+                callback=self._focus_active_search,
+                category="Global",
+                description="Focus the search field in the current module.",
+            ),
+        ]
+        shortcuts.extend(self._build_navigation_shortcuts())
+        return shortcuts
+
+    def _build_navigation_shortcuts(self) -> list[ShortcutDefinition]:
+        shortcuts: list[ShortcutDefinition] = []
+        for index, item in enumerate(self.NAV_ITEMS, start=1):
+            sequences = (f"Ctrl+{index}", f"Meta+{index}")
+            shortcuts.append(
+                ShortcutDefinition(
+                    id=f"nav.{item.key}",
+                    title=f"Go to {item.label}",
+                    sequences=sequences,
+                    callback=lambda key=item.key: self._navigate_to_nav_item(key),
+                    category="Navigation",
+                    description=f"Switch to the {item.label} module.",
+                ),
+            )
+        return shortcuts
 
     def _connect_navigation(self) -> None:
         self._nav_list.currentRowChanged.connect(self._stack.setCurrentIndex)
@@ -340,10 +421,11 @@ class MainWindow(QMainWindow):
             self.restoreState(state)
 
         theme_name = self._settings_store.value("theme/name", "light")
-        if isinstance(theme_name, str) and theme_name in {"light", "dark"}:
+        if isinstance(theme_name, str):
             self._theme_manager.set_theme(theme_name)
         else:
-            self._apply_theme()
+            self._theme_manager.set_theme("light")
+        self._apply_theme()
 
     def _persist_window_state(self) -> None:
         self._settings_store.setValue("window/geometry", self.saveGeometry())
@@ -445,18 +527,84 @@ class MainWindow(QMainWindow):
                 duration_ms=6000,
             )
 
-    def _toggle_theme_from_command(self) -> None:
-        next_theme = self._theme_manager.toggle()
+    def _show_shortcuts_overlay(self) -> None:
+        if self._shortcuts_dialog is None:
+            self._shortcuts_dialog = ShortcutHelpDialog(self._shortcut_definitions, parent=self)
+        else:
+            self._shortcuts_dialog.set_shortcuts(self._shortcut_definitions)
+        self._shortcuts_dialog.show()
+        self._shortcuts_dialog.raise_()
+        self._shortcuts_dialog.activateWindow()
+
+    def _refresh_active_view(self) -> None:
+        page = self._current_page()
+        if page is None:
+            return
+
+        for attribute in ("trigger_refresh", "refresh", "start_refresh"):
+            handler = getattr(page, attribute, None)
+            if callable(handler):
+                try:
+                    result = handler()
+                    if inspect.isawaitable(result):
+                        self._bridge.run_coroutine(result)  # type: ignore[arg-type]
+                    return
+                except Exception:  # noqa: BLE001
+                    logger.exception("Refresh handler failed", widget=type(page).__name__)
+                    self.show_notification(
+                        "Refresh failed to start.",
+                        level=ToastLevel.ERROR,
+                        duration_ms=6000,
+                    )
+                    return
+        self._start_global_sync()
+
+    def _start_global_sync(self) -> None:
+        if self._sync_in_progress:
+            self.show_notification(
+                "A tenant sync is already running.",
+                level=ToastLevel.INFO,
+                duration_ms=3500,
+            )
+            return
+        if self._services.sync is None:
+            self.show_notification(
+                "Sync service not configured yet.",
+                level=ToastLevel.WARNING,
+                duration_ms=5000,
+            )
+            return
+        self._sync_in_progress = True
+        self.set_busy("Refreshing tenant data…")
+        self._bridge.run_coroutine(self._services.sync.refresh_all(force=True))
+
+    def _focus_active_search(self) -> None:
+        page = self._current_page()
+        if page is None:
+            return
+        handler = getattr(page, "focus_search", None)
+        if callable(handler):
+            try:
+                handler()
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("Focus search handler failed", widget=type(page).__name__)
+                self.show_notification(
+                    "Search field failed to focus.",
+                    level=ToastLevel.ERROR,
+                    duration_ms=4000,
+                )
+                return
         self.show_notification(
-            f"Switched to {next_theme} theme",
+            "No searchable field on this view.",
             level=ToastLevel.INFO,
-            duration_ms=2500,
+            duration_ms=3500,
         )
 
     def _open_onboarding_setup(self) -> None:
         self._navigate_to_nav_item("settings")
-        if self._settings_widget is not None:
-            self._settings_widget.launch_setup_wizard()
+        if self._settings_page is not None:
+            self._settings_page.launch_setup_wizard()
         else:
             self.show_notification(
                 "Open the Settings tab to configure your tenant and sign in.",
@@ -481,12 +629,14 @@ class MainWindow(QMainWindow):
         message = f"Refreshing {phase} ({event.completed}/{total})"
         self.set_busy(message)
         if event.completed >= total:
+            self._sync_in_progress = False
             self.clear_busy()
             self.show_notification("Tenant data refreshed", level=ToastLevel.SUCCESS)
 
     def _handle_sync_error(self, event: ServiceErrorEvent) -> None:
         self.clear_busy()
         detail = str(event.error)
+        self._sync_in_progress = False
         self.show_notification(
             f"Sync failed: {detail}",
             level=ToastLevel.ERROR,
@@ -494,6 +644,9 @@ class MainWindow(QMainWindow):
         )
 
     # ----------------------------------------------------------------- Helpers
+
+    def _current_page(self) -> QWidget | None:
+        return self._stack.currentWidget()
 
     def _create_placeholder_page(self, item: NavigationItem) -> QWidget:
         page = PageScaffold(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Dict, Iterable, Mapping, Sequence
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from intune_manager.auth import SecretStore
-from intune_manager.config.settings import log_dir
+from intune_manager.config.settings import config_dir, log_dir
 from intune_manager.data import (
     AssignmentFilterRepository,
     AuditEventRepository,
@@ -117,7 +118,7 @@ class DiagnosticsService:
                     key=path.stem,
                     path=path,
                     size_bytes=stat.st_size,
-                    last_accessed=datetime.fromtimestamp(stat.st_atime),
+                    last_accessed=datetime.utcfromtimestamp(stat.st_atime),
                     tenant_id=tenant_id,
                 )
 
@@ -150,6 +151,27 @@ class DiagnosticsService:
             for key, label in target_keys.items()
         }
 
+    def telemetry_opt_in(self) -> bool:
+        path = self._telemetry_pref_path()
+        if not path.exists():
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning("Telemetry preference file is invalid JSON", path=str(path))
+            return False
+        return bool(payload.get("telemetry_opt_in", False))
+
+    def set_telemetry_opt_in(self, enabled: bool) -> None:
+        path = self._telemetry_pref_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "telemetry_opt_in": bool(enabled),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        logger.info("Telemetry preference updated", enabled=enabled)
+
     # ------------------------------------------------------------- Internals
 
     def _build_repositories(self, db: DatabaseManager) -> Dict[str, object]:
@@ -161,6 +183,9 @@ class DiagnosticsService:
             "audit_events": AuditEventRepository(db),
             "assignment_filters": AssignmentFilterRepository(db),
         }
+
+    def _telemetry_pref_path(self) -> Path:
+        return config_dir() / "telemetry.json"
 
 
 __all__ = ["DiagnosticsService", "AttachmentStats"]

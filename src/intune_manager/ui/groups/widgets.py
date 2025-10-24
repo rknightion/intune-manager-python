@@ -33,14 +33,18 @@ from PySide6.QtWidgets import (
 from intune_manager.data import DirectoryGroup, GroupMember
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.groups import GroupMembershipEvent
+from intune_manager.services.base import MutationStatus
 from intune_manager.ui.components import (
     CommandAction,
+    InlineStatusMessage,
     PageScaffold,
+    ProgressDialog,
     ToastLevel,
     UIContext,
     stage_groups,
     make_toolbar_button,
 )
+from intune_manager.utils import CancellationError, CancellationTokenSource
 
 from .controller import GroupController
 from .models import GroupFilterProxyModel, GroupTableModel, _group_type_label
@@ -444,6 +448,9 @@ class GroupsWidget(PageScaffold):
         self._services = services
         self._context = context
         self._controller = GroupController(services)
+        self._refresh_token_source: CancellationTokenSource | None = None
+        self._refresh_dialog: ProgressDialog | None = None
+        self._refresh_in_progress = False
 
         self._refresh_button = make_toolbar_button("Refresh", tooltip="Refresh groups from Microsoft Graph.")
         self._force_refresh_button = make_toolbar_button("Force refresh", tooltip="Bypass cache and refetch groups.")
@@ -595,6 +602,8 @@ class GroupsWidget(PageScaffold):
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
+        self._list_message = InlineStatusMessage(parent=left_container)
+        left_layout.addWidget(self._list_message)
         left_layout.addWidget(self._view_tabs)
 
         splitter.addWidget(left_container)
@@ -628,9 +637,14 @@ class GroupsWidget(PageScaffold):
         )
         self._command_unregister = self._context.command_registry.register(action)
 
+    def focus_search(self) -> None:
+        self._search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_input.selectAll()
+
     # ----------------------------------------------------------------- Data flow
 
     def _load_cached_groups(self) -> None:
+        self._list_message.clear()
         groups = self._controller.list_cached()
         self._model.set_groups(groups)
         self._update_group_lookup(groups)
@@ -638,18 +652,22 @@ class GroupsWidget(PageScaffold):
         self._refresh_filtered_views()
         if groups:
             self._table.selectRow(0)
+        self._group_tree.setEnabled(True)
 
     def _handle_groups_refreshed(
         self,
         groups: Iterable[DirectoryGroup],
         from_cache: bool,
     ) -> None:
+        self._list_message.clear()
+        self._finish_refresh(mark_finished=True)
         groups_list = list(groups)
         selected_id = self._selected_group.id if self._selected_group else None
         self._model.set_groups(groups_list)
         self._update_group_lookup(groups_list)
         self._apply_filter_options(groups_list)
         self._refresh_filtered_views()
+        self._group_tree.setEnabled(True)
         if selected_id:
             self._reselect_group(selected_id)
         elif groups_list:
@@ -659,26 +677,67 @@ class GroupsWidget(PageScaffold):
                 f"Loaded {len(groups_list):,} groups.",
                 level=ToastLevel.SUCCESS,
             )
+
+    def _finish_refresh(self, *, mark_finished: bool = False) -> None:
+        if (
+            not self._refresh_in_progress
+            and self._refresh_token_source is None
+            and self._refresh_dialog is None
+        ):
+            return
+        dialog = self._refresh_dialog
+        if dialog is not None:
+            if mark_finished:
+                dialog.mark_finished()
+            dialog.close()
+            self._refresh_dialog = None
+        if self._refresh_token_source is not None:
+            self._refresh_token_source.dispose()
+            self._refresh_token_source = None
+        self._refresh_in_progress = False
         self._context.clear_busy()
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
-        self._context.clear_busy()
-        self._refresh_button.setEnabled(True)
-        self._force_refresh_button.setEnabled(True)
+        self._finish_refresh()
+        detail = f"{type(event.error).__name__}: {event.error}"
+        self._list_message.display(
+            "Group operation failed. Review the inline details and retry.",
+            level=ToastLevel.ERROR,
+            detail=detail,
+        )
         self._context.show_notification(
-            f"Group operation failed: {event.error}",
+            "Group operation failed. See inline details for more information.",
             level=ToastLevel.ERROR,
             duration_ms=8000,
         )
 
     def _handle_membership_event(self, event: GroupMembershipEvent) -> None:
-        if self._selected_group and self._selected_group.id == event.group_id:
+        if not self._selected_group or self._selected_group.id != event.group_id:
+            return
+
+        if event.status is MutationStatus.PENDING:
+            verb = "Adding" if event.action == "add" else "Removing"
+            self._context.set_busy(f"{verb} member…")
+            return
+
+        if event.status is MutationStatus.SUCCEEDED:
             self._context.set_busy("Refreshing members…")
             self._start_member_stream(event.group_id)
             self._detail_pane.set_members([], loading=True)
             self._context.run_async(self._fetch_next_member_page_async(event.group_id))
+            return
+
+        if event.status is MutationStatus.FAILED:
+            self._context.clear_busy()
+            detail = str(event.error) if event.error else "Unknown error"
+            verb = "add" if event.action == "add" else "remove"
+            self._context.show_notification(
+                f"Failed to {verb} member: {detail}",
+                level=ToastLevel.ERROR,
+                duration_ms=10000,
+            )
 
     # ----------------------------------------------------------------- Actions
 
@@ -690,27 +749,44 @@ class GroupsWidget(PageScaffold):
 
     def _start_refresh(self, *, force: bool = False) -> None:
         if self._services.groups is None:
+            self._list_message.display(
+                "Group service unavailable. Configure Microsoft Graph dependencies to refresh directory groups.",
+                level=ToastLevel.WARNING,
+            )
             self._context.show_notification(
                 "Group service not configured. Configure tenant services to continue.",
                 level=ToastLevel.WARNING,
             )
             return
+        self._list_message.clear()
+        if self._refresh_token_source is not None:
+            return
+        token_source = CancellationTokenSource()
+        dialog = ProgressDialog(
+            title="Refreshing groups",
+            parent=self,
+            message="Preparing group refresh…",
+            token_source=token_source,
+        )
+        dialog.show()
+        self._refresh_token_source = token_source
+        self._refresh_dialog = dialog
+        self._refresh_in_progress = True
         self._context.set_busy("Refreshing groups…")
+        dialog.set_message("Refreshing groups…")
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
-        self._context.run_async(self._refresh_async(force=force))
+        self._context.run_async(self._refresh_async(force=force, token_source=token_source))
 
-    async def _refresh_async(self, *, force: bool) -> None:
+    async def _refresh_async(self, *, force: bool, token_source: CancellationTokenSource) -> None:
+        token = token_source.token
         try:
-            await self._controller.refresh(force=force)
-        except Exception as exc:  # noqa: BLE001
-            self._context.clear_busy()
-            self._refresh_button.setEnabled(True)
-            self._force_refresh_button.setEnabled(True)
-            self._context.show_notification(
-                f"Failed to refresh groups: {exc}",
-                level=ToastLevel.ERROR,
-            )
+            await self._controller.refresh(force=force, cancellation_token=token)
+        except CancellationError:
+            self._finish_refresh()
+            self._context.show_notification("Group refresh cancelled.", level=ToastLevel.INFO)
+        except Exception:  # noqa: BLE001
+            raise
 
     def _handle_load_members_clicked(self) -> None:
         group = self._selected_group
@@ -1357,7 +1433,12 @@ class GroupsWidget(PageScaffold):
 
     def _handle_service_unavailable(self) -> None:
         self._table.setEnabled(False)
+        self._group_tree.setEnabled(False)
         self._detail_pane.display_group(None)
+        self._list_message.display(
+            "Group service unavailable. Configure Microsoft Graph dependencies to load directory groups.",
+            level=ToastLevel.WARNING,
+        )
         self._context.show_banner(
             "Group service unavailable — configure Microsoft Graph dependencies to continue.",
             level=ToastLevel.WARNING,
@@ -1365,6 +1446,7 @@ class GroupsWidget(PageScaffold):
         self._update_action_buttons()
 
     def _cleanup(self) -> None:
+        self._finish_refresh()
         if self._command_unregister:
             try:
                 self._command_unregister()

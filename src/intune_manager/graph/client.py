@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import time
 from collections.abc import Callable as CallableABC, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncGenerator, Callable, Mapping, Sequence, Tuple, TypeAlias
+from typing import Any, AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Tuple, TypeAlias, TypeVar
 
 import httpx
-from azure.core.credentials import AccessToken
 from httpx._client import UseClientDefault, USE_CLIENT_DEFAULT
 from httpx import Auth
+
+from intune_manager.auth.types import AccessToken
 
 from intune_manager.graph.errors import (
     AuthenticationError,
@@ -22,13 +24,15 @@ from intune_manager.graph.errors import (
 )
 from intune_manager.graph.rate_limiter import rate_limiter
 from intune_manager.graph.requests import GraphRequest, graph_request_to_batch_entry
-from intune_manager.utils import get_logger
+from intune_manager.utils import CancellationToken, get_logger
 
 
 logger = get_logger(__name__)
 
 
 TokenProvider = Callable[[Sequence[str]], AccessToken]
+
+T = TypeVar("T")
 
 
 class GraphAPIVersion(str, Enum):
@@ -291,6 +295,25 @@ class RateLimitedAsyncClient(httpx.AsyncClient):
         except Exception:  # pragma: no cover - telemetry shouldn't break requests
             logger.warning("Telemetry callback raised an exception", exc_info=True)
 
+    async def _await_with_cancellation(
+        self,
+        coro: Awaitable[T],
+        token: CancellationToken | None,
+    ) -> T:
+        if token is None:
+            return await coro
+        token.raise_if_cancelled()
+        task = asyncio.create_task(coro)
+        unlink = token.link_task(task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if token.cancelled:
+                token.raise_if_cancelled()
+            raise
+        finally:
+            unlink()
+
 
 def _map_response_to_error(response: httpx.Response) -> GraphAPIError:
     status = response.status_code
@@ -434,18 +457,36 @@ class GraphClientFactory:
         content: bytes | None = None,
         headers: dict[str, str] | None = None,
         api_version: ApiVersionInput = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> httpx.Response:
         client = self._get_http_client()
         url = self._absolute_url(path, api_version=api_version)
-        response = await client.request(
-            method,
-            url,
-            params=params,
-            json=json_body,
-            data=data,
-            content=content,
-            headers=headers,
-        )
+        params_for_cli = dict(params) if params is not None else None
+        try:
+            response = await self._await_with_cancellation(
+                client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    data=data,
+                    content=content,
+                    headers=headers,
+                ),
+                cancellation_token,
+            )
+        except GraphAPIError as exc:
+            self._enrich_graph_error(
+                exc,
+                method=method,
+                url=url,
+                params=params_for_cli,
+                headers=headers,
+                json_body=json_body,
+                data=data,
+                content=content,
+            )
+            raise
         return response
 
     async def request_json(
@@ -457,6 +498,7 @@ class GraphClientFactory:
         json_body: Any | None = None,
         headers: dict[str, str] | None = None,
         api_version: ApiVersionInput = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
         response = await self.request(
             method,
@@ -465,6 +507,7 @@ class GraphClientFactory:
             json_body=json_body,
             headers=headers,
             api_version=api_version,
+            cancellation_token=cancellation_token,
         )
         return response.json()
 
@@ -476,6 +519,7 @@ class GraphClientFactory:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         api_version: ApiVersionInput = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> bytes:
         response = await self.request(
             method,
@@ -483,6 +527,7 @@ class GraphClientFactory:
             params=params,
             headers=headers,
             api_version=api_version,
+            cancellation_token=cancellation_token,
         )
         return response.content
 
@@ -495,6 +540,7 @@ class GraphClientFactory:
         headers: dict[str, str] | None = None,
         page_size: int | None = None,
         api_version: ApiVersionInput = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         next_url = self._absolute_url(path, api_version=api_version)
         query: dict[str, Any] | None = dict(params or {})
@@ -506,16 +552,21 @@ class GraphClientFactory:
             query = {"$top": page_size}
 
         while next_url:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             payload = await self.request_json(
                 method,
                 next_url,
                 params=query,
                 headers=headers,
                 api_version=api_version if not next_url.startswith("http") else None,
+                cancellation_token=cancellation_token,
             )
             value = payload.get("value")
             if isinstance(value, list):
                 for item in value:
+                    if cancellation_token:
+                        cancellation_token.raise_if_cancelled()
                     if isinstance(item, dict):
                         yield item
                     else:
@@ -534,6 +585,7 @@ class GraphClientFactory:
         requests: Iterable[GraphRequest | Mapping[str, Any]],
         *,
         api_version: ApiVersionInput = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> dict[str, Any]:
         resolved_version: str | None = None
         if api_version is not None:
@@ -580,6 +632,7 @@ class GraphClientFactory:
             json_body=payload,
             headers={"Content-Type": "application/json"},
             api_version=effective_version,
+            cancellation_token=cancellation_token,
         )
 
     async def close(self) -> None:
@@ -588,6 +641,93 @@ class GraphClientFactory:
             self._http_client = None
 
     # ------------------------------------------------------------- Internals
+
+    def _enrich_graph_error(
+        self,
+        error: GraphAPIError,
+        *,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+        json_body: Any | None,
+        data: Any | None,
+        content: bytes | None,
+    ) -> None:
+        method_upper = method.upper()
+        if params:
+            query = str(httpx.QueryParams(params))
+            if query:
+                separator = "&" if "?" in url else "?"
+                url = f"{url}{separator}{query}"
+
+        error.request_method = method_upper
+        error.request_url = url
+        if not error.cli_example:
+            error.cli_example = self._build_cli_example(
+                method=method_upper,
+                url=url,
+                headers=headers,
+                json_body=json_body,
+                data=data,
+                content=content,
+            )
+
+    def _build_cli_example(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None,
+        json_body: Any | None,
+        data: Any | None,
+        content: bytes | None,
+    ) -> str:
+        tokens: list[str] = ["az", "rest", "--method", method.upper(), "--url", url]
+        for key, value in self._sanitize_headers(headers).items():
+            tokens.extend(["--headers", f"{key}={value}"])
+        body = self._serialise_body(json_body, data, content)
+        if body is not None:
+            tokens.extend(["--body", body])
+        return shlex.join(tokens)
+
+    @staticmethod
+    def _sanitize_headers(headers: dict[str, str] | None) -> dict[str, str]:
+        if not headers:
+            return {}
+        sanitized: dict[str, str] = {}
+        for key, value in headers.items():
+            if key.lower() == "authorization":
+                continue
+            sanitized[key] = str(value)
+        return sanitized
+
+    @staticmethod
+    def _serialise_body(
+        json_body: Any | None,
+        data: Any | None,
+        content: bytes | None,
+    ) -> str | None:
+        if json_body is not None:
+            try:
+                body_text = json.dumps(json_body, ensure_ascii=True, separators=(",", ":"))
+            except TypeError:
+                body_text = repr(json_body)
+            return GraphClientFactory._truncate_cli_value(body_text)
+        if data is not None:
+            if isinstance(data, (bytes, bytearray)):
+                return "<binary data>"
+            return GraphClientFactory._truncate_cli_value(str(data))
+        if content is not None:
+            return "<binary content>"
+        return None
+
+    @staticmethod
+    def _truncate_cli_value(value: str, limit: int = 800) -> str:
+        compact = value.replace("\n", " ").strip()
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[: limit - 3]}..."
 
     def _get_http_client(self) -> RateLimitedAsyncClient:
         if self._http_client is None:
