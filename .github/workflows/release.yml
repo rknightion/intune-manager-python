@@ -92,26 +92,61 @@ jobs:
           version: "latest"
           enable-cache: true
 
-      # Install ccache on supported platforms
-      - name: Install ccache (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ccache
-
-      - name: Install ccache (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ccache
-
-      # Restore ccache
-      - name: Cache ccache
+      # Setup compiler caching (ccache for Linux/macOS, clcache for Windows)
+      - name: Setup ccache (Linux/macOS)
         if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.arch }}
+          restore-keys: |
+            ${{ matrix.os }}-${{ matrix.arch }}-
+            ${{ matrix.os }}-
+          max-size: 2G
+          verbose: 2
+
+      - name: Configure ccache (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          echo "NUITKA_CCACHE_BINARY=$(which ccache)" >> $GITHUB_ENV
+          ccache --version
+          ccache --show-config
+          ccache --zero-stats
+          ccache --max-size=2G
+
+      # Windows compiler caching with clcache (built into Nuitka)
+      - name: Configure clcache (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "NUITKA_CLCACHE_BINARY=clcache" >> $GITHUB_ENV
+          # Set clcache environment variables
+          echo "CLCACHE_DIR=${{ runner.temp }}/clcache" >> $GITHUB_ENV
+          echo "CLCACHE_COMPRESS=1" >> $GITHUB_ENV
+          echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          mkdir -p "${{ runner.temp }}/clcache"
+
+      # Cache clcache for Windows
+      - name: Cache clcache (Windows)
+        if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.ccache
-            ~/.cache/ccache
-          key: ccache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          path: ${{ runner.temp }}/clcache
+          key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
           restore-keys: |
-            ccache-${{ matrix.os }}-${{ matrix.arch }}-
+            clcache-${{ matrix.os }}-${{ matrix.arch }}-
+            clcache-${{ matrix.os }}-
+
+      # Configure Nuitka cache directories
+      - name: Configure Nuitka environment
+        shell: bash
+        run: |
+          echo "NUITKA_CACHE_DIR=${{ runner.temp }}/nuitka-cache" >> $GITHUB_ENV
+          echo "NUITKA_CACHE_DIR_DOWNLOADS=${{ runner.temp }}/nuitka-cache/downloads" >> $GITHUB_ENV
+          echo "NUITKA_CACHE_DIR_CCACHE=${{ runner.temp }}/nuitka-cache/ccache" >> $GITHUB_ENV
+          echo "NUITKA_CACHE_DIR_CLCACHE=${{ runner.temp }}/nuitka-cache/clcache" >> $GITHUB_ENV
+          echo "NUITKA_CACHE_DIR_BYTECODE=${{ runner.temp }}/nuitka-cache/bytecode" >> $GITHUB_ENV
+          echo "NUITKA_CACHE_DIR_DLL_DEPENDENCIES=${{ runner.temp }}/nuitka-cache/dll-dependencies" >> $GITHUB_ENV
+          mkdir -p "${{ runner.temp }}/nuitka-cache"
 
       # Cache Nuitka build directory
       - name: Cache Nuitka build
@@ -121,9 +156,11 @@ jobs:
             src/intune_manager.build
             src/intune_manager.dist
             src/intune_manager.onefile-build
-          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+            ${{ runner.temp }}/nuitka-cache
+          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
           restore-keys: |
             nuitka-${{ matrix.os }}-${{ matrix.arch }}-
+            nuitka-${{ matrix.os }}-
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -157,7 +194,20 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          uv run nuitka --product-version="$VERSION" src/intune_manager
+          # Show compiler cache status before build
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            echo "::group::Pre-build ccache statistics"
+            ccache --show-stats
+            echo "::endgroup::"
+          fi
+          # Run Nuitka build with caching enabled
+          uv run nuitka \
+            --product-version="$VERSION" \
+            --assume-yes-for-downloads \
+            --show-scons \
+            --show-progress \
+            --show-memory \
+            src/intune_manager
 
       - name: Verify build output
         shell: bash
@@ -205,11 +255,28 @@ jobs:
           path: ${{ matrix.asset_name }}
           retention-days: 0  # Keep forever
 
-      - name: Save ccache statistics
-        if: runner.os != 'Windows' && always()
+      - name: Save compiler cache statistics
+        if: always()
+        shell: bash
         run: |
-          echo "ccache statistics:"
-          ccache -s || true
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            echo "::group::ccache statistics"
+            ccache --show-stats || true
+            ccache --show-config || true
+            echo "Cache directory: $(ccache --get-config cache_dir)" || true
+            echo "Cache size: $(du -sh $(ccache --get-config cache_dir) 2>/dev/null || echo 'N/A')"
+            echo "::endgroup::"
+          else
+            echo "::group::clcache statistics"
+            echo "CLCACHE_DIR: $CLCACHE_DIR"
+            if [ -d "$CLCACHE_DIR" ]; then
+              echo "Cache size: $(du -sh $CLCACHE_DIR 2>/dev/null || echo 'N/A')"
+              echo "Number of cached files: $(find $CLCACHE_DIR -type f | wc -l)"
+            else
+              echo "No clcache directory found"
+            fi
+            echo "::endgroup::"
+          fi
 
   create-package:
     name: Publish to GitHub Packages
