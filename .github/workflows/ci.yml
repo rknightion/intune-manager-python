@@ -169,8 +169,7 @@ jobs:
           uv run nuitka \
             --product-version="$VERSION" \
             --assume-yes-for-downloads \
-            --show-scons \
-            --show-progress \
+            --show-modules \
             --show-memory \
             src/intune_manager
 

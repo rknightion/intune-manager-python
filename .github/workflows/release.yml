@@ -204,9 +204,7 @@ jobs:
           uv run nuitka \
             --product-version="$VERSION" \
             --assume-yes-for-downloads \
-            --show-scons \
-            --show-progress \
-            --show-memory \
+            --show-modules \
             src/intune_manager
 
       - name: Verify build output

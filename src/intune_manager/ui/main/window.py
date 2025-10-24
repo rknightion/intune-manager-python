@@ -165,7 +165,7 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        sidebar_width = 150  # Shrink navigation rail ~150px to free more canvas space
+        sidebar_width = 70  # Shrink navigation rail ~150px to free more canvas space
         self._nav_list.setObjectName("NavigationList")
         self._nav_list.setFixedWidth(sidebar_width)
         self._nav_list.setMinimumWidth(sidebar_width)

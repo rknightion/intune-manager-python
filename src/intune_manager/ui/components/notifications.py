@@ -13,9 +13,10 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QColor
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -66,7 +67,6 @@ class ToastWidget(QFrame):
             "  border-radius: 12px;"
             "  padding: 12px 16px;"
             "  color: white;"
-            "  box-shadow: 0px 12px 30px rgba(15, 23, 42, 0.35);"
             "}"
             "QPushButton#ToastDismiss {"
             "  background: transparent;"
@@ -92,6 +92,12 @@ class ToastWidget(QFrame):
         self.dismiss_button.setObjectName("ToastDismiss")
         self.dismiss_button.clicked.connect(self.close)
         layout.addWidget(self.dismiss_button)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(30)
+        shadow.setColor(QColor(15, 23, 42, int(0.35 * 255)))
+        shadow.setOffset(0, 10)
+        self.setGraphicsEffect(shadow)
 
         self._opacity_anim = QPropertyAnimation(self, b"windowOpacity")
         self._opacity_anim.setDuration(250)

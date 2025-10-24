@@ -99,6 +99,7 @@ You are permitted to consume migration-done.txt to see what previous work has be
 
 - [x] P7.10: Crash UX + auth error surfacing — NOTE: AuthManager now wraps MSAL authority validation errors so SettingsController can emit inline feedback instead of crashing, the blocking CrashRecoveryDialog was removed in favor of non-modal crash toasts/banner notifications with an "Open crash log" action, and Diagnostics now exposes Safe Mode + cache purge scheduling so users can trigger those recovery flows without restarting into a modal. Also ensured toast notifications remain interactive by fixing the dismiss button hit testing and adding regression coverage in tests/ui/components/test_notifications.py.
 - [x] P7.10.5: Navigation sidebar polish — NOTE: Left rail trimmed by 150px (fixed 70px width with wrapped labels) to free workspace space, menu item renamed to “App Assignments” and reordered under Applications, and NavigationList hover/selection styling now uses an accent tint instead of flashing white; covered by `uv run pytest tests/ui/main/test_main_window.py`.
+- [x] P7.10.6: Toast shadow warning cleanup — NOTE: Replaced unsupported CSS `box-shadow` rule with a `QGraphicsDropShadowEffect` so Qt no longer logs “Unknown property box-shadow”; verified via `uv run pytest tests/ui/components/test_notifications.py`.
 
 
 
