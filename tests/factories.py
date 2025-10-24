@@ -14,6 +14,7 @@ from intune_manager.data import (
     AssignmentIntent,
     AssignmentSettings,
     ManagedDevice,
+    MobileApp,
     MobileAppAssignment,
 )
 
@@ -111,6 +112,32 @@ def bulk_devices(count: int) -> Iterable[ManagedDevice]:
             device_name=f"Device {index}",
             operating_system="Windows",
         )
+
+
+def make_mobile_app(
+    *,
+    app_id: str,
+    display_name: str | None = None,
+    platform: str = "windows",
+    **overrides: object,
+) -> MobileApp:
+    """Construct a minimal MobileApp model for repository and service tests."""
+
+    payload: dict[str, object] = {
+        "id": app_id,
+        "displayName": display_name or f"App {app_id}",
+        "platformType": platform,
+        "publisher": "Contoso",
+    }
+    payload.update(overrides)
+    return MobileApp.from_graph(payload)
+
+
+def bulk_mobile_apps(count: int) -> Iterable[MobileApp]:
+    """Yield a deterministic set of MobileApp records for bulk operations."""
+
+    for index in range(count):
+        yield make_mobile_app(app_id=f"app-{index}")
 
 
 def configure_auth_manager(

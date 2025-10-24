@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from intune_manager.data.models import ManagedDevice
 from sqlalchemy import delete
@@ -39,7 +39,7 @@ class DeviceRepository(BaseCacheRepository[ManagedDevice, DeviceRecord]):
     ) -> int:
         """Persist devices from an async iterator without materialising the full collection."""
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         ttl = expires_in or self._default_ttl
         expires_at = now + ttl if ttl is not None else None
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -74,7 +74,7 @@ def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPa
                 count=125,
                 stale=False,
                 available=True,
-                last_refresh=datetime.utcnow(),
+                last_refresh=datetime.now(UTC),
             ),
             ResourceMetric(
                 key="applications",
@@ -123,7 +123,7 @@ def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPa
                 count=140,
                 stale=False,
                 available=True,
-                last_refresh=datetime.utcnow(),
+                last_refresh=datetime.now(UTC),
             ),
                 ResourceMetric(
                     key="applications",
@@ -131,7 +131,7 @@ def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPa
                     count=42,
                     stale=False,
                     available=True,
-                    last_refresh=datetime.utcnow(),
+                    last_refresh=datetime.now(UTC),
                 ),
         ],
         warnings=[],

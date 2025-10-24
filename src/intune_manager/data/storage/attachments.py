@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -60,7 +60,7 @@ class AttachmentCache:
             key=key,
             path=path,
             size_bytes=path.stat().st_size,
-            last_accessed=datetime.utcnow(),
+            last_accessed=datetime.now(UTC),
             tenant_id=tenant_id,
             category=category,
         )
@@ -77,7 +77,7 @@ class AttachmentCache:
             key=key,
             path=path,
             size_bytes=stat.st_size,
-            last_accessed=datetime.utcfromtimestamp(stat.st_atime),
+            last_accessed=datetime.fromtimestamp(stat.st_atime, tz=UTC),
             tenant_id=tenant_id,
         )
 
@@ -145,10 +145,10 @@ class AttachmentCache:
     def _purge_expired(self, files: Iterable[Path]) -> None:
         if self._default_ttl is None:
             return
-        cutoff = datetime.utcnow() - self._default_ttl
+        cutoff = datetime.now(UTC) - self._default_ttl
         for path in files:
             try:
-                atime = datetime.utcfromtimestamp(path.stat().st_atime)
+                atime = datetime.fromtimestamp(path.stat().st_atime, tz=UTC)
             except FileNotFoundError:  # pragma: no cover - race
                 continue
             if atime < cutoff:

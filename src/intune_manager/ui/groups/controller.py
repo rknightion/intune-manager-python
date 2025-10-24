@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from intune_manager.data import DirectoryGroup, GroupMember
 from intune_manager.services import GroupService, ServiceErrorEvent, ServiceRegistry
@@ -109,7 +109,7 @@ class GroupController:
         else:
             self._member_cache[group_id] = items
         if items:
-            self._member_freshness[group_id] = datetime.utcnow()
+            self._member_freshness[group_id] = datetime.now(UTC)
 
     # ----------------------------------------------------------------- Actions
 
@@ -141,7 +141,7 @@ class GroupController:
         )
         self._member_cache[group_id] = members
         self._member_streams.pop(group_id, None)
-        self._member_freshness[group_id] = datetime.utcnow()
+        self._member_freshness[group_id] = datetime.now(UTC)
         return members
 
     async def list_owners(
@@ -156,7 +156,7 @@ class GroupController:
             group_id, cancellation_token=cancellation_token
         )
         self._owner_cache[group_id] = owners
-        self._owner_freshness[group_id] = datetime.utcnow()
+        self._owner_freshness[group_id] = datetime.now(UTC)
         return owners
 
     async def add_member(

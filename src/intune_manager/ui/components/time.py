@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 def format_relative_timestamp(timestamp: datetime | None) -> str:
@@ -8,7 +8,12 @@ def format_relative_timestamp(timestamp: datetime | None) -> str:
 
     if timestamp is None:
         return "never"
-    delta = datetime.utcnow() - timestamp
+    reference = datetime.now(UTC)
+    if timestamp.tzinfo is None:
+        normalised = timestamp.replace(tzinfo=UTC)
+    else:
+        normalised = timestamp.astimezone(UTC)
+    delta = reference - normalised
     if delta < timedelta(seconds=90):
         return "moments ago"
     minutes = delta.total_seconds() / 60
@@ -21,7 +26,7 @@ def format_relative_timestamp(timestamp: datetime | None) -> str:
         count = max(int(hours), 1)
         unit = "hour" if count == 1 else "hours"
         return f"{count} {unit} ago"
-    return timestamp.strftime("%Y-%m-%d %H:%M")
+    return normalised.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 __all__ = ["format_relative_timestamp"]

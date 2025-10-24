@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from intune_manager.data import (
@@ -168,7 +168,10 @@ class ApplicationService:
             cached = self._install_summary_cache.get(app_id)
             if cached:
                 payload, timestamp = cached
-                if datetime.utcnow() - timestamp < self._summary_ttl:
+                now = datetime.now(UTC)
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=UTC)
+                if now - timestamp < self._summary_ttl:
                     self.install_summary.emit(
                         InstallSummaryEvent(app_id=app_id, summary=payload)
                     )
@@ -185,7 +188,7 @@ class ApplicationService:
         )
         event = InstallSummaryEvent(app_id=app_id, summary=summary)
         self.install_summary.emit(event)
-        self._install_summary_cache[app_id] = (summary, datetime.utcnow())
+        self._install_summary_cache[app_id] = (summary, datetime.now(UTC))
         logger.debug(
             "Fetched install summary",
             app_id=app_id,

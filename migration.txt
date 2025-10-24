@@ -94,14 +94,14 @@ Make sure after each phase that 'uv run pytest -v' is passing and fix any broken
 - [x] P8.3.2: Settings dialog auth flow (mock MSAL) — NOTE: Added SettingsWidget controller double tests in tests/ui/settings/test_settings_widget.py covering sign-in/save flow and missing-scope status updates.
 - [x] P8.3.3: Dashboard refresh and metric updates — NOTE: Patched DashboardWidget snapshot handling tests in tests/ui/dashboard/test_dashboard_widget.py verifying metric cards, warnings list, and banner state.
 - [x] P8.3.4: Device list load and filter — NOTE: Added DeviceFilterProxyModel coverage in tests/ui/devices/test_device_filters.py exercising search text and platform filtering logic.
-- [ ] P8.4.1: Load test with 10K devices (table virtualization)
-- [ ] P8.4.2: Memory profiling with large cache (10K devices, 5K apps)
-- [ ] P8.4.3: Batch operation performance (10000 assignments)
-- [ ] P8.4.4: Cache query performance (SQLite indexes)
+- [x] P8.4.1: Load test with 10K devices (table virtualization) — NOTE: Added tests/performance/test_phase8_performance.py::test_device_table_lazy_loading_handles_10k_devices ensuring DeviceTableModel lazy batches complete within 2.5s and respect chunk size.
+- [x] P8.4.2: Memory profiling with large cache (10K devices, 5K apps) — NOTE: Added tests/performance/test_phase8_performance.py::test_cache_memory_profile_large_datasets using tracemalloc to validate cache growth < 80 MiB and counts persist.
+- [x] P8.4.3: Batch operation performance (10000 assignments) — NOTE: Added tests/performance/test_phase8_performance.py::test_assignment_service_batch_operations_scale verifying AssignmentService aggregates 10K mutations into single upsert + batch delete under 2s.
+- [x] P8.4.4: Cache query performance (SQLite indexes) — NOTE: Added tests/performance/test_phase8_performance.py::test_cache_queries_use_indexes asserting EXPLAIN QUERY PLAN leverages indexed lookups for devices/apps.
 - [x] P8.3.5: Assignment wizard full workflow — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py with end-to-end BulkAssignmentWizard flow exercising all pages and plan generation.
 - [x] P8.3.6: Toast dismissal and overlay focus blocking (shared components) — NOTE: Added tests/ui/components/test_notifications.py ensuring toasts auto-dismiss and BusyOverlay suppresses button interactions.
 - [x] P8.3.7: Wizard flow coverage (source select → preview → apply) — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py to verify filtered diffs respond to app selection, group filters, and conflict choices across the wizard flow.
-- [ ] P8.4 Add static analysis gates (ruff + mypy) and maintain coverage thresholds.
+- [ ] P8.4 Add static analysis gates (ruff + mypy) and maintain coverage thresholds. — NOTE: Replaced legacy `datetime.utcnow()` usage with timezone-aware UTC handling across data/services/UI to eliminate DeprecationWarnings; full pytest suite green.
 - [ ] P8.5 Implement test doubles or mock server for Graph API to enable offline development.
 - [ ] P8.5.1: Token storage security audit (keyring encryption)
 - [ ] P8.5.2: Secure deletion of credentials on logout

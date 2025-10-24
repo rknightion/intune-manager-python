@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Iterable, List
 
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, Signal
@@ -238,7 +238,12 @@ class GroupDetailPane(QWidget):
     def _format_age(timestamp: datetime | None) -> str:
         if timestamp is None:
             return "never"
-        delta = datetime.utcnow() - timestamp
+        reference = datetime.now(UTC)
+        if timestamp.tzinfo is None:
+            normalised = timestamp.replace(tzinfo=UTC)
+        else:
+            normalised = timestamp.astimezone(UTC)
+        delta = reference - normalised
         if delta < timedelta(seconds=90):
             return "moments ago"
         minutes = delta.total_seconds() / 60
@@ -249,7 +254,7 @@ class GroupDetailPane(QWidget):
         if hours < 36:
             count = max(int(hours), 1)
             return f"{count} hour{'s' if count != 1 else ''} ago"
-        return timestamp.strftime("%Y-%m-%d %H:%M")
+        return normalised.astimezone().strftime("%Y-%m-%d %H:%M")
 
     def set_members(
         self,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Generic, Sequence, TypeVar
 
 from sqlalchemy import delete, func
@@ -20,7 +20,7 @@ DEFAULT_SCOPE = "__global__"
 
 
 def _utc_now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 class BaseCacheRepository(Generic[DomainT, RecordT]):
@@ -39,6 +39,14 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
         self._record_model = record_model
         self._default_ttl = default_ttl
         self._has_tenant_column = hasattr(record_model, "tenant_id")
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     # ----------------------------------------------------------------- Public
 
@@ -109,11 +117,15 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
 
     def cache_entry(self, *, tenant_id: str | None = None) -> CacheEntry | None:
         with self._db.session() as session:
-            return session.get(CacheEntry, (self._resource, self._scope(tenant_id)))
+            entry = session.get(CacheEntry, (self._resource, self._scope(tenant_id)))
+            if entry is not None:
+                entry.last_refresh = self._as_utc(entry.last_refresh)
+                entry.expires_at = self._as_utc(entry.expires_at)
+            return entry
 
     def last_refresh(self, *, tenant_id: str | None = None) -> datetime | None:
         entry = self.cache_entry(tenant_id=tenant_id)
-        return entry.last_refresh if entry is not None else None
+        return self._as_utc(entry.last_refresh) if entry is not None else None
 
     def is_cache_stale(
         self, *, tenant_id: str | None = None, now: datetime | None = None
@@ -123,8 +135,10 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
             return True
         if entry.expires_at is None:
             return False
-        current = now or _utc_now()
-        return current >= entry.expires_at
+        current = self._as_utc(now if now is not None else _utc_now())
+        expires_at = self._as_utc(entry.expires_at)
+        assert expires_at is not None  # guarded by earlier check
+        return current >= expires_at
 
     # --------------------------------------------------------------- Internals
 
@@ -167,8 +181,8 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
             )
             session.add(entry)
         entry.tenant_id = tenant_id
-        entry.last_refresh = last_refresh
-        entry.expires_at = expires_at
+        entry.last_refresh = self._as_utc(last_refresh)
+        entry.expires_at = self._as_utc(expires_at)
         entry.item_count = item_count
 
     def _remove_cache_entry(self, session: Session, tenant_id: str | None) -> None:

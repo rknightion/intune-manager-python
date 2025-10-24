@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List
 
@@ -555,7 +555,7 @@ class ReportsWidget(PageScaffold):
         if service is None:
             return
         suggested_name = (
-            f"intune-manager-logs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+            f"intune-manager-logs-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.zip"
         )
         path_str, _ = QFileDialog.getSaveFileName(
             self,
@@ -718,8 +718,8 @@ class ReportsWidget(PageScaffold):
         delta = self._DATE_PRESETS.get(preset)
         if delta is None:
             return None
-        threshold = datetime.utcnow() - delta
-        timestamp = threshold.replace(microsecond=0).isoformat(timespec="seconds") + "Z"
+        threshold = (datetime.now(UTC) - delta).replace(microsecond=0)
+        timestamp = threshold.isoformat(timespec="seconds").replace("+00:00", "Z")
         return f"activityDateTime ge {timestamp}"
 
     def _update_summary(self) -> None:

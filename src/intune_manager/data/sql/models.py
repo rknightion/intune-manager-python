@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, JSON
 from sqlmodel import Field, SQLModel
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class SchemaVersion(SQLModel, table=True):
@@ -11,7 +15,7 @@ class SchemaVersion(SQLModel, table=True):
 
     key: str = Field(default="schema_version", primary_key=True)
     version: int = Field(index=True)
-    applied_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    applied_at: datetime = Field(default_factory=_utc_now, nullable=False)
 
 
 class CacheEntry(SQLModel, table=True):
@@ -41,7 +45,7 @@ class DeviceRecord(SQLModel, table=True):
     ownership: str | None = Field(default=None, index=True)
     user_principal_name: str | None = Field(default=None, index=True)
     last_sync_date_time: datetime | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -57,7 +61,7 @@ class MobileAppRecord(SQLModel, table=True):
     platform: str | None = Field(default=None, index=True)
     publishing_state: str | None = Field(default=None, index=True)
     last_modified_date_time: datetime | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -76,7 +80,7 @@ class GroupRecord(SQLModel, table=True):
         default=None,
         sa_column=Column(JSON, nullable=True),
     )
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -92,7 +96,7 @@ class MobileAppAssignmentRecord(SQLModel, table=True):
     target_type: str | None = Field(default=None, index=True)
     intent: str | None = Field(default=None, index=True)
     filter_id: str | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -108,7 +112,7 @@ class ConfigurationProfileRecord(SQLModel, table=True):
     platform: str | None = Field(default=None, index=True)
     version: int | None = Field(default=None)
     last_modified_date_time: datetime | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -123,7 +127,7 @@ class AuditEventRecord(SQLModel, table=True):
     category: str | None = Field(default=None, index=True)
     activity_date_time: datetime | None = Field(default=None, index=True)
     correlation_id: str | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 
@@ -136,5 +140,5 @@ class AssignmentFilterRecord(SQLModel, table=True):
     tenant_id: str | None = Field(default=None, index=True)
     display_name: str | None = Field(default=None, index=True)
     platform: str | None = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))

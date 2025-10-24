@@ -12,7 +12,7 @@
 #    nuitka-project: --file-description="Microsoft Intune Manager"
 #    nuitka-project: --company-name="IntuneManager"
 #    nuitka-project: --windows-uac-admin
-#    nuitka-project: --windows-console-modedisabled
+#    nuitka-project: --windows-console-mode=disabled
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
 #    nuitka-project: --include-module=keyring.backends.SecretService
@@ -25,7 +25,7 @@
 # nuitka-project: --enable-plugin=pyside6
 # nuitka-project: --include-qt-plugins=sensible
 # nuitka-project: --lto=auto
-
+# nuitka-project: --static-libpython=yes
 """
 Entry point for running intune_manager as a module.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -118,7 +118,7 @@ class DiagnosticsService:
                     key=path.stem,
                     path=path,
                     size_bytes=stat.st_size,
-                    last_accessed=datetime.utcfromtimestamp(stat.st_atime),
+                    last_accessed=datetime.fromtimestamp(stat.st_atime, tz=UTC),
                     tenant_id=tenant_id,
                 )
 
@@ -130,7 +130,7 @@ class DiagnosticsService:
 
     def export_logs(self, target: Path) -> Path:
         if target.is_dir():
-            timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+            timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
             target = target / f"intune-manager-logs-{timestamp}.zip"
         target.parent.mkdir(parents=True, exist_ok=True)
         files = self.log_files()
@@ -167,7 +167,7 @@ class DiagnosticsService:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "telemetry_opt_in": bool(enabled),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Telemetry preference updated", enabled=enabled)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Iterable
 
 from intune_manager.data.models import (
@@ -26,7 +26,7 @@ from .models import (
 
 
 def _utc_now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 def device_to_record(

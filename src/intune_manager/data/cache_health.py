@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
@@ -130,7 +130,7 @@ class CacheIntegrityChecker:
 
         issues: list[CacheIssue] = []
         entry_statuses: list[CacheEntryStatus] = []
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         with self._db.session() as session:
             entry_map = self._load_cache_entries(session)
