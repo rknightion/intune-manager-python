@@ -7,6 +7,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Only allow one workflow run per branch at a time
+# New commits cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
@@ -180,7 +186,6 @@ jobs:
           uv run nuitka \
             --product-version="$VERSION" \
             --assume-yes-for-downloads \
-            --show-modules \
             --show-memory \
             src/intune_manager
 
