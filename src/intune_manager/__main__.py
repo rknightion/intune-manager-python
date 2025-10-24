@@ -354,9 +354,9 @@
 # Qt plugin configuration - minimal set for GUI app without networking
 # Required plugins:
 #   platforms: Essential for window creation
-#   styles: For native OS appearance
 #   imageformats: Only PNG/ICO for app icons (no JPEG, SVG, etc.)
-# nuitka-project: --include-qt-plugins=platforms,styles,imageformats
+# Note: 'styles' plugin excluded - Fusion style is built into QtWidgets on all platforms
+# nuitka-project: --include-qt-plugins=platforms,imageformats
 
 # Explicitly exclude unused Qt plugins to reduce binary size
 # nuitka-project: --noinclude-qt-plugins=tls

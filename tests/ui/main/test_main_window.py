@@ -124,8 +124,8 @@ def test_main_window_navigation_switches_pages(patched_main_window, qtbot):
         "dashboard",
         "devices",
         "applications",
-        "groups",
         "assignments",
+        "groups",
         "reports",
     ):
         assert key in created, f"Expected stub page for {key}"

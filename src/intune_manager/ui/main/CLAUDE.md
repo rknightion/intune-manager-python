@@ -8,7 +8,7 @@
 
 ## Module Structure
 - **`main.py`** (or `__main__.py`): Application entry point, `MainWindow` initialization, service wiring
-- **`MainWindow`**: Tab widget for (Dashboard, Devices, Applications, Groups, Assignments, Settings)
+- **`MainWindow`**: Tab widget for (Dashboard, Devices, Applications, App Assignments, Groups, Reports, Settings)
 - **`ServiceRegistry`**: Dependency injection container for all services (lazily instantiated)
 - **`UIContext`**: Global singleton (theme, busy state, notification queue)
 
@@ -27,7 +27,7 @@
 - Platform-specific behaviors (macOS menu bar, Windows taskbar)
 
 ### Navigation
-- Tab widget with feature panes (Dashboard, Devices, Applications, Groups, Assignments, Settings)
+- Tab widget with feature panes (Dashboard, Devices, Applications, App Assignments, Groups, Reports, Settings)
 - Keyboard shortcuts for tab switching (Ctrl+1, Ctrl+2, etc.)
 - Breadcrumb/navigation state tracking
 

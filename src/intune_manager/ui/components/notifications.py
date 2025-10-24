@@ -139,9 +139,6 @@ class ToastManager(QObject):
         self._theme = theme
         self._container = QWidget(parent)
         self._container.setObjectName("ToastContainer")
-        self._container.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
         self._container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._container.hide()
 

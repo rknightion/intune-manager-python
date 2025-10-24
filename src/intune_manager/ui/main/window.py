@@ -78,8 +78,8 @@ class MainWindow(QMainWindow):
         NavigationItem("dashboard", "Dashboard"),
         NavigationItem("devices", "Devices"),
         NavigationItem("applications", "Applications"),
+        NavigationItem("assignments", "App Assignments"),
         NavigationItem("groups", "Groups"),
-        NavigationItem("assignments", "Assignments"),
         NavigationItem("reports", "Reports"),
         NavigationItem("settings", "Settings"),
     )
@@ -165,12 +165,19 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
+        sidebar_width = 150  # Shrink navigation rail ~150px to free more canvas space
         self._nav_list.setObjectName("NavigationList")
-        self._nav_list.setMaximumWidth(220)
+        self._nav_list.setFixedWidth(sidebar_width)
+        self._nav_list.setMinimumWidth(sidebar_width)
         self._nav_list.setSpacing(2)
         self._nav_list.setAlternatingRowColors(True)
         self._nav_list.setSelectionMode(QListWidget.SingleSelection)
         self._nav_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._nav_list.setMouseTracking(True)
+        self._nav_list.setWordWrap(True)
+        self._nav_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self._nav_list.setSizePolicy(
             QSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding),
         )

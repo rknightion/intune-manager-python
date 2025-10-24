@@ -155,6 +155,8 @@ class ThemeManager(QObject):
 
     def base_stylesheet(self) -> str:
         tokens = self._state.tokens
+        accent = QColor(tokens["accent"])
+        accent_hover = f"rgba({accent.red()}, {accent.green()}, {accent.blue()}, 0.12)"
         return f"""
             QWidget {{
                 color: {tokens["text"]};
@@ -214,12 +216,23 @@ class ThemeManager(QObject):
             QListWidget#NavigationList {{
                 background-color: {tokens["surface_alt"]};
             }}
+            QListWidget#NavigationList::item {{
+                margin: 2px 4px;
+                padding: 6px 10px;
+                border-radius: 6px;
+                color: {tokens["text"]};
+            }}
             QListWidget#NavigationList::item:selected {{
                 background-color: {tokens["accent"]};
                 color: {tokens["accent_contrast"]};
             }}
+            QListWidget#NavigationList::item:selected:!active {{
+                background-color: {tokens["accent"]};
+                color: {tokens["accent_contrast"]};
+            }}
             QListWidget#NavigationList::item:hover {{
-                background-color: {tokens["background"]};
+                background-color: {accent_hover};
+                color: {tokens["text"]};
             }}
         """
 
