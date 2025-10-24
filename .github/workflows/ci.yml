@@ -20,14 +20,14 @@ jobs:
             arch: x64
             runner: ubuntu-latest
             artifact_name: IntuneManager.bin
-            output_path: src/intune_manager.dist/intune_manager.bin
+            output_path: intune_manager.bin
 
           # Linux ARM64
           - os: linux
             arch: arm64
             runner: ubuntu-24.04-arm
             artifact_name: IntuneManager.bin
-            output_path: src/intune_manager.dist/intune_manager.bin
+            output_path: intune_manager.bin
 
           # Windows x64
           - os: windows

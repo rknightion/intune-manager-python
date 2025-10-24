@@ -102,7 +102,9 @@ Make sure after each phase that 'uv run pytest -v' is passing and fix any broken
 - [x] P8.3.6: Toast dismissal and overlay focus blocking (shared components) — NOTE: Added tests/ui/components/test_notifications.py ensuring toasts auto-dismiss and BusyOverlay suppresses button interactions.
 - [x] P8.3.7: Wizard flow coverage (source select → preview → apply) — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py to verify filtered diffs respond to app selection, group filters, and conflict choices across the wizard flow.
 - [ ] P8.4 Add static analysis gates (ruff + mypy) and maintain coverage thresholds. — NOTE: Replaced legacy `datetime.utcnow()` usage with timezone-aware UTC handling across data/services/UI to eliminate DeprecationWarnings; full pytest suite green.
-- [ ] P8.5 Implement test doubles or mock server for Graph API to enable offline development.
+- [>] P8.5 Implement test doubles or mock server for Graph API to enable offline development — NOTE: Added compressed upstream datasets + sync script (`scripts/update_graph_mocks.py`), new pytest fixtures (`graph_mock_repository`, `graph_mock_respx`) auto-serve official responses via respx. Developer Proxy retained for manual chaos/latency testing; currently wiring in msgraph-metadata schema validation + dual-run tests comparing legacy mocks vs official datasets.
+  - [ ] P8.5.5: Integrate OpenAPI (msgraph-metadata MOV) schema assertions for mock dataset drift detection.
+  - [ ] P8.5.6: Duplicate Graph-dependent tests to run against both bespoke responses and official mock dataset, flagging divergences.
 - [ ] P8.5.1: Token storage security audit (keyring encryption)
 - [ ] P8.5.2: Secure deletion of credentials on logout
 - [ ] P8.5.3: Input validation (SQL injection in search, XSS in logs)

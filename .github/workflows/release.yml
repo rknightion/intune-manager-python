@@ -27,7 +27,7 @@ jobs:
             arch: x64
             runner: ubuntu-latest
             artifact_name: IntuneManager.bin
-            output_path: src/intune_manager.dist/intune_manager.bin
+            output_path: intune_manager.bin
             asset_name: IntuneManager-linux-x64.bin
             content_type: application/octet-stream
 
@@ -36,7 +36,7 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             artifact_name: IntuneManager.bin
-            output_path: src/intune_manager.dist/intune_manager.bin
+            output_path: intune_manager.bin
             asset_name: IntuneManager-linux-arm64.bin
             content_type: application/octet-stream
 
