@@ -65,6 +65,7 @@ from intune_manager.ui.components import (
     make_toolbar_button,
 )
 from intune_manager.utils import get_logger
+from intune_manager.utils.sanitize import sanitize_log_message, sanitize_search_text
 
 from .bulk_wizard import BulkAssignmentPlan, BulkAssignmentWizard
 from .assignment_editor import AssignmentEditorDialog
@@ -690,9 +691,9 @@ class AssignmentsWidget(PageScaffold):
     def _populate_app_lists(self) -> None:
         if self._source_list is None or self._target_list is None:
             return
-        search = (
-            (self._search_input.text() if self._search_input else "").strip().lower()
-        )
+        search = sanitize_search_text(
+            self._search_input.text() if self._search_input else ""
+        ).lower()
         current_source = self._source_app_id
         checked_targets = {
             self._target_list.item(i).data(Qt.ItemDataRole.UserRole)

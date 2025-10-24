@@ -946,7 +946,7 @@ class ApplicationsWidget(PageScaffold):
                 return
             for index, app in enumerate(plan.apps, start=1):
                 label = app.display_name or app.id or "Application"
-                self._context.set_busy_message(
+                self._context.set_busy(
                     f"Applying assignments… {index}/{total_apps} — {label}",
                 )
                 current_assignments = list(app.assignments or [])
@@ -977,7 +977,8 @@ class ApplicationsWidget(PageScaffold):
                         continue
                     target = (
                         FilteredGroupAssignmentTarget(
-                            group_id=group.id, assignment_filter_id=plan.filter_id
+                            group_id=group.id,
+                            assignment_filter_id=plan.filter_id,
                         )
                         if plan.filter_id
                         else GroupAssignmentTarget(group_id=group.id)

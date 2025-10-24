@@ -8,6 +8,7 @@ import respx
 
 from intune_manager.data import DeviceRepository, ManagedDevice
 from intune_manager.graph.client import GraphClientConfig, GraphClientFactory
+from intune_manager.graph.errors import PermissionError as GraphPermissionError
 from intune_manager.graph.requests import DeviceActionName
 from intune_manager.services.devices import DeviceActionEvent, DeviceService
 
@@ -165,6 +166,44 @@ async def test_refresh_emits_error_on_failure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mock_source", ["bespoke", "official"])
+async def test_refresh_permission_denied_propagates(
+    database,
+    respx_mock: respx.Router,
+    mock_source: str,
+    ensure_graph_mock,
+) -> None:
+    service, factory = await _create_service(database)
+    try:
+        managed_devices_url = (
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices"
+        )
+        if mock_source == "official":
+            ensure_graph_mock("GET", managed_devices_url)
+            pytest.skip(
+                "Official mocks do not include 403 responses for managedDevices.",
+            )
+
+        respx_mock.get(managed_devices_url).mock(
+            return_value=httpx.Response(
+                403,
+                json={"error": {"message": "Forbidden", "code": "Forbidden"}},
+            ),
+        )
+
+        errors: list = []
+        service.errors.subscribe(errors.append)
+
+        with pytest.raises(GraphPermissionError):
+            await service.refresh()
+
+        assert errors
+        assert isinstance(errors[0].error, GraphPermissionError)
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mock_source", ["bespoke", "official"])
 async def test_perform_action_emits_success_and_failure(
     database,
     respx_mock: respx.Router,
@@ -209,5 +248,46 @@ async def test_perform_action_emits_success_and_failure(
         assert failure_route.called
         assert actions[-1].success is False
         assert errors
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mock_source", ["bespoke", "official"])
+async def test_perform_action_permission_denied(
+    database,
+    respx_mock: respx.Router,
+    mock_source: str,
+    ensure_graph_mock,
+) -> None:
+    service, factory = await _create_service(database)
+    try:
+        sync_url = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/device-1/syncDevice"
+        if mock_source == "official":
+            ensure_graph_mock("POST", sync_url)
+            pytest.skip("Official mocks do not include 403 responses for syncDevice.")
+
+        respx_mock.post(sync_url).mock(
+            return_value=httpx.Response(
+                403,
+                json={"error": {"message": "Forbidden", "code": "Forbidden"}},
+            ),
+        )
+
+        actions: list[DeviceActionEvent] = []
+        service.actions.subscribe(actions.append)
+        errors: list = []
+        service.errors.subscribe(errors.append)
+
+        with pytest.raises(GraphPermissionError):
+            await service.perform_action(
+                "device-1", cast(DeviceActionName, "syncDevice")
+            )
+
+        assert actions
+        assert actions[-1].success is False
+        assert isinstance(actions[-1].error, GraphPermissionError)
+        assert errors
+        assert isinstance(errors[0].error, GraphPermissionError)
     finally:
         await factory.close()

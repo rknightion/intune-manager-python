@@ -17,6 +17,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QIcon
 
 from intune_manager.data import MobileApp
+from intune_manager.utils.sanitize import sanitize_search_text
 
 
 @dataclass(slots=True)
@@ -211,7 +212,7 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
         self.setDynamicSortFilter(True)
 
     def set_search_text(self, text: str) -> None:
-        normalised = text.strip().lower()
+        normalised = sanitize_search_text(text).lower()
         if self._search_text == normalised:
             return
         self._search_text = normalised

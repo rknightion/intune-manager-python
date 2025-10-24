@@ -138,7 +138,8 @@ class AuthManager:
         accounts = app.get_accounts()
         for account in accounts:
             app.remove_account(account)
-        self._cache_manager.save()
+        self._cache_manager.clear()
+        self._cache_manager.attach(app)
         self._user = None
         self._missing_scopes = []
         logger.info("Signed out MSAL accounts")

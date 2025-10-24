@@ -21,7 +21,7 @@ def _format_sequence(sequence: str) -> str:
     """Return a display-friendly shortcut string."""
 
     key_sequence = QKeySequence(sequence)
-    text = key_sequence.toString(QKeySequence.NativeText)
+    text = key_sequence.toString(QKeySequence.SequenceFormat.NativeText)
     return text or sequence
 
 

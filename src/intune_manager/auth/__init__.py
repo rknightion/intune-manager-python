@@ -3,7 +3,7 @@
 from .auth_manager import AuthManager, AuthenticatedUser, auth_manager
 from .permission_checker import PermissionChecker
 from .token_cache import TokenCacheManager
-from .secret_store import SecretStore
+from .secret_store import InsecureKeyringError, SecretStore
 from .types import AccessToken
 
 __all__ = [
@@ -14,4 +14,5 @@ __all__ = [
     "TokenCacheManager",
     "SecretStore",
     "PermissionChecker",
+    "InsecureKeyringError",
 ]

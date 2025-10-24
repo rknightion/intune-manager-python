@@ -80,7 +80,7 @@ class InlineStatusMessage(QFrame):
         header.addWidget(self._detail_toggle)
 
         if closable:
-            self._close_button = QToolButton()
+            self._close_button: QToolButton | None = QToolButton()
             self._close_button.setAutoRaise(True)
             self._close_button.setText("×")
             self._close_button.clicked.connect(self.clear)

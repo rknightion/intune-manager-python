@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QDialog,
     QLineEdit,
@@ -114,7 +115,7 @@ class CommandPalette(QDialog):
         center = geometry.center()
         self.move(center.x() - self.width() // 2, center.y() - self.height() // 2)
 
-    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         if event.key() == Qt.Key.Key_Escape:
             self.hide()
             return

@@ -2,7 +2,7 @@
 #    nuitka-project: --macos-app-name=IntuneManager
 #    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/../../assets/icons/icon.icns
 #    nuitka-project: --include-module=keyring.backends.macOS
-#    nuitka-project: --static-libpython=yes
+#    nuitka-project: --static-libpython=auto
 #    nuitka-project: --lto=auto
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/../../assets/icons/icon.ico
@@ -18,7 +18,7 @@
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
 #    nuitka-project: --include-module=keyring.backends.SecretService
 #    nuitka-project: --include-module=secretstorage
-#    nuitka-project: --static-libpython=yes
+#    nuitka-project: --static-libpython=auto
 #    nuitka-project: --lto=auto
 # nuitka-project: --mode=app
 # nuitka-project: --nofollow-import-to=*.tests

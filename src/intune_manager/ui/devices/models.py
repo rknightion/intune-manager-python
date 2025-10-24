@@ -15,6 +15,7 @@ from PySide6.QtCore import (
 )
 
 from intune_manager.data import ManagedDevice
+from intune_manager.utils.sanitize import sanitize_search_text
 
 if TYPE_CHECKING:
     from intune_manager.data import AuditEvent
@@ -320,7 +321,7 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
     # ------------------------------------------------------------- Properties
 
     def set_search_text(self, text: str) -> None:
-        normalised = text.strip().lower()
+        normalised = sanitize_search_text(text).lower()
         if self._search_text == normalised:
             return
         self._search_text = normalised

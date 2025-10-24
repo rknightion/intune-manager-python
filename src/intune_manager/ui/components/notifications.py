@@ -85,7 +85,7 @@ class ToastWidget(QFrame):
 
         self.label = QLabel(message.text)
         self.label.setWordWrap(True)
-        self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.label)
 
         self.dismiss_button = QPushButton("Dismiss")
@@ -114,7 +114,7 @@ class ToastWidget(QFrame):
         self._opacity_anim.setEndValue(0.0)
         self._opacity_anim.start()
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+    def closeEvent(self, event: QCloseEvent) -> None:
         self.closed.emit()
         super().closeEvent(event)
 

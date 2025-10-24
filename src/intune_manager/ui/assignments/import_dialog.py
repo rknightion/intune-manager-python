@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from intune_manager.data import MobileAppAssignment
 from intune_manager.services import AssignmentImportResult
+from intune_manager.utils.sanitize import sanitize_log_message
 
 
 class AssignmentImportDialog(QDialog):
@@ -283,12 +284,18 @@ class AssignmentImportDialog(QDialog):
         lines: list[str] = []
         if self._result.warnings:
             lines.append("Warnings:")
-            lines.extend(f"  - {item}" for item in self._result.warnings)
+            lines.extend(
+                f"  - {sanitize_log_message(item)}"
+                for item in self._result.warnings
+            )
         if self._result.errors:
             if lines:
                 lines.append("")
             lines.append("Errors:")
-            lines.extend(f"  - {item}" for item in self._result.errors)
+            lines.extend(
+                f"  - {sanitize_log_message(item)}"
+                for item in self._result.errors
+            )
         return "\n".join(lines)
 
 

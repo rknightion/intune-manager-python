@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
+from intune_manager.config.settings import runtime_dir
 from intune_manager.data import AuditEvent
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.ui.components import (
@@ -350,9 +351,16 @@ class ReportsWidget(PageScaffold):
         controls.addWidget(self._diag_refresh_button)
 
         self._diag_export_button = QToolButton()
-        self._diag_export_button.setText("Export bundle…")
-        self._diag_export_button.clicked.connect(self._handle_export_logs_clicked)
+        self._diag_export_button.setText("Diagnostic bundle…")
+        self._diag_export_button.clicked.connect(
+            self._handle_create_diagnostic_bundle
+        )
         controls.addWidget(self._diag_export_button)
+
+        self._diag_report_button = QToolButton()
+        self._diag_report_button.setText("Report a problem…")
+        self._diag_report_button.clicked.connect(self._handle_report_problem)
+        controls.addWidget(self._diag_report_button)
 
         self._diag_save_button = QToolButton()
         self._diag_save_button.setText("Save selected…")
@@ -528,6 +536,7 @@ class ReportsWidget(PageScaffold):
             self._diag_list.clear()
             self._diag_refresh_button.setEnabled(False)
             self._diag_export_button.setEnabled(False)
+            self._diag_report_button.setEnabled(False)
             self._diag_save_button.setEnabled(False)
             self._diag_open_button.setEnabled(False)
             return
@@ -535,6 +544,7 @@ class ReportsWidget(PageScaffold):
         self._diag_message.clear()
         self._diag_refresh_button.setEnabled(True)
         self._diag_export_button.setEnabled(True)
+        self._diag_report_button.setEnabled(True)
         self._diag_open_button.setEnabled(True)
 
         self._diag_list.clear()
@@ -550,24 +560,24 @@ class ReportsWidget(PageScaffold):
             has_items and bool(self._diag_list.selectedItems())
         )
 
-    def _handle_export_logs_clicked(self) -> None:
+    def _handle_create_diagnostic_bundle(self) -> None:
         service = self._services.diagnostics
         if service is None:
             return
         suggested_name = (
-            f"intune-manager-logs-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.zip"
+            f"intune-manager-diagnostics-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.tar.xz"
         )
         path_str, _ = QFileDialog.getSaveFileName(
             self,
-            "Export diagnostic logs",
+            "Create diagnostic bundle",
             suggested_name,
-            "ZIP Archives (*.zip)",
+            "Diagnostic Bundles (*.tar.xz);;All files (*)",
         )
         if not path_str:
             return
         target = Path(path_str)
         try:
-            path = service.export_logs(target)
+            path = service.create_diagnostic_bundle(target)
         except Exception as exc:  # noqa: BLE001
             descriptor = describe_exception(exc)
             level = _toast_level_for(descriptor.severity)
@@ -577,8 +587,14 @@ class ReportsWidget(PageScaffold):
             self._diag_message.display(descriptor.headline, level=level, detail=detail)
             self._context.show_notification(descriptor.headline, level=level)
             return
+        self._diag_message.display(
+            f"Diagnostic bundle saved to {path.name}",
+            level=ToastLevel.SUCCESS,
+            detail=str(path),
+        )
         self._context.show_notification(
-            f"Exported diagnostic logs to {path.name}", level=ToastLevel.SUCCESS
+            f"Diagnostic bundle saved to {path.name}",
+            level=ToastLevel.SUCCESS,
         )
 
     def _handle_save_selected_log(self) -> None:
@@ -615,6 +631,39 @@ class ReportsWidget(PageScaffold):
                 f"Saved {len(selected)} log file(s) to {dest_dir.name}",
                 level=ToastLevel.SUCCESS,
             )
+
+    def _handle_report_problem(self) -> None:
+        service = self._services.diagnostics
+        if service is None:
+            self._diag_message.display(
+                "Diagnostics service unavailable. Configure logging before reporting issues.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        try:
+            bundle = service.create_diagnostic_bundle(runtime_dir())
+        except Exception as exc:  # noqa: BLE001
+            descriptor = describe_exception(exc)
+            level = _toast_level_for(descriptor.severity)
+            detail = descriptor.detail
+            if descriptor.suggestion:
+                detail = f"{detail}\n\nSuggested action: {descriptor.suggestion}"
+            self._diag_message.display(descriptor.headline, level=level, detail=detail)
+            self._context.show_notification(descriptor.headline, level=level)
+            return
+
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(str(bundle))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(bundle.parent)))
+        self._diag_message.display(
+            "Diagnostic bundle ready. Path copied to clipboard.",
+            level=ToastLevel.INFO,
+            detail=str(bundle),
+        )
+        self._context.show_notification(
+            "Diagnostic bundle prepared. Attach it to your support request.",
+            level=ToastLevel.INFO,
+        )
 
     def _handle_open_log_folder(self) -> None:
         service = self._services.diagnostics

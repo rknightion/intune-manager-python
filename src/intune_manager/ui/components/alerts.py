@@ -70,7 +70,7 @@ class AlertBanner(QFrame):
         layout.addWidget(self._action_button)
 
         if closable:
-            self._close_button = QToolButton()
+            self._close_button: QToolButton | None = QToolButton()
             self._close_button.setText("×")
             self._close_button.setAutoRaise(True)
             self._close_button.clicked.connect(self._handle_close_clicked)

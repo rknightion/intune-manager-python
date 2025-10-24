@@ -60,7 +60,7 @@ class SectionHeader(QWidget):
         layout.addLayout(header_row)
 
         if subtitle:
-            self.subtitle_label = QLabel(subtitle)
+            self.subtitle_label: QLabel | None = QLabel(subtitle)
             self.subtitle_label.setWordWrap(True)
             self.subtitle_label.setProperty("class", "page-subtitle")
             layout.addWidget(self.subtitle_label)
@@ -68,8 +68,8 @@ class SectionHeader(QWidget):
             self.subtitle_label = None
 
         divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setFrameShadow(QFrame.Sunken)
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
         divider.setObjectName("HeaderDivider")
         layout.addWidget(divider)
 
@@ -110,7 +110,7 @@ class PageScaffold(QWidget):
         layout.addWidget(self.header)
 
         self.body = QWidget()
-        self.body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(0, 0, 0, 0)
         self.body_layout.setSpacing(12)
@@ -134,7 +134,7 @@ def make_toolbar_button(
     button = QToolButton()
     button.setText(text)
     button.setCheckable(checkable)
-    button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     if tooltip:
         button.setToolTip(tooltip)
     if icon is not None:

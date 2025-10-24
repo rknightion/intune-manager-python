@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp
 from intune_manager.data.models.assignment import AssignmentIntent, AssignmentSettings
+from intune_manager.utils.sanitize import sanitize_search_text
 
 
 @dataclass(slots=True)
@@ -241,7 +242,7 @@ class BulkAssignmentDialog(QDialog):
     # ------------------------------------------------------------------- Filters
 
     def _filter_app_list(self, text: str) -> None:
-        needle = text.strip().lower()
+        needle = sanitize_search_text(text).lower()
         for index in range(self._app_list.count()):
             item = self._app_list.item(index)
             matches = not needle or needle in item.text().lower()
@@ -249,7 +250,7 @@ class BulkAssignmentDialog(QDialog):
         self._update_summary()
 
     def _filter_group_list(self, text: str) -> None:
-        needle = text.strip().lower()
+        needle = sanitize_search_text(text).lower()
         for index in range(self._group_list.count()):
             item = self._group_list.item(index)
             label = item.text().lower()

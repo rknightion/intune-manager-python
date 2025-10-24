@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from .commands import CommandRegistry
 from .notifications import ToastLevel
@@ -9,7 +9,16 @@ from .theme import ThemeManager
 
 
 RunAsyncCallable = Callable[[Awaitable[object]], None]
-ShowNotificationCallable = Callable[[str, ToastLevel, int], None]
+
+
+class ShowNotificationCallable(Protocol):
+    """Protocol for showing toast notifications with keyword-only parameters."""
+
+    def __call__(
+        self, text: str, /, *, level: ToastLevel = ..., duration_ms: int = ...
+    ) -> None: ...
+
+
 SetBusyCallable = Callable[[str | None], None]
 ShowBannerCallable = Callable[[str, ToastLevel], None]
 

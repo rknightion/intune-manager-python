@@ -874,7 +874,7 @@ class DevicesWidget(PageScaffold):
             )
             total = self._bulk_action_summary["total"]
             remaining = max(total - processed, 0)
-            self._context.set_busy_message(
+            self._context.set_busy(
                 f"{label} in progress… {processed}/{total} processed (remaining {remaining})",
             )
         else:
@@ -912,7 +912,7 @@ class DevicesWidget(PageScaffold):
 
     def _handle_refresh_progress(self, event: DeviceRefreshProgressEvent) -> None:
         message = f"Refreshing devices… {event.processed:,} processed"
-        self._context.set_busy_message(message)
+        self._context.set_busy(message)
         dialog = self._refresh_progress_dialog
         if dialog is not None:
             dialog.update_progress(

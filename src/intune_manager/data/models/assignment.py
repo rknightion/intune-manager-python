@@ -23,7 +23,6 @@ class AssignmentTarget(GraphBaseModel):
         use_enum_values=True,
         extra="ignore",
         frozen=True,
-        discriminator="odata_type",
     )
 
     odata_type: str = Field(alias="@odata.type")
@@ -44,12 +43,16 @@ class AllDevicesAssignmentTarget(AssignmentTarget):
     )
 
 
-class FilteredGroupAssignmentTarget(GroupAssignmentTarget):
+class FilteredGroupAssignmentTarget(AssignmentTarget):
     odata_type: Literal["#microsoft.graph.exclusionGroupAssignmentTarget"] = Field(
         default="#microsoft.graph.exclusionGroupAssignmentTarget",
         alias="@odata.type",
     )
-    assignment_filter_id: str | None = Field(default=None, alias="assignmentFilterId")
+    group_id: str = Field(alias="groupId")
+    assignment_filter_id: str | None = Field(
+        default=None,
+        alias="assignmentFilterId",
+    )
 
 
 class AssignmentSettings(GraphBaseModel):

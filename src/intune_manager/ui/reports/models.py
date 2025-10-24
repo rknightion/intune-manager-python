@@ -7,6 +7,7 @@ from typing import Callable, Iterable, Sequence
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
 
 from intune_manager.data import AuditEvent
+from intune_manager.utils.sanitize import sanitize_search_text
 
 
 def _format_timestamp(value: datetime | None) -> str:
@@ -145,7 +146,7 @@ class AuditEventFilterProxyModel(QSortFilterProxyModel):
     # ----------------------------------------------------------------- Setters
 
     def set_search_text(self, text: str) -> None:
-        normalised = text.strip().lower()
+        normalised = sanitize_search_text(text).lower()
         if self._search_text == normalised:
             return
         self._search_text = normalised

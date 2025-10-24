@@ -60,22 +60,22 @@ def _palette_from_tokens(tokens: ThemeTokens) -> QPalette:
     text = QColor(tokens["text"])
     text_muted = QColor(tokens["text_muted"])
 
-    palette.setColor(QPalette.Window, background)
-    palette.setColor(QPalette.WindowText, text)
-    palette.setColor(QPalette.Base, surface)
-    palette.setColor(QPalette.AlternateBase, QColor(tokens["surface_alt"]))
-    palette.setColor(QPalette.ToolTipBase, surface)
-    palette.setColor(QPalette.ToolTipText, text)
-    palette.setColor(QPalette.Text, text)
-    palette.setColor(QPalette.Button, surface)
-    palette.setColor(QPalette.ButtonText, text)
-    palette.setColor(QPalette.BrightText, QColor(tokens["accent_contrast"]))
-    palette.setColor(QPalette.Link, QColor(tokens["accent"]))
-    palette.setColor(QPalette.Highlight, QColor(tokens["accent"]))
-    palette.setColor(QPalette.HighlightedText, QColor(tokens["accent_contrast"]))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.WindowText, text_muted)
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.Text, text_muted)
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ButtonText, text_muted)
+    palette.setColor(QPalette.ColorRole.Window, background)
+    palette.setColor(QPalette.ColorRole.WindowText, text)
+    palette.setColor(QPalette.ColorRole.Base, surface)
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(tokens["surface_alt"]))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, surface)
+    palette.setColor(QPalette.ColorRole.ToolTipText, text)
+    palette.setColor(QPalette.ColorRole.Text, text)
+    palette.setColor(QPalette.ColorRole.Button, surface)
+    palette.setColor(QPalette.ColorRole.ButtonText, text)
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(tokens["accent_contrast"]))
+    palette.setColor(QPalette.ColorRole.Link, QColor(tokens["accent"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(tokens["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(tokens["accent_contrast"]))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, text_muted)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, text_muted)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, text_muted)
     return palette
 
 
@@ -101,7 +101,7 @@ class ThemeManager(QObject):
         self._app = app or QApplication.instance()
         self._state = ThemeState(name="light", tokens=_THEME_MAP["light"])
         if self._app is not None:
-            self._app.setStyle("Fusion")
+            self._app.setStyle("Fusion")  # type: ignore[attr-defined]
             self._app.setPalette(_palette_from_tokens(self._state.tokens))
 
     # ----------------------------------------------------------------- Accessors
@@ -122,7 +122,7 @@ class ThemeManager(QObject):
         tokens = _THEME_MAP["light"]
         self._state = ThemeState(name="light", tokens=tokens)
         if self._app is not None:
-            self._app.setPalette(_palette_from_tokens(tokens))
+            self._app.setPalette(_palette_from_tokens(tokens))  # type: ignore[attr-defined]
         self.themeChanged.emit("light")
 
     # ---------------------------------------------------------------- Utilities

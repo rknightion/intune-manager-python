@@ -172,13 +172,13 @@ class SettingsController(QObject):
             except Exception:  # pragma: no cover - keyring best-effort
                 logger.exception("Failed to delete stored client secret")
 
-            token_path = self._token_cache_manager.path
-            if token_path.exists():
-                try:
-                    token_path.unlink()
-                except Exception:  # pragma: no cover - filesystem best-effort
-                    logger.exception("Failed to delete token cache", path=token_path)
-
+            try:
+                self._token_cache_manager.clear()
+            except Exception:  # pragma: no cover - filesystem best-effort
+                logger.exception(
+                    "Failed to securely clear token cache",
+                    path=str(self._token_cache_manager.path),
+                )
             self._token_cache_manager = TokenCacheManager(empty.token_cache_path)
             snapshot = SettingsSnapshot(settings=empty, has_client_secret=False)
             self.settingsLoaded.emit(snapshot)

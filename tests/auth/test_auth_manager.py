@@ -216,6 +216,9 @@ async def test_sign_out_clears_cached_user(
     )
     await manager.acquire_token(settings.graph_scopes)
     assert manager.current_user() is not None
+    settings.token_cache_path.write_text("{}", encoding="utf-8")
+    assert settings.token_cache_path.exists()
     await manager.sign_out()
     assert manager.current_user() is None
     assert manager.missing_scopes() == []
+    assert not settings.token_cache_path.exists()

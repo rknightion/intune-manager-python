@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from intune_manager.config import DEFAULT_GRAPH_SCOPES, Settings
+from intune_manager.utils.sanitize import sanitize_log_message
 
 from .controller import AuthStatus, SettingsController, SettingsSnapshot
 
@@ -59,6 +60,7 @@ class _WizardPage(QWizardPage):
 
         self._feedback_label = QLabel()
         self._feedback_label.setWordWrap(True)
+        self._feedback_label.setTextFormat(Qt.TextFormat.PlainText)
         self._feedback_label.hide()
         self._layout.addWidget(self._feedback_label)
 
@@ -71,6 +73,7 @@ class _WizardPage(QWizardPage):
             self._busy_label.clear()
 
     def set_feedback(self, message: str, *, error: bool) -> None:
+        message = sanitize_log_message(message)
         if not message:
             self._feedback_label.hide()
             self._feedback_label.clear()
@@ -340,6 +343,7 @@ class _TestConnectionPage(_WizardPage):
         return self._test_success
 
     def apply_result(self, success: bool, detail: str) -> None:
+        detail = sanitize_log_message(detail)
         if success:
             self.log.appendPlainText(detail)
             self.set_feedback("Connectivity verified.", error=False)

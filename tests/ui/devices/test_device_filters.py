@@ -68,3 +68,6 @@ def test_devices_widget_filters_search_and_platform():
 
     proxy.set_platform_filter(None)
     assert proxy.rowCount() == 3
+
+    proxy.set_search_text("Surface'; DROP TABLE devices;--")
+    assert proxy._search_text == "surface drop table devices--"

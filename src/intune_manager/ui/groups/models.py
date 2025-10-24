@@ -6,6 +6,7 @@ from typing import Callable, Iterable, List, Sequence
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
 
 from intune_manager.data import DirectoryGroup
+from intune_manager.utils.sanitize import sanitize_search_text
 
 
 def _group_type_label(group: DirectoryGroup) -> str:
@@ -121,7 +122,7 @@ class GroupFilterProxyModel(QSortFilterProxyModel):
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
     def set_search_text(self, text: str) -> None:
-        normalised = text.strip().lower()
+        normalised = sanitize_search_text(text).lower()
         if self._search_text == normalised:
             return
         self._search_text = normalised

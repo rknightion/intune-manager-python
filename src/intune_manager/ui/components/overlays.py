@@ -59,7 +59,7 @@ class BusyOverlay(QWidget):
         progress.setRange(0, 0)
         progress.setFixedHeight(6)
         progress.setTextVisible(False)
-        progress.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        progress.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         progress.setStyleSheet(
             "QProgressBar {"
             "  background-color: rgba(255, 255, 255, 0.24);"
@@ -120,7 +120,7 @@ class BusyOverlay(QWidget):
                 self._resize_to_parent()
         return super().eventFilter(watched, event)
 
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
+    def resizeEvent(self, event: QEvent) -> None:  # type: ignore[override]
         self._resize_to_parent()
         super().resizeEvent(event)
 

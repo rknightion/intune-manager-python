@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import msal
 
 from intune_manager.config.settings import runtime_dir
+from intune_manager.utils import get_logger
 
 
 DEFAULT_CACHE_FILENAME = "msal_cache.bin"
+
+logger = get_logger(__name__)
 
 
 class TokenCacheManager:
@@ -38,6 +42,28 @@ class TokenCacheManager:
         if self._cache.has_state_changed:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(self._cache.serialize(), encoding="utf-8")
+
+    def clear(self) -> None:
+        """Securely wipe the token cache file and reset in-memory state."""
+
+        self._cache = msal.SerializableTokenCache()
+        if not self._path.exists():
+            return
+        try:
+            size = self._path.stat().st_size
+            if size > 0:
+                with self._path.open("r+b") as handle:
+                    handle.write(os.urandom(size))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            self._path.unlink()
+            logger.info("Cleared MSAL token cache", path=str(self._path))
+        except OSError as exc:  # pragma: no cover - filesystem race condition
+            logger.warning(
+                "Failed to securely delete token cache",
+                path=str(self._path),
+                error=str(exc),
+            )
 
 
 __all__ = ["TokenCacheManager", "DEFAULT_CACHE_FILENAME"]
