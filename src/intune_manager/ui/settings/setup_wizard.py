@@ -131,10 +131,15 @@ class _ConfigurationPage(_WizardPage):
         form_layout = QFormLayout(form_group)
 
         self.tenant_input = QLineEdit()
+        self.tenant_input.setFixedWidth(550)  # Fixed width - does not resize
         self.client_input = QLineEdit()
+        self.client_input.setFixedWidth(550)  # Fixed width - does not resize
         self.redirect_input = QLineEdit()
+        self.redirect_input.setFixedWidth(550)  # Fixed width - does not resize
         self.authority_input = QLineEdit()
+        self.authority_input.setFixedWidth(550)  # Fixed width - does not resize
         self.secret_input = QLineEdit()
+        self.secret_input.setFixedWidth(550)  # Fixed width - does not resize
         self.secret_input.setEchoMode(QLineEdit.Password)
 
         self.registerField("tenant_id*", self.tenant_input)
@@ -390,6 +395,9 @@ class SetupWizard(QWizard):
         self.setWindowTitle("Intune Manager Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setOption(QWizard.WizardOption.NoBackButtonOnStartPage, True)
+
+        # Fixed size - non-resizable wizard window (700px wide, 700px tall)
+        self.setFixedSize(700, 700)
 
         self._welcome_page = _WelcomePage(self)
         self._config_page = _ConfigurationPage(self)

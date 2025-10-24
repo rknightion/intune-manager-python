@@ -4,8 +4,10 @@ import base64
 import json
 from typing import Iterable
 
+import importlib
 import pytest
 
+from intune_manager.auth.auth_manager import AuthManager
 from intune_manager.graph.errors import AuthenticationError
 
 from tests.factories import configure_auth_manager, make_settings
@@ -52,6 +54,30 @@ def test_configure_requires_client_id(
         configure_auth_manager(
             settings=settings, stub_app=stub, monkeypatch=monkeypatch
         )
+
+
+def test_configure_surfaces_msal_value_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    settings = make_settings()
+    settings.token_cache_path = tmp_path / "cache.bin"
+
+    def _raising_factory(*_: object, **__: object):
+        raise ValueError("not https")
+
+    auth_module = importlib.import_module("intune_manager.auth.auth_manager")
+    monkeypatch.setattr(
+        auth_module.msal,
+        "PublicClientApplication",
+        _raising_factory,
+    )
+
+    manager = AuthManager()
+    with pytest.raises(AuthenticationError) as excinfo:
+        manager.configure(settings)
+
+    assert "not https" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

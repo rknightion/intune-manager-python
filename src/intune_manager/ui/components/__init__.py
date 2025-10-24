@@ -19,7 +19,6 @@ from .status import InlineStatusMessage
 from .shortcuts import ShortcutDefinition, ShortcutHelpDialog
 from .overlays import BusyOverlay
 from .progress import ProgressDialog
-from .recovery import CrashRecoveryDialog
 from .theme import (
     ThemeManager,
     ThemeName,
@@ -52,7 +51,6 @@ __all__ = [
     "ToastLevel",
     "ToastManager",
     "InlineStatusMessage",
-    "CrashRecoveryDialog",
     "ShortcutDefinition",
     "ShortcutHelpDialog",
     "BusyOverlay",

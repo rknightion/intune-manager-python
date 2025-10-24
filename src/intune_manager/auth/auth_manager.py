@@ -50,11 +50,22 @@ class AuthManager:
 
         authority = settings.authority or settings.derive_authority()
         self._cache_manager = TokenCacheManager(settings.token_cache_path)
-        self._app = msal.PublicClientApplication(
-            client_id=settings.client_id,
-            authority=authority,
-            token_cache=self._cache_manager.cache,
-        )
+        try:
+            self._app = msal.PublicClientApplication(
+                client_id=settings.client_id,
+                authority=authority,
+                token_cache=self._cache_manager.cache,
+            )
+        except ValueError as exc:
+            logger.error("Invalid MSAL configuration", authority=authority, error=str(exc))
+            raise AuthenticationError(
+                f"Invalid authority or redirect URI: {exc}",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - surface unexpected MSAL issues
+            logger.exception("Failed to initialise MSAL client", authority=authority)
+            raise AuthenticationError(
+                f"Failed to initialize the MSAL client: {exc}",
+            ) from exc
         self._settings = settings
         configured_scopes = list(settings.configured_scopes())
         self._permission_checker = PermissionChecker(configured_scopes or None)

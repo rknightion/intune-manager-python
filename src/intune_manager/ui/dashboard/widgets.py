@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 from typing import Callable, Dict, List
 
-from PySide6.QtCore import Qt
 from PySide6.QtCharts import (
     QBarCategoryAxis,
     QBarSeries,
@@ -13,6 +12,7 @@ from PySide6.QtCharts import (
     QPieSeries,
     QValueAxis,
 )
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QFont, QPainter
 from PySide6.QtWidgets import (
     QFrame,
@@ -33,13 +33,13 @@ from intune_manager.services import (
     SyncProgressEvent,
 )
 from intune_manager.ui.components import (
+    SPACING_LG,
+    SPACING_MD,
+    SPACING_SM,
+    SPACING_XS,
     CommandAction,
     PageScaffold,
     ProgressDialog,
-    SPACING_XS,
-    SPACING_SM,
-    SPACING_MD,
-    SPACING_LG,
     ToastLevel,
     UIContext,
     format_relative_timestamp,
@@ -58,7 +58,6 @@ from intune_manager.utils import (
 )
 from intune_manager.utils.asyncio import AsyncBridge
 
-
 logger = get_logger(__name__)
 
 
@@ -68,8 +67,9 @@ class MetricCard(QFrame):
     def __init__(self, title: str, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setFixedWidth(320)  # Fixed width - does not resize with window
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedWidth(200)  # Fixed width - does not resize with window
+        self.setFixedHeight(160)  # Fixed height - does not resize with window
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACING_LG, SPACING_LG, SPACING_LG, SPACING_LG)
@@ -162,7 +162,9 @@ class StatusCard(QFrame):
     def __init__(self, title: str, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("StatusCard")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(140)
+        self.setFixedWidth(400)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACING_LG, SPACING_LG, SPACING_LG, SPACING_LG)
@@ -389,7 +391,7 @@ class DashboardWidget(PageScaffold):
         for action in self._quick_actions:
             button = QPushButton(str(action["label"]))
             button.setObjectName("QuickActionButton")
-            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             description = str(action.get("description", ""))
             if description:
                 button.setToolTip(description)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -29,6 +30,14 @@ from functools import partial
 from intune_manager.data.repositories.base import DEFAULT_SCOPE
 from intune_manager.services import DiagnosticsService, ServiceRegistry
 from intune_manager.utils import AsyncBridge
+from intune_manager.utils.safe_mode import (
+    cancel_cache_purge_request,
+    cancel_safe_mode_request,
+    pending_cache_purge_request,
+    pending_safe_mode_request,
+    schedule_cache_purge_request,
+    schedule_safe_mode_request,
+)
 from intune_manager.ui.settings.widgets import SettingsWidget
 
 
@@ -419,6 +428,7 @@ class DiagnosticsWidget(QWidget):
         self._refresh_logs()
         self._refresh_keyring()
         self._apply_telemetry_state()
+        self._refresh_recovery_status()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -473,6 +483,56 @@ class DiagnosticsWidget(QWidget):
         hint.setStyleSheet("color: #5f6673;")
         telemetry_layout.addWidget(hint)
         layout.addWidget(telemetry_group)
+
+        recovery_group = QGroupBox("Crash recovery tools")
+        recovery_layout = QVBoxLayout(recovery_group)
+        recovery_layout.setContentsMargins(12, 12, 12, 12)
+
+        safe_mode_hint = QLabel(
+            "Safe Mode disables background diagnostics and cache inspection so you can troubleshoot "
+            "launch issues. The app must be restarted for this to take effect."
+        )
+        safe_mode_hint.setWordWrap(True)
+        safe_mode_hint.setStyleSheet("color: #5f6673;")
+        recovery_layout.addWidget(safe_mode_hint)
+
+        self._safe_mode_status = QLabel()
+        self._safe_mode_status.setWordWrap(True)
+        recovery_layout.addWidget(self._safe_mode_status)
+
+        safe_mode_buttons = QHBoxLayout()
+        self._request_safe_mode_button = QPushButton("Request Safe Mode on next launch")
+        self._request_safe_mode_button.clicked.connect(self._request_safe_mode)
+        safe_mode_buttons.addWidget(self._request_safe_mode_button)
+        self._cancel_safe_mode_button = QPushButton("Cancel Safe Mode request")
+        self._cancel_safe_mode_button.clicked.connect(self._cancel_safe_mode_request)
+        safe_mode_buttons.addWidget(self._cancel_safe_mode_button)
+        safe_mode_buttons.addStretch()
+        recovery_layout.addLayout(safe_mode_buttons)
+
+        purge_hint = QLabel(
+            "Schedule a Graph cache purge to run before services initialise. This helps recover from "
+            "corrupted local caches without manually deleting files."
+        )
+        purge_hint.setWordWrap(True)
+        purge_hint.setStyleSheet("color: #5f6673;")
+        recovery_layout.addWidget(purge_hint)
+
+        self._purge_status = QLabel()
+        self._purge_status.setWordWrap(True)
+        recovery_layout.addWidget(self._purge_status)
+
+        purge_buttons = QHBoxLayout()
+        self._request_purge_button = QPushButton("Purge caches on next launch")
+        self._request_purge_button.clicked.connect(self._request_cache_purge)
+        purge_buttons.addWidget(self._request_purge_button)
+        self._cancel_purge_button = QPushButton("Cancel purge request")
+        self._cancel_purge_button.clicked.connect(self._cancel_cache_purge_request)
+        purge_buttons.addWidget(self._cancel_purge_button)
+        purge_buttons.addStretch()
+        recovery_layout.addLayout(purge_buttons)
+
+        layout.addWidget(recovery_group)
 
         layout.addStretch()
 
@@ -531,6 +591,99 @@ class DiagnosticsWidget(QWidget):
         self._telemetry_toggle.blockSignals(True)
         self._telemetry_toggle.setChecked(enabled)
         self._telemetry_toggle.blockSignals(False)
+
+    def _refresh_recovery_status(self) -> None:
+        safe_mode_info = pending_safe_mode_request()
+        if safe_mode_info:
+            self._safe_mode_status.setText(
+                self._format_request_status(
+                    safe_mode_info,
+                    prefix="Safe Mode request pending",
+                )
+            )
+            self._cancel_safe_mode_button.setEnabled(True)
+        else:
+            self._safe_mode_status.setText("Safe Mode not scheduled.")
+            self._cancel_safe_mode_button.setEnabled(False)
+
+        purge_info = pending_cache_purge_request()
+        if purge_info:
+            self._purge_status.setText(
+                self._format_request_status(
+                    purge_info,
+                    prefix="Cache purge scheduled",
+                )
+            )
+            self._cancel_purge_button.setEnabled(True)
+        else:
+            self._purge_status.setText("No cache purge queued.")
+            self._cancel_purge_button.setEnabled(False)
+
+    def _format_request_status(self, info: dict[str, object], *, prefix: str) -> str:
+        reason = info.get("reason") or "Manual request"
+        timestamp = info.get("requested_at")
+        if isinstance(timestamp, str):
+            try:
+                readable = (
+                    datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M:%S %Z")
+                )
+            except ValueError:
+                readable = timestamp
+        else:
+            readable = "unknown time"
+        return f"{prefix} — {reason} at {readable}."
+
+    def _request_safe_mode(self) -> None:
+        schedule_safe_mode_request("Diagnostics tab request")
+        QMessageBox.information(
+            self,
+            "Safe Mode scheduled",
+            (
+                "Safe Mode will be enabled the next time you launch Intune Manager. "
+                "Restart the application to continue in Safe Mode."
+            ),
+        )
+        self._refresh_recovery_status()
+
+    def _cancel_safe_mode_request(self) -> None:
+        cancel_safe_mode_request()
+        QMessageBox.information(
+            self,
+            "Safe Mode request cleared",
+            "Safe Mode will no longer be enabled automatically on next launch.",
+        )
+        self._refresh_recovery_status()
+
+    def _request_cache_purge(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Schedule cache purge",
+            (
+                "Purge cached Graph data at the beginning of the next launch?\n\n"
+                "This runs before services start and may help recover from corrupted caches."
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        schedule_cache_purge_request("Diagnostics tab request")
+        QMessageBox.information(
+            self,
+            "Cache purge scheduled",
+            "Cached Graph data will be cleared automatically on the next launch.",
+        )
+        self._refresh_recovery_status()
+
+    def _cancel_cache_purge_request(self) -> None:
+        cancel_cache_purge_request()
+        QMessageBox.information(
+            self,
+            "Cache purge cancelled",
+            "Startup cache purge has been cancelled.",
+        )
+        self._refresh_recovery_status()
 
     def _format_bytes(self, value: int) -> str:
         if value < 1024:

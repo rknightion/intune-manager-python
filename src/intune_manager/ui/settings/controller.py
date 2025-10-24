@@ -111,6 +111,9 @@ class SettingsController(QObject):
             except AuthenticationError as exc:
                 logger.error("Failed to configure MSAL: %s", exc)
                 self.errorOccurred.emit(str(exc))
+            except Exception as exc:  # noqa: BLE001 - ensure UI feedback for unexpected failures
+                logger.exception("Unexpected error during MSAL configuration")
+                self.errorOccurred.emit(f"Failed to configure authentication: {exc}")
             else:
                 logger.info("Updated MSAL configuration", tenant=settings.tenant_id)
         else:
@@ -214,7 +217,13 @@ class SettingsController(QObject):
                 "Client ID must be provided before authentication."
             )
         self._current_settings = settings
-        self._auth.configure(settings)
+        try:
+            self._auth.configure(settings)
+        except AuthenticationError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalise errors for UI handling
+            logger.exception("Authentication configuration failed")
+            raise AuthenticationError(str(exc)) from exc
 
     def _run_async(self, action: str, message: str, coro) -> None:
         if self._pending_action is not None:

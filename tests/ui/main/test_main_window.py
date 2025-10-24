@@ -48,58 +48,71 @@ class _DummySettingsPage(QWidget):
 
 
 @pytest.fixture
-def patched_main_window(monkeypatch: pytest.MonkeyPatch, qtbot):
-    """Provide a MainWindow instance with module widgets patched to light stubs."""
+def main_window_builder(monkeypatch: pytest.MonkeyPatch, qtbot):
+    """Factory fixture to construct patched MainWindow instances on demand."""
 
-    created: dict[str, _DummyModule] = {}
+    def _builder(*, crash_info: dict[str, str] | None = None):
+        created: dict[str, _DummyModule] = {}
 
-    def _make_stub(page_key: str):
-        def _factory(services: ServiceRegistry, *, context, parent=None):
-            widget = _DummyModule(page_key, services, context=context, parent=parent)
-            created[page_key] = widget
-            return widget
+        def _make_stub(page_key: str):
+            def _factory(services: ServiceRegistry, *, context, parent=None):
+                widget = _DummyModule(page_key, services, context=context, parent=parent)
+                created[page_key] = widget
+                return widget
 
-        return _factory
+            return _factory
 
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.DashboardWidget", _make_stub("dashboard")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.DevicesWidget", _make_stub("devices")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.ApplicationsWidget", _make_stub("applications")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.GroupsWidget", _make_stub("groups")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.AssignmentsWidget", _make_stub("assignments")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.ReportsWidget", _make_stub("reports")
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.SettingsPage", _DummySettingsPage
-    )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.DashboardWidget", _make_stub("dashboard")
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.DevicesWidget", _make_stub("devices")
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.ApplicationsWidget",
+            _make_stub("applications"),
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.GroupsWidget", _make_stub("groups")
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.AssignmentsWidget",
+            _make_stub("assignments"),
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.ReportsWidget", _make_stub("reports")
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.SettingsPage", _DummySettingsPage
+        )
 
-    status = FirstRunStatus(
-        is_first_run=False,
-        missing_settings=False,
-        has_token_cache=True,
-        token_cache_path=Path("/tmp/token.cache"),
-        settings=Settings(),
-    )
-    monkeypatch.setattr(
-        "intune_manager.ui.main.window.detect_first_run", lambda: status
-    )
+        status = FirstRunStatus(
+            is_first_run=False,
+            missing_settings=False,
+            has_token_cache=True,
+            token_cache_path=Path("/tmp/token.cache"),
+            settings=Settings(),
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.detect_first_run", lambda: status
+        )
 
-    window = MainWindow(ServiceRegistry())
-    qtbot.addWidget(window)
-    window.show()
-    qtbot.waitUntil(window.isVisible)
+        window = MainWindow(
+            ServiceRegistry(),
+            startup_crash_info=crash_info,
+        )
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitUntil(window.isVisible)
 
-    return window, created
+        return window, created
+
+    return _builder
+
+
+@pytest.fixture
+def patched_main_window(main_window_builder):
+    return main_window_builder()
 
 
 def test_main_window_navigation_switches_pages(patched_main_window, qtbot):
@@ -138,3 +151,33 @@ def test_open_onboarding_uses_settings_page(patched_main_window):
 
     window._open_onboarding_setup()  # noqa: SLF001
     assert settings_page.launch_count == 1
+
+
+def test_previous_crash_surfaces_notification(
+    main_window_builder,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    messages: list[str] = []
+
+    def _capture(self, message: str, *, level, duration_ms: int = 4500):  # noqa: ANN001
+        messages.append(message)
+
+    monkeypatch.setattr(
+        MainWindow,
+        "show_notification",
+        _capture,
+        raising=False,
+    )
+
+    crash_log = tmp_path / "crash.log"
+    crash_log.write_text("boom", encoding="utf-8")
+    crash_info = {
+        "timestamp": "2025-10-24T18:10:09.051434Z",
+        "exception_type": "ValueError",
+        "report_path": str(crash_log),
+    }
+
+    window, _ = main_window_builder(crash_info=crash_info)
+    assert any("ended unexpectedly" in message for message in messages)
+    assert window._crash_report_path == crash_log  # noqa: SLF001 - verifies wiring

@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Awaitable, Callable, Dict
 
-from PySide6.QtCore import Qt, QSize, QSettings
-from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSize, QSettings, QUrl
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QIcon,
+    QKeySequence,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -81,6 +89,7 @@ class MainWindow(QMainWindow):
         services: ServiceRegistry,
         *,
         parent: QWidget | None = None,
+        startup_crash_info: dict[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
         self._services = services
@@ -110,6 +119,8 @@ class MainWindow(QMainWindow):
         self._settings_page: SettingsPage | None = None
         self._banner_action: Callable[[], None] | None = None
         self._first_run_status: FirstRunStatus | None = None
+        self._startup_crash_info = startup_crash_info
+        self._crash_report_path: Path | None = None
 
         self._configure_window()
         self._build_layout()
@@ -123,6 +134,7 @@ class MainWindow(QMainWindow):
         self._restore_window_preferences()
         self._evaluate_onboarding_state()
         self._display_safe_mode_banner()
+        self._display_previous_crash_notice()
 
     # ------------------------------------------------------------------ Setup
 
@@ -469,6 +481,56 @@ class MainWindow(QMainWindow):
             self._set_banner_action(None)
         self.show_banner(message, level=ToastLevel.WARNING, action_label=action_label)
 
+    def _display_previous_crash_notice(self) -> None:
+        info = self._startup_crash_info
+        if not info:
+            return
+
+        timestamp = info.get("timestamp")
+        readable = timestamp or "unknown time"
+        if timestamp:
+            try:
+                readable = (
+                    datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M:%S %Z")
+                )
+            except ValueError:
+                readable = timestamp
+
+        exception_type = info.get("exception_type", "Unhandled exception")
+        message = (
+            "The previous session ended unexpectedly. "
+            f"Crash captured at {readable} ({exception_type})."
+        )
+        logger.warning(
+            "Previous session crashed",
+            exception_type=exception_type,
+            crash_timestamp=timestamp,
+            crash_report=info.get("report_path"),
+        )
+        self.show_notification(message, level=ToastLevel.ERROR, duration_ms=8000)
+
+        report_path = info.get("report_path")
+        self._crash_report_path = Path(report_path) if report_path else None
+
+        if self._alert_banner and not self._alert_banner.isVisible():
+            banner_message = (
+                f"Previous session crashed at {readable}. Review the log for details."
+            )
+            action_label = "Open crash log" if self._crash_report_path else None
+            if action_label:
+                self._set_banner_action(self._open_crash_report)
+            else:
+                self._set_banner_action(None)
+            self.show_banner(
+                banner_message,
+                level=ToastLevel.ERROR,
+                action_label=action_label,
+            )
+
+        self._startup_crash_info = None
+
     def _restore_window_preferences(self) -> None:
         geometry = self._settings_store.value("window/geometry")
         if isinstance(geometry, (bytes, bytearray)):
@@ -606,6 +668,27 @@ class MainWindow(QMainWindow):
             )
         finally:
             self.clear_busy()
+
+    def _open_crash_report(self) -> None:
+        if not self._crash_report_path:
+            self.show_notification(
+                "Crash log is no longer available.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        path = self._crash_report_path
+        if not path.exists():
+            self.show_notification(
+                f"Crash log missing at {path}.",
+                level=ToastLevel.WARNING,
+            )
+            return
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        if not opened:
+            self.show_notification(
+                "Unable to open crash log.",
+                level=ToastLevel.ERROR,
+            )
 
     # --------------------------------------------------------------- Commands
 
