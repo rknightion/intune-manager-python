@@ -89,7 +89,9 @@ class MobileConfigService:
         except CancellationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to update custom configuration payload", profile_id=profile_id)
+            logger.exception(
+                "Failed to update custom configuration payload", profile_id=profile_id
+            )
             self.errors.emit(ServiceErrorEvent(tenant_id=None, error=exc))
             raise
 

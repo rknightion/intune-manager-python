@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List
+from datetime import datetime
 
 from intune_manager.config import DEFAULT_GRAPH_SCOPES, SettingsManager
 from intune_manager.auth import AuthManager, auth_manager
@@ -17,6 +18,7 @@ class ResourceMetric:
     count: int | None
     stale: bool | None
     available: bool
+    last_refresh: datetime | None = None
     warning: str | None = None
 
 
@@ -104,6 +106,11 @@ class DashboardController:
                     items = service.list_cached(tenant_id=tenant_id)
                     count = len(items)
                 stale = service.is_cache_stale(tenant_id=tenant_id)
+                last_refresh = (
+                    service.last_refresh(tenant_id=tenant_id)
+                    if hasattr(service, "last_refresh")
+                    else None
+                )
                 snapshot.resources.append(
                     ResourceMetric(
                         key=key,
@@ -111,6 +118,7 @@ class DashboardController:
                         count=count,
                         stale=stale,
                         available=True,
+                        last_refresh=last_refresh,
                     ),
                 )
                 if stale:
@@ -137,7 +145,9 @@ class DashboardController:
         add_metric("audit", "Audit events", self._services.audit)
 
         snapshot.analytics.compliance = self._collect_compliance_breakdown(tenant_id)
-        snapshot.analytics.assignment_intents = self._collect_assignment_breakdown(tenant_id)
+        snapshot.analytics.assignment_intents = self._collect_assignment_breakdown(
+            tenant_id
+        )
 
         return snapshot
 
@@ -160,10 +170,16 @@ class DashboardController:
 
     # ----------------------------------------------------------------- Helpers
 
-    def _collect_tenant_status(self, override_tenant_id: str | None = None) -> TenantStatus:
+    def _collect_tenant_status(
+        self, override_tenant_id: str | None = None
+    ) -> TenantStatus:
         settings = self._settings_manager.load()
         user = self._auth.current_user()
-        tenant_id = override_tenant_id or settings.tenant_id or (user.tenant_id if user else None)
+        tenant_id = (
+            override_tenant_id
+            or settings.tenant_id
+            or (user.tenant_id if user else None)
+        )
         configured = settings.is_configured
         signed_in = user is not None
         configured_scopes = list(settings.configured_scopes())

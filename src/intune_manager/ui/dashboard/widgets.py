@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Callable, Dict
+import inspect
+from typing import Callable, Dict, List
 
 from PySide6.QtCore import Qt
 from PySide6.QtCharts import (
@@ -26,17 +27,39 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from intune_manager.services import ServiceErrorEvent, ServiceRegistry, SyncProgressEvent
+from intune_manager.services import (
+    ServiceErrorEvent,
+    ServiceRegistry,
+    SyncProgressEvent,
+)
 from intune_manager.ui.components import (
     CommandAction,
     PageScaffold,
     ProgressDialog,
+    SPACING_XS,
+    SPACING_SM,
+    SPACING_MD,
+    SPACING_LG,
     ToastLevel,
     UIContext,
+    format_relative_timestamp,
 )
-from intune_manager.ui.dashboard.controller import DashboardController, DashboardSnapshot, ResourceMetric, TenantStatus
-from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
+from intune_manager.ui.dashboard.controller import (
+    DashboardController,
+    DashboardSnapshot,
+    ResourceMetric,
+    TenantStatus,
+)
+from intune_manager.utils import (
+    CancellationError,
+    CancellationTokenSource,
+    ProgressUpdate,
+    get_logger,
+)
 from intune_manager.utils.asyncio import AsyncBridge
+
+
+logger = get_logger(__name__)
 
 
 class MetricCard(QFrame):
@@ -45,20 +68,23 @@ class MetricCard(QFrame):
     def __init__(self, title: str, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Card")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setFixedWidth(320)  # Fixed width - does not resize with window
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(SPACING_LG, SPACING_LG, SPACING_LG, SPACING_LG)
+        layout.setSpacing(SPACING_SM)
 
         self.title_label = QLabel(title)
         self.title_label.setProperty("class", "card-title")
+        self.title_label.setStyleSheet("background: transparent;")
         title_font = self.title_label.font()
         title_font.setPointSizeF(title_font.pointSizeF() + 1)
         title_font.setWeight(QFont.Weight.DemiBold)
         self.title_label.setFont(title_font)
 
         self.value_label = QLabel("—")
+        self.value_label.setStyleSheet("background: transparent;")
         value_font = self.value_label.font()
         value_font.setPointSizeF(value_font.pointSizeF() + 6)
         value_font.setWeight(QFont.Weight.Bold)
@@ -66,7 +92,7 @@ class MetricCard(QFrame):
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color: palette(mid);")
+        self.status_label.setStyleSheet("color: palette(mid); background: transparent;")
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
@@ -80,26 +106,50 @@ class MetricCard(QFrame):
 
         if not metric.available:
             self.status_label.setText("Not configured")
-            self.status_label.setStyleSheet("color: palette(mid);")
+            self.status_label.setStyleSheet("color: palette(mid); background: transparent;")
+            self.status_label.setToolTip("Service not configured for this tenant.")
             return
 
         if metric.warning:
             self.status_label.setText(metric.warning)
-            self.status_label.setStyleSheet("color: #c92a2a;")
+            self.status_label.setStyleSheet("color: #c92a2a; background: transparent;")
+            self.status_label.setToolTip(metric.warning)
             return
 
         if metric.stale:
-            self.status_label.setText("Refresh recommended")
-            self.status_label.setStyleSheet("color: #c15d12;")
+            base_text = "Refresh recommended"
+            color = "#a84d0e"  # Warning orange, darkened for accessibility
         else:
-            self.status_label.setText("Up to date")
-            self.status_label.setStyleSheet("color: #1b8651;")
+            base_text = "Up to date"
+            color = "#1b8651"  # Success green
+
+        if metric.last_refresh:
+            age_text = format_relative_timestamp(metric.last_refresh)
+            status_text = f"{base_text} • Updated {age_text}"
+            tooltip = (
+                f"Last refresh: {metric.last_refresh.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            )
+        else:
+            status_text = f"{base_text} • Never refreshed"
+            tooltip = "No refresh recorded yet."
+
+        self.status_label.setText(status_text)
+        self.status_label.setStyleSheet(f"color: {color}; background: transparent;")
+        self.status_label.setToolTip(tooltip)
 
 
 _STATUS_COLORS: Dict[ToastLevel, tuple[str, str, str]] = {
     ToastLevel.INFO: ("#1d4ed8", "rgba(59, 130, 246, 0.12)", "rgba(59, 130, 246, 0.3)"),
-    ToastLevel.SUCCESS: ("#15803d", "rgba(34, 197, 94, 0.15)", "rgba(34, 197, 94, 0.35)"),
-    ToastLevel.WARNING: ("#b45309", "rgba(249, 115, 22, 0.18)", "rgba(249, 115, 22, 0.35)"),
+    ToastLevel.SUCCESS: (
+        "#15803d",
+        "rgba(34, 197, 94, 0.15)",
+        "rgba(34, 197, 94, 0.35)",
+    ),
+    ToastLevel.WARNING: (
+        "#b45309",
+        "rgba(249, 115, 22, 0.18)",
+        "rgba(249, 115, 22, 0.35)",
+    ),
     ToastLevel.ERROR: ("#b91c1c", "rgba(239, 68, 68, 0.18)", "rgba(239, 68, 68, 0.35)"),
 }
 
@@ -113,15 +163,17 @@ class StatusCard(QFrame):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(6)
+        layout.setContentsMargins(SPACING_LG, SPACING_LG, SPACING_LG, SPACING_LG)
+        layout.setSpacing(SPACING_SM)
 
         self._title_label = QLabel(title)
+        self._title_label.setStyleSheet("background: transparent;")
         title_font = self._title_label.font()
         title_font.setWeight(QFont.Weight.DemiBold)
         self._title_label.setFont(title_font)
 
         self._state_label = QLabel()
+        self._state_label.setStyleSheet("background: transparent;")
         state_font = self._state_label.font()
         state_font.setPointSizeF(state_font.pointSizeF() + 4)
         state_font.setWeight(QFont.Weight.Bold)
@@ -129,7 +181,8 @@ class StatusCard(QFrame):
 
         self._detail_label = QLabel()
         self._detail_label.setWordWrap(True)
-        self._detail_label.setStyleSheet("color: palette(mid);")
+        self._detail_label.setStyleSheet("background: transparent;")
+        # Color will be set dynamically based on status level
 
         layout.addWidget(self._title_label)
         layout.addWidget(self._state_label)
@@ -142,7 +195,9 @@ class StatusCard(QFrame):
         *,
         level: ToastLevel = ToastLevel.INFO,
     ) -> None:
-        color, background, border = _STATUS_COLORS.get(level, _STATUS_COLORS[ToastLevel.INFO])
+        color, background, border = _STATUS_COLORS.get(
+            level, _STATUS_COLORS[ToastLevel.INFO]
+        )
         self._state_label.setText(state)
         self._detail_label.setText(detail)
         self.setStyleSheet(
@@ -151,10 +206,13 @@ class StatusCard(QFrame):
             f"  border: 1px solid {border};"
             "  border-radius: 12px;"
             "}"
+            "QFrame#StatusCard QLabel {"
+            "  background: transparent;"
+            "}"
         )
-        self._title_label.setStyleSheet(f"color: {color};")
-        self._state_label.setStyleSheet(f"color: {color};")
-        self._detail_label.setStyleSheet("color: palette(mid);")
+        self._title_label.setStyleSheet(f"color: {color}; background: transparent;")
+        self._state_label.setStyleSheet(f"color: {color}; background: transparent;")
+        self._detail_label.setStyleSheet(f"color: {color}; opacity: 0.9; background: transparent;")
 
 
 class ComplianceChartView(QChartView):
@@ -233,6 +291,7 @@ class AssignmentChartView(QChartView):
         chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
         series.attachAxis(axis_y)
 
+
 class DashboardWidget(PageScaffold):
     """Dashboard overview widget combining metrics and quick actions."""
 
@@ -277,19 +336,72 @@ class DashboardWidget(PageScaffold):
 
         self._status_frame = QWidget()
         self._status_layout = QHBoxLayout(self._status_frame)
-        self._status_layout.setContentsMargins(0, 0, 0, 0)
-        self._status_layout.setSpacing(12)
+        self._status_layout.setContentsMargins(SPACING_XS, SPACING_XS, SPACING_XS, SPACING_LG)
+        self._status_layout.setSpacing(SPACING_LG)
 
-        self._tenant_card = StatusCard("Tenant configuration", parent=self._status_frame)
+        self._tenant_card = StatusCard(
+            "Tenant configuration", parent=self._status_frame
+        )
         self._auth_card = StatusCard("Authentication", parent=self._status_frame)
         self._status_layout.addWidget(self._tenant_card)
         self._status_layout.addWidget(self._auth_card)
 
+        self._quick_actions: List[dict[str, object]] = [
+            {
+                "id": "nav.devices",
+                "label": "Device explorer",
+                "description": "Open the Devices module to browse managed devices.",
+            },
+            {
+                "id": "nav.assignments",
+                "label": "Assignments centre",
+                "description": "Switch to the Assignments workspace for bulk flows.",
+            },
+            {
+                "id": "assignments.import-json",
+                "label": "Import assignments",
+                "description": "Launch the assignments import dialog for JSON backups.",
+                "prereq": ["nav.assignments"],
+            },
+            {
+                "id": "nav.reports",
+                "label": "Reports",
+                "description": "Open the audit reports workspace.",
+            },
+            {
+                "id": "nav.settings",
+                "label": "Settings",
+                "description": "Manage tenant configuration and diagnostics.",
+            },
+        ]
+
+        self._quick_actions_frame = QWidget()
+        self._quick_actions_layout = QHBoxLayout(self._quick_actions_frame)
+        self._quick_actions_layout.setContentsMargins(0, 0, 0, 0)
+        self._quick_actions_layout.setSpacing(SPACING_MD)
+        self._quick_buttons: Dict[str, QPushButton] = {}
+        for action in self._quick_actions:
+            button = QPushButton(str(action["label"]))
+            button.setObjectName("QuickActionButton")
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            description = str(action.get("description", ""))
+            if description:
+                button.setToolTip(description)
+            prereq = action.get("prereq")
+            button.clicked.connect(
+                lambda _, aid=action["id"], deps=prereq: self._handle_quick_action(
+                    str(aid), [str(dep) for dep in (deps or [])]
+                )
+            )
+            self._quick_actions_layout.addWidget(button)
+            self._quick_buttons[str(action["id"])] = button
+        self._quick_actions_layout.addStretch()
+
         self._metrics_frame = QWidget()
         self._metrics_layout = QGridLayout(self._metrics_frame)
         self._metrics_layout.setContentsMargins(0, 0, 0, 0)
-        self._metrics_layout.setHorizontalSpacing(16)
-        self._metrics_layout.setVerticalSpacing(16)
+        self._metrics_layout.setHorizontalSpacing(SPACING_LG)
+        self._metrics_layout.setVerticalSpacing(SPACING_LG)
 
         self._metric_cards: Dict[str, MetricCard] = {}
 
@@ -304,7 +416,7 @@ class DashboardWidget(PageScaffold):
         self._analytics_frame = QWidget()
         self._analytics_layout = QHBoxLayout(self._analytics_frame)
         self._analytics_layout.setContentsMargins(0, 0, 0, 0)
-        self._analytics_layout.setSpacing(16)
+        self._analytics_layout.setSpacing(SPACING_LG)
 
         self._compliance_chart = ComplianceChartView(parent=self._analytics_frame)
         self._assignment_chart = AssignmentChartView(parent=self._analytics_frame)
@@ -312,6 +424,7 @@ class DashboardWidget(PageScaffold):
         self._analytics_layout.addWidget(self._assignment_chart)
 
         self.body_layout.addWidget(self._status_frame)
+        self.body_layout.addWidget(self._quick_actions_frame)
         self.body_layout.addWidget(self._summary_label)
         self.body_layout.addWidget(self._analytics_frame)
         self.body_layout.addWidget(self._metrics_frame)
@@ -335,6 +448,39 @@ class DashboardWidget(PageScaffold):
             shortcut="Ctrl+R",
         )
         self._command_unregister = self._context.command_registry.register(action)
+
+    def _handle_quick_action(
+        self,
+        action_id: str,
+        prerequisites: List[str] | None = None,
+    ) -> None:
+        for prereq in prerequisites or []:
+            if not self._execute_command(prereq):
+                return
+        self._execute_command(action_id)
+
+    def _execute_command(self, action_id: str) -> bool:
+        action = self._context.command_registry.get(action_id)
+        if action is None:
+            self._context.show_notification(
+                f"Action unavailable: {action_id}",
+                level=ToastLevel.WARNING,
+                duration_ms=4000,
+            )
+            return False
+        try:
+            result = action.callback()
+            if inspect.isawaitable(result):
+                self._bridge.run_coroutine(result)
+            return True
+        except Exception:  # noqa: BLE001
+            logger.exception("Quick action failed", action=action_id)
+            self._context.show_notification(
+                f"Quick action failed: {action.title}",
+                level=ToastLevel.ERROR,
+                duration_ms=6000,
+            )
+            return False
 
     # ------------------------------------------------------------------ UI setup
 
@@ -512,7 +658,9 @@ class DashboardWidget(PageScaffold):
         dialog.set_message("Refreshing tenant data…")
         self._notify("Refreshing tenant data…", ToastLevel.INFO)
         self._bridge.run_coroutine(
-            self._controller.refresh_all(force=True, cancellation_token=token_source.token)
+            self._controller.refresh_all(
+                force=True, cancellation_token=token_source.token
+            )
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
@@ -525,7 +673,9 @@ class DashboardWidget(PageScaffold):
         if status.configured:
             tenant_state = status.tenant_id or "Tenant configured"
             tenant_detail = (
-                f"Client ID {status.client_id}" if status.client_id else "Tenant identifiers stored."
+                f"Client ID {status.client_id}"
+                if status.client_id
+                else "Tenant identifiers stored."
             )
             if status.missing_scopes:
                 displayed = ", ".join(status.missing_scopes[:5])

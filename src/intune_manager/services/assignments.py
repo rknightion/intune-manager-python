@@ -67,11 +67,11 @@ class AssignmentService:
         desired_list = list(desired)
 
         current_by_id = {
-            assignment.id: assignment
-            for assignment in current_list
-            if assignment.id
+            assignment.id: assignment for assignment in current_list if assignment.id
         }
-        identity_map: dict[tuple[str | None, str | None, str | None, str | None], MobileAppAssignment] = {}
+        identity_map: dict[
+            tuple[str | None, str | None, str | None, str | None], MobileAppAssignment
+        ] = {}
         matched_ids: set[str] = set()
 
         for assignment in current_list:
@@ -85,7 +85,9 @@ class AssignmentService:
                 matched = current_by_id[assignment.id]
                 matched_ids.add(assignment.id)
                 if not _assignments_equal(matched, assignment):
-                    to_update.append(AssignmentUpdate(current=matched, desired=assignment))
+                    to_update.append(
+                        AssignmentUpdate(current=matched, desired=assignment)
+                    )
                 continue
 
             identity = _assignment_identity(assignment)
@@ -94,7 +96,9 @@ class AssignmentService:
                 if matched.id:
                     matched_ids.add(matched.id)
                 if not _assignments_equal(matched, assignment):
-                    to_update.append(AssignmentUpdate(current=matched, desired=assignment))
+                    to_update.append(
+                        AssignmentUpdate(current=matched, desired=assignment)
+                    )
                 continue
 
             to_create.append(assignment)
@@ -119,7 +123,9 @@ class AssignmentService:
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> None:
-        def event_builder(status: MutationStatus, error: Exception | None = None) -> AssignmentAppliedEvent:
+        def event_builder(
+            status: MutationStatus, error: Exception | None = None
+        ) -> AssignmentAppliedEvent:
             return AssignmentAppliedEvent(
                 app_id=app_id,
                 diff=diff,
@@ -171,11 +177,8 @@ class AssignmentService:
             return
 
         payload_assignments = [
-            assignment.to_graph()
-            for assignment in diff.to_create
-        ] + [
-            update.desired.to_graph() for update in diff.to_update
-        ]
+            assignment.to_graph() for assignment in diff.to_create
+        ] + [update.desired.to_graph() for update in diff.to_update]
 
         if payload_assignments:
             request = mobile_app_assign_request(app_id, payload_assignments)
@@ -207,7 +210,9 @@ class AssignmentService:
                 delete_requests,
                 cancellation_token=cancellation_token,
             )
-            logger.debug("Assignments deleted", app_id=app_id, deleted=len(delete_requests))
+            logger.debug(
+                "Assignments deleted", app_id=app_id, deleted=len(delete_requests)
+            )
 
     # ---------------------------------------------------------------- Backups
 
@@ -218,7 +223,9 @@ class AssignmentService:
         return [assignment.to_graph() for assignment in assignments]
 
 
-def _assignment_identity(assignment: MobileAppAssignment) -> tuple[str | None, str | None, str | None, str | None]:
+def _assignment_identity(
+    assignment: MobileAppAssignment,
+) -> tuple[str | None, str | None, str | None, str | None]:
     target = assignment.target
     group_id = getattr(target, "group_id", None)
     filter_id = getattr(target, "assignment_filter_id", None)

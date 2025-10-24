@@ -168,7 +168,9 @@ class AuthManager:
                 tenant_id=id_claims.get("tid"),
             )
 
-        self._missing_scopes = list(self._permission_checker.missing_scopes(access_token))
+        self._missing_scopes = list(
+            self._permission_checker.missing_scopes(access_token)
+        )
 
         return AccessToken(access_token, expiry)
 

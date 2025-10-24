@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from intune_manager.data import AssignmentFilter, AssignmentFilterRepository
 from intune_manager.data.validation import GraphResponseValidator
@@ -31,7 +31,9 @@ class AssignmentFilterService:
 
     def list_cached(self, tenant_id: str | None = None) -> list[AssignmentFilter]:
         filters = self._repository.list_all(tenant_id=tenant_id)
-        logger.debug("Assignment filters cache read", count=len(filters), tenant_id=tenant_id)
+        logger.debug(
+            "Assignment filters cache read", count=len(filters), tenant_id=tenant_id
+        )
         return filters
 
     def is_cache_stale(self, tenant_id: str | None = None) -> bool:
@@ -39,6 +41,9 @@ class AssignmentFilterService:
 
     def count_cached(self, tenant_id: str | None = None) -> int:
         return self._repository.cached_count(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        return self._repository.last_refresh(tenant_id=tenant_id)
 
     async def refresh(
         self,
@@ -106,7 +111,9 @@ class AssignmentFilterService:
         except CancellationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to refresh assignment filters", tenant_id=tenant_id)
+            logger.exception(
+                "Failed to refresh assignment filters", tenant_id=tenant_id
+            )
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
 

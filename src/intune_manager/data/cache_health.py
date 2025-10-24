@@ -59,6 +59,8 @@ class CacheEntryStatus:
     tenant_id: str | None
     recorded_count: int | None
     actual_count: int
+    last_refresh: datetime | None = None
+    expires_at: datetime | None = None
     repaired: bool = False
     issues: tuple[CacheIssue, ...] = field(default_factory=tuple)
 
@@ -99,9 +101,13 @@ RESOURCE_REGISTRY: Tuple[ResourceDescriptor, ...] = (
     ResourceDescriptor("devices", DeviceRecord, record_to_device),
     ResourceDescriptor("mobile_apps", MobileAppRecord, record_to_mobile_app),
     ResourceDescriptor("groups", GroupRecord, record_to_group),
-    ResourceDescriptor("configuration_profiles", ConfigurationProfileRecord, record_to_configuration),
+    ResourceDescriptor(
+        "configuration_profiles", ConfigurationProfileRecord, record_to_configuration
+    ),
     ResourceDescriptor("audit_events", AuditEventRecord, record_to_audit_event),
-    ResourceDescriptor("assignment_filters", AssignmentFilterRecord, record_to_assignment_filter),
+    ResourceDescriptor(
+        "assignment_filters", AssignmentFilterRecord, record_to_assignment_filter
+    ),
 )
 
 
@@ -190,7 +196,9 @@ class CacheIntegrityChecker:
 
     # ----------------------------------------------------------------- Helpers
 
-    def _load_cache_entries(self, session: Session) -> Dict[tuple[str, str], CacheEntry]:
+    def _load_cache_entries(
+        self, session: Session
+    ) -> Dict[tuple[str, str], CacheEntry]:
         entries = session.exec(select(CacheEntry)).all()
         return {(entry.resource, entry.scope): entry for entry in entries}
 
@@ -284,6 +292,8 @@ class CacheIntegrityChecker:
                 recorded_count = None
         else:
             recorded_count = entry.item_count
+            last_refresh = entry.last_refresh
+            expires_at = entry.expires_at
             if (recorded_count or 0) != actual_count:
                 issue = CacheIssue(
                     resource=descriptor.name,
@@ -306,12 +316,18 @@ class CacheIntegrityChecker:
                     entry.item_count = actual_count
                     repaired = True
 
+        if entry is None:
+            last_refresh = None
+            expires_at = None
+
         status = CacheEntryStatus(
             resource=descriptor.name,
             scope=scope,
             tenant_id=tenant_id,
             recorded_count=recorded_count,
             actual_count=actual_count,
+            last_refresh=last_refresh,
+            expires_at=expires_at,
             repaired=repaired,
             issues=tuple(issues),
         )

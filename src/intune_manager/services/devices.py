@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from intune_manager.data import DeviceRepository, ManagedDevice
@@ -73,6 +73,11 @@ class DeviceService:
         """Return cached device count without materialising rows."""
 
         return self._repository.cached_count(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        """Return timestamp of the most recent successful cache refresh."""
+
+        return self._repository.last_refresh(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 

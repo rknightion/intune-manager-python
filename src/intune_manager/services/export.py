@@ -51,7 +51,9 @@ class ExportService:
         self.completed.emit(path)
         return path
 
-    def export_audit_events_json(self, path: Path, *, tenant_id: str | None = None) -> Path:
+    def export_audit_events_json(
+        self, path: Path, *, tenant_id: str | None = None
+    ) -> Path:
         events = self._audits.list_all(tenant_id=tenant_id)
         payload = [event.to_graph() for event in events]
         path.write_text(json.dumps(payload, indent=2))

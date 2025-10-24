@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Iterable, List
 
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, Signal
@@ -44,10 +45,25 @@ from intune_manager.ui.components import (
     stage_groups,
     make_toolbar_button,
 )
-from intune_manager.utils import CancellationError, CancellationTokenSource
+from intune_manager.utils import (
+    CancellationError,
+    CancellationTokenSource,
+    get_logger,
+)
+from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
 from .controller import GroupController
 from .models import GroupFilterProxyModel, GroupTableModel, _group_type_label
+
+
+logger = get_logger(__name__)
+
+
+def _toast_level_for(severity: ErrorSeverity) -> ToastLevel:
+    try:
+        return ToastLevel(severity.value)
+    except ValueError:  # pragma: no cover - defensive mapping fallback
+        return ToastLevel.ERROR
 
 
 class GroupDetailPane(QWidget):
@@ -55,6 +71,8 @@ class GroupDetailPane(QWidget):
 
     members_next_requested = Signal()
     members_prev_requested = Signal()
+    membersRefreshRequested = Signal()
+    ownersRefreshRequested = Signal()
 
     def __init__(self, *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -101,16 +119,27 @@ class GroupDetailPane(QWidget):
         member_controls.setContentsMargins(0, 0, 0, 0)
         member_controls.setSpacing(6)
 
+        self._member_refresh_button = QToolButton()
+        self._member_refresh_button.setText("Refresh")
+        self._member_refresh_button.clicked.connect(
+            lambda: self.membersRefreshRequested.emit()
+        )
+        member_controls.addWidget(self._member_refresh_button)
+
         self._member_prev_button = QToolButton()
         self._member_prev_button.setText("Previous")
         self._member_prev_button.setEnabled(False)
-        self._member_prev_button.clicked.connect(lambda: self.members_prev_requested.emit())
+        self._member_prev_button.clicked.connect(
+            lambda: self.members_prev_requested.emit()
+        )
         member_controls.addWidget(self._member_prev_button)
 
         self._member_next_button = QToolButton()
         self._member_next_button.setText("Next")
         self._member_next_button.setEnabled(False)
-        self._member_next_button.clicked.connect(lambda: self.members_next_requested.emit())
+        self._member_next_button.clicked.connect(
+            lambda: self.members_next_requested.emit()
+        )
         member_controls.addWidget(self._member_next_button)
 
         member_controls.addStretch()
@@ -122,9 +151,13 @@ class GroupDetailPane(QWidget):
         layout.addLayout(member_controls)
 
         self._members_list = QListWidget()
-        self._members_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._members_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
         layout.addWidget(self._members_list, stretch=1)
-        self._members_list.currentItemChanged.connect(self._handle_member_selection_changed)
+        self._members_list.currentItemChanged.connect(
+            self._handle_member_selection_changed
+        )
 
         self._member_detail_label = QLabel("Select a member to view details.")
         self._member_detail_label.setStyleSheet("color: palette(mid);")
@@ -141,8 +174,22 @@ class GroupDetailPane(QWidget):
         owners_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(owners_label)
 
+        owner_controls = QHBoxLayout()
+        owner_controls.setContentsMargins(0, 0, 0, 0)
+        owner_controls.setSpacing(6)
+        self._owner_refresh_button = QToolButton()
+        self._owner_refresh_button.setText("Refresh")
+        self._owner_refresh_button.clicked.connect(
+            lambda: self.ownersRefreshRequested.emit()
+        )
+        owner_controls.addWidget(self._owner_refresh_button)
+        owner_controls.addStretch()
+        layout.addLayout(owner_controls)
+
         self._owners_list = QListWidget()
-        self._owners_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._owners_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
         layout.addWidget(self._owners_list, stretch=1)
 
         self._owner_status_label = QLabel("Load owners to view ownership details.")
@@ -187,6 +234,23 @@ class GroupDetailPane(QWidget):
         self._owners_list.addItem(placeholder)
         self._owner_status_label.setText("Load owners to view ownership details.")
 
+    @staticmethod
+    def _format_age(timestamp: datetime | None) -> str:
+        if timestamp is None:
+            return "never"
+        delta = datetime.utcnow() - timestamp
+        if delta < timedelta(seconds=90):
+            return "moments ago"
+        minutes = delta.total_seconds() / 60
+        if minutes < 90:
+            count = max(int(minutes), 1)
+            return f"{count} minute{'s' if count != 1 else ''} ago"
+        hours = minutes / 60
+        if hours < 36:
+            count = max(int(hours), 1)
+            return f"{count} hour{'s' if count != 1 else ''} ago"
+        return timestamp.strftime("%Y-%m-%d %H:%M")
+
     def set_members(
         self,
         members: Iterable[GroupMember],
@@ -195,6 +259,7 @@ class GroupDetailPane(QWidget):
         page_index: int | None = None,
         has_more: bool | None = None,
         total_loaded: int | None = None,
+        refreshed_at: datetime | None = None,
     ) -> None:
         self._members_list.clear()
         if loading:
@@ -203,35 +268,61 @@ class GroupDetailPane(QWidget):
             self._members_list.addItem(placeholder)
             self._member_status_label.setText("Fetching members from Microsoft Graph…")
             self._member_detail_label.setText("Fetching members…")
-            self._update_member_controls(page_index=None, has_more=False, total_loaded=None)
+            self._update_member_controls(
+                page_index=None, has_more=False, total_loaded=None
+            )
             return
 
         members_list = list(members)
-        self._member_lookup = {member.id: member for member in members_list if member.id}
+        self._member_lookup = {
+            member.id: member for member in members_list if member.id
+        }
         if not members_list:
             placeholder = QListWidgetItem("No members found.")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self._members_list.addItem(placeholder)
-            self._member_status_label.setText("Group has no members.")
+            if refreshed_at:
+                age = self._format_age(refreshed_at)
+                self._member_status_label.setText(
+                    f"Group has no members. Loaded {age}."
+                )
+            else:
+                self._member_status_label.setText("Group has no members.")
             self._member_detail_label.setText("Group has no members.")
-            self._update_member_controls(page_index=page_index, has_more=has_more or False, total_loaded=total_loaded)
+            self._update_member_controls(
+                page_index=page_index,
+                has_more=has_more or False,
+                total_loaded=total_loaded,
+            )
             return
 
         for member in members_list:
-            name = member.display_name or member.user_principal_name or member.mail or member.id
+            name = (
+                member.display_name
+                or member.user_principal_name
+                or member.mail
+                or member.id
+            )
             detail = member.user_principal_name or member.mail or ""
             text = name if not detail else f"{name} — {detail}"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, member.id)
             self._members_list.addItem(item)
-        self._member_status_label.setText(f"{len(members_list)} members in page.")
+        summary = [f"{len(members_list)} members in page"]
+        if total_loaded is not None:
+            summary.append(f"{total_loaded} loaded")
+        if refreshed_at:
+            summary.append(f"Loaded {self._format_age(refreshed_at)}")
+        self._member_status_label.setText(" • ".join(summary))
         first_item = self._members_list.item(0)
         if first_item is not None and first_item.flags() & Qt.ItemFlag.ItemIsSelectable:
             self._members_list.setCurrentItem(first_item)
             self._update_member_detail(first_item.data(Qt.ItemDataRole.UserRole))
         else:
             self._member_detail_label.setText("Select a member to view details.")
-        self._update_member_controls(page_index=page_index, has_more=has_more or False, total_loaded=total_loaded)
+        self._update_member_controls(
+            page_index=page_index, has_more=has_more or False, total_loaded=total_loaded
+        )
 
     def _handle_member_selection_changed(
         self,
@@ -273,7 +364,9 @@ class GroupDetailPane(QWidget):
             return
         member = self._member_lookup.get(member_id)
         if member is None:
-            self._member_detail_label.setText("Member details unavailable (not cached).")
+            self._member_detail_label.setText(
+                "Member details unavailable (not cached)."
+            )
             return
         detail_lines = []
         if member.display_name:
@@ -285,7 +378,13 @@ class GroupDetailPane(QWidget):
         detail_lines.append(f"Object ID: {member.id}")
         self._member_detail_label.setText("\n".join(detail_lines))
 
-    def set_owners(self, owners: Iterable[GroupMember], *, loading: bool = False) -> None:
+    def set_owners(
+        self,
+        owners: Iterable[GroupMember],
+        *,
+        loading: bool = False,
+        refreshed_at: datetime | None = None,
+    ) -> None:
         self._owners_list.clear()
         if loading:
             placeholder = QListWidgetItem("Loading owners…")
@@ -299,17 +398,30 @@ class GroupDetailPane(QWidget):
             placeholder = QListWidgetItem("No owners recorded.")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self._owners_list.addItem(placeholder)
-            self._owner_status_label.setText("Group has no owners.")
+            if refreshed_at:
+                self._owner_status_label.setText(
+                    f"Group has no owners. Loaded {self._format_age(refreshed_at)}."
+                )
+            else:
+                self._owner_status_label.setText("Group has no owners.")
             return
 
         for owner in owners_list:
-            name = owner.display_name or owner.user_principal_name or owner.mail or owner.id
+            name = (
+                owner.display_name
+                or owner.user_principal_name
+                or owner.mail
+                or owner.id
+            )
             detail = owner.user_principal_name or owner.mail or ""
             text = name if not detail else f"{name} — {detail}"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, owner.id)
             self._owners_list.addItem(item)
-        self._owner_status_label.setText(f"{len(owners_list)} owners loaded.")
+        summary = [f"{len(owners_list)} owners loaded"]
+        if refreshed_at:
+            summary.append(f"Loaded {self._format_age(refreshed_at)}")
+        self._owner_status_label.setText(" • ".join(summary))
 
     def selected_member_id(self) -> str | None:
         item = self._members_list.currentItem()
@@ -346,7 +458,9 @@ class GroupCreateDialog(QDialog):
 
         layout.addLayout(form)
 
-        self._button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
+        )
         self._button_box.accepted.connect(self._handle_accept)
         self._button_box.rejected.connect(self.reject)
 
@@ -357,7 +471,9 @@ class GroupCreateDialog(QDialog):
     def _handle_accept(self) -> None:
         name = self._name_input.text().strip()
         if not name:
-            QMessageBox.warning(self, "Missing name", "Please provide a display name for the group.")
+            QMessageBox.warning(
+                self, "Missing name", "Please provide a display name for the group."
+            )
             return
         nickname = re.sub(r"[^a-zA-Z0-9]", "", name).lower() or "group"
         description = self._description_input.text().strip() or None
@@ -394,7 +510,9 @@ class GroupCreateDialog(QDialog):
                 },
             )
 
-        self._payload = {key: value for key, value in payload.items() if value is not None}
+        self._payload = {
+            key: value for key, value in payload.items() if value is not None
+        }
         self.accept()
 
     def payload(self) -> dict[str, object] | None:
@@ -425,7 +543,10 @@ class MembershipRuleDialog(QDialog):
         self._editor.setPlainText(rule or "")
         layout.addWidget(self._editor, stretch=1)
 
-        self._button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save)
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Save
+        )
         self._button_box.accepted.connect(self.accept)
         self._button_box.rejected.connect(self.reject)
         layout.addWidget(self._button_box)
@@ -452,15 +573,34 @@ class GroupsWidget(PageScaffold):
         self._refresh_dialog: ProgressDialog | None = None
         self._refresh_in_progress = False
 
-        self._refresh_button = make_toolbar_button("Refresh", tooltip="Refresh groups from Microsoft Graph.")
-        self._force_refresh_button = make_toolbar_button("Force refresh", tooltip="Bypass cache and refetch groups.")
-        self._load_members_button = make_toolbar_button("Load members", tooltip="Load membership for the selected group.")
-        self._load_owners_button = make_toolbar_button("Load owners", tooltip="Load owners for the selected group.")
-        self._add_member_button = make_toolbar_button("Add member", tooltip="Add a member by object ID.")
-        self._remove_member_button = make_toolbar_button("Remove member", tooltip="Remove the selected member from the group.")
-        self._edit_rule_button = make_toolbar_button("Edit rule", tooltip="Edit the dynamic membership rule for the selected group.")
-        self._create_group_button = make_toolbar_button("Create", tooltip="Create a new group.")
-        self._delete_group_button = make_toolbar_button("Delete", tooltip="Delete the selected group.")
+        self._refresh_button = make_toolbar_button(
+            "Refresh", tooltip="Refresh groups from Microsoft Graph."
+        )
+        self._force_refresh_button = make_toolbar_button(
+            "Force refresh", tooltip="Bypass cache and refetch groups."
+        )
+        self._load_members_button = make_toolbar_button(
+            "Load members", tooltip="Load membership for the selected group."
+        )
+        self._load_owners_button = make_toolbar_button(
+            "Load owners", tooltip="Load owners for the selected group."
+        )
+        self._add_member_button = make_toolbar_button(
+            "Add member", tooltip="Add a member by object ID."
+        )
+        self._remove_member_button = make_toolbar_button(
+            "Remove member", tooltip="Remove the selected member from the group."
+        )
+        self._edit_rule_button = make_toolbar_button(
+            "Edit rule",
+            tooltip="Edit the dynamic membership rule for the selected group.",
+        )
+        self._create_group_button = make_toolbar_button(
+            "Create", tooltip="Create a new group."
+        )
+        self._delete_group_button = make_toolbar_button(
+            "Delete", tooltip="Delete the selected group."
+        )
         self._send_assignments_button = make_toolbar_button(
             "Assignments",
             tooltip="Stage the selected group for the assignment centre.",
@@ -494,6 +634,10 @@ class GroupsWidget(PageScaffold):
         self._selected_group_ids: set[str] = set()
         self._command_unregister: Callable[[], None] | None = None
         self._group_lookup: dict[str, DirectoryGroup] = {}
+        self._group_parents: dict[str, set[str]] = {}
+        self._group_children: dict[str, list[str]] = {}
+        self._hierarchy_loaded = False
+        self._hierarchy_loading = False
         self._tree_item_map: dict[str, QTreeWidgetItem] = {}
         self._member_page_size = 100
         self._member_pages: list[list[GroupMember]] = []
@@ -514,7 +658,9 @@ class GroupsWidget(PageScaffold):
         self._edit_rule_button.clicked.connect(self._handle_edit_rule_clicked)
         self._create_group_button.clicked.connect(self._handle_create_group_clicked)
         self._delete_group_button.clicked.connect(self._handle_delete_group_clicked)
-        self._send_assignments_button.clicked.connect(self._handle_send_to_assignments_clicked)
+        self._send_assignments_button.clicked.connect(
+            self._handle_send_to_assignments_clicked
+        )
 
         self._controller.register_callbacks(
             refreshed=self._handle_groups_refreshed,
@@ -588,7 +734,9 @@ class GroupsWidget(PageScaffold):
 
         self._group_tree = QTreeWidget()
         self._group_tree.setHeaderHidden(True)
-        self._group_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._group_tree.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self._group_tree.setAlternatingRowColors(True)
         tree_layout.addWidget(self._group_tree)
 
@@ -609,15 +757,27 @@ class GroupsWidget(PageScaffold):
         splitter.addWidget(left_container)
 
         self._detail_pane = GroupDetailPane(parent=splitter)
-        self._detail_pane.members_next_requested.connect(self._handle_members_next_requested)
-        self._detail_pane.members_prev_requested.connect(self._handle_members_prev_requested)
+        self._detail_pane.members_next_requested.connect(
+            self._handle_members_next_requested
+        )
+        self._detail_pane.members_prev_requested.connect(
+            self._handle_members_prev_requested
+        )
+        self._detail_pane.membersRefreshRequested.connect(
+            self._handle_load_members_clicked
+        )
+        self._detail_pane.ownersRefreshRequested.connect(
+            self._handle_load_owners_clicked
+        )
         splitter.addWidget(self._detail_pane)
 
         self.body_layout.addWidget(splitter, stretch=1)
 
         if selection_model := self._table.selectionModel():
             selection_model.selectionChanged.connect(self._handle_selection_changed)
-        self._group_tree.itemSelectionChanged.connect(self._handle_tree_selection_changed)
+        self._group_tree.itemSelectionChanged.connect(
+            self._handle_tree_selection_changed
+        )
 
         self._proxy.modelReset.connect(self._refresh_filtered_views)
         self._proxy.rowsInserted.connect(lambda *_: self._refresh_filtered_views())
@@ -653,6 +813,10 @@ class GroupsWidget(PageScaffold):
         if groups:
             self._table.selectRow(0)
         self._group_tree.setEnabled(True)
+        self._group_parents.clear()
+        self._group_children.clear()
+        self._hierarchy_loaded = False
+        self._schedule_hierarchy_refresh()
 
     def _handle_groups_refreshed(
         self,
@@ -666,6 +830,9 @@ class GroupsWidget(PageScaffold):
         self._model.set_groups(groups_list)
         self._update_group_lookup(groups_list)
         self._apply_filter_options(groups_list)
+        self._group_parents.clear()
+        self._group_children.clear()
+        self._hierarchy_loaded = False
         self._refresh_filtered_views()
         self._group_tree.setEnabled(True)
         if selected_id:
@@ -677,6 +844,7 @@ class GroupsWidget(PageScaffold):
                 f"Loaded {len(groups_list):,} groups.",
                 level=ToastLevel.SUCCESS,
             )
+        self._schedule_hierarchy_refresh()
 
     def _finish_refresh(self, *, mark_finished: bool = False) -> None:
         if (
@@ -701,15 +869,23 @@ class GroupsWidget(PageScaffold):
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
         self._finish_refresh()
-        detail = f"{type(event.error).__name__}: {event.error}"
-        self._list_message.display(
-            "Group operation failed. Review the inline details and retry.",
-            level=ToastLevel.ERROR,
-            detail=detail,
-        )
+        descriptor = describe_exception(event.error)
+        detail_lines = [descriptor.detail]
+        if descriptor.transient:
+            detail_lines.append(
+                "This issue appears transient. Retry after a short wait."
+            )
+        if descriptor.suggestion:
+            detail_lines.append(f"Suggested action: {descriptor.suggestion}")
+        detail_text = "\n\n".join(detail_lines)
+        level = _toast_level_for(descriptor.severity)
+        self._list_message.display(descriptor.headline, level=level, detail=detail_text)
+        toast_message = descriptor.headline
+        if descriptor.transient:
+            toast_message = f"{descriptor.headline} Retry after a short wait."
         self._context.show_notification(
-            "Group operation failed. See inline details for more information.",
-            level=ToastLevel.ERROR,
+            toast_message,
+            level=level,
             duration_ms=8000,
         )
 
@@ -776,15 +952,21 @@ class GroupsWidget(PageScaffold):
         dialog.set_message("Refreshing groups…")
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
-        self._context.run_async(self._refresh_async(force=force, token_source=token_source))
+        self._context.run_async(
+            self._refresh_async(force=force, token_source=token_source)
+        )
 
-    async def _refresh_async(self, *, force: bool, token_source: CancellationTokenSource) -> None:
+    async def _refresh_async(
+        self, *, force: bool, token_source: CancellationTokenSource
+    ) -> None:
         token = token_source.token
         try:
             await self._controller.refresh(force=force, cancellation_token=token)
         except CancellationError:
             self._finish_refresh()
-            self._context.show_notification("Group refresh cancelled.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "Group refresh cancelled.", level=ToastLevel.INFO
+            )
         except Exception:  # noqa: BLE001
             raise
 
@@ -822,7 +1004,10 @@ class GroupsWidget(PageScaffold):
         try:
             owners = await self._controller.list_owners(group_id)
             if self._selected_group and self._selected_group.id == group_id:
-                self._detail_pane.set_owners(owners)
+                self._detail_pane.set_owners(
+                    owners,
+                    refreshed_at=self._controller.owner_freshness(group_id),
+                )
         except Exception as exc:  # noqa: BLE001
             self._context.show_notification(
                 f"Failed to load owners: {exc}",
@@ -881,7 +1066,9 @@ class GroupsWidget(PageScaffold):
         rule = dialog.rule()
         current_rule = (group.membership_rule or "").strip() or None
         if rule == current_rule:
-            self._context.show_notification("Membership rule unchanged.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "Membership rule unchanged.", level=ToastLevel.INFO
+            )
             return
         self._context.set_busy("Updating membership rule…")
         self._context.run_async(self._update_rule_async(group.id, rule))
@@ -890,9 +1077,13 @@ class GroupsWidget(PageScaffold):
         try:
             await self._controller.update_membership_rule(group_id, rule)
             if self._selected_group and self._selected_group.id == group_id:
-                self._selected_group = self._selected_group.model_copy(update={"membership_rule": rule})
+                self._selected_group = self._selected_group.model_copy(
+                    update={"membership_rule": rule}
+                )
                 self._detail_pane.display_group(self._selected_group)
-            self._context.show_notification("Membership rule updated.", level=ToastLevel.SUCCESS)
+            self._context.show_notification(
+                "Membership rule updated.", level=ToastLevel.SUCCESS
+            )
         except Exception as exc:  # noqa: BLE001
             self._context.show_notification(
                 f"Failed to update membership rule: {exc}",
@@ -961,7 +1152,9 @@ class GroupsWidget(PageScaffold):
             )
             return
         stage_groups(staged)
-        command = self._context.command_registry.get("assignments.consume-staged-groups")
+        command = self._context.command_registry.get(
+            "assignments.consume-staged-groups"
+        )
         if command is not None:
             command.callback()
             self._context.show_notification(
@@ -1056,7 +1249,12 @@ class GroupsWidget(PageScaffold):
         types = sorted({_group_type_label(group) for group in groups}, key=str.lower)
         mail_states = ["Mail enabled", "Mail disabled"]
         self._populate_combo(self._type_combo, "All types", types)
-        self._populate_combo(self._mail_combo, "Mail state", ["enabled", "disabled"], display_labels=mail_states)
+        self._populate_combo(
+            self._mail_combo,
+            "Mail state",
+            ["enabled", "disabled"],
+            display_labels=mail_states,
+        )
 
     def _populate_combo(
         self,
@@ -1084,9 +1282,7 @@ class GroupsWidget(PageScaffold):
         self._rebuild_group_tree()
         visible_groups = self._current_filtered_groups()
         visible_ids = {
-            group.id
-            for group in visible_groups
-            if getattr(group, "id", None)
+            group.id for group in visible_groups if getattr(group, "id", None)
         }
         if self._selected_group_ids and not (self._selected_group_ids & visible_ids):
             self._selected_group_ids.clear()
@@ -1095,8 +1291,14 @@ class GroupsWidget(PageScaffold):
             self._selected_group_ids &= visible_ids
             self._set_table_selection(self._selected_group_ids)
             self._set_tree_selection(self._selected_group_ids)
-            if self._selected_group and self._selected_group.id not in self._selected_group_ids:
-                group = next((g for g in visible_groups if g.id in self._selected_group_ids), None)
+            if (
+                self._selected_group
+                and self._selected_group.id not in self._selected_group_ids
+            ):
+                group = next(
+                    (g for g in visible_groups if g.id in self._selected_group_ids),
+                    None,
+                )
                 if group is not None:
                     self._apply_group_selection([group])
         self._update_summary()
@@ -1112,10 +1314,65 @@ class GroupsWidget(PageScaffold):
 
     def _update_group_lookup(self, groups: Iterable[DirectoryGroup]) -> None:
         self._group_lookup = {
-            group.id: group
-            for group in groups
-            if getattr(group, "id", None)
+            group.id: group for group in groups if getattr(group, "id", None)
         }
+
+    def _schedule_hierarchy_refresh(self) -> None:
+        if self._services.groups is None or not self._group_lookup:
+            return
+        if self._hierarchy_loading:
+            return
+        self._context.run_async(self._load_group_hierarchy_async())
+
+    async def _load_group_hierarchy_async(self) -> None:
+        if self._hierarchy_loading:
+            return
+        group_ids = [group_id for group_id in self._group_lookup.keys() if group_id]
+        if not group_ids:
+            return
+        self._hierarchy_loading = True
+        try:
+            mapping = await self._controller.member_of_map(group_ids)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to load group hierarchy", exc_info=exc)
+            self._hierarchy_loaded = False
+            return
+        finally:
+            self._hierarchy_loading = False
+
+        parents: dict[str, set[str]] = {}
+        for group_id in group_ids:
+            entries = mapping.get(group_id, []) if mapping else []
+            parents[group_id] = {parent for parent in entries if parent}
+
+        children: dict[str, list[str]] = {}
+        for child_id, parent_ids in parents.items():
+            for parent_id in parent_ids:
+                if parent_id not in self._group_lookup:
+                    continue
+                children.setdefault(parent_id, []).append(child_id)
+
+        for parent_id, child_list in children.items():
+            child_list.sort(
+                key=lambda gid: (
+                    (
+                        self._group_lookup.get(gid).display_name
+                        if self._group_lookup.get(gid)
+                        else gid
+                    )
+                    or ""
+                ).lower(),
+            )
+
+        self._group_parents = parents
+        self._group_children = children
+        self._hierarchy_loaded = True
+        logger.debug(
+            "Fetched group hierarchy",
+            groups=len(group_ids),
+            parent_edges=sum(len(values) for values in parents.values()),
+        )
+        self._refresh_filtered_views()
 
     def _rebuild_group_tree(self) -> None:
         groups = self._current_filtered_groups()
@@ -1130,6 +1387,16 @@ class GroupsWidget(PageScaffold):
             self._group_tree.blockSignals(False)
             return
 
+        if self._hierarchy_loaded and self._group_children:
+            self._populate_hierarchy_tree(groups)
+        else:
+            self._populate_type_tree(groups)
+
+        self._group_tree.blockSignals(False)
+        if self._selected_group_ids:
+            self._set_tree_selection(self._selected_group_ids)
+
+    def _populate_type_tree(self, groups: Iterable[DirectoryGroup]) -> None:
         categories: dict[str, QTreeWidgetItem] = {}
         for group in groups:
             group_id = getattr(group, "id", None)
@@ -1138,34 +1405,127 @@ class GroupsWidget(PageScaffold):
             type_label = _group_type_label(group)
             parent = categories.get(type_label)
             if parent is None:
-                parent = QTreeWidgetItem([f"{type_label}"])
+                parent = QTreeWidgetItem([type_label])
                 parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 categories[type_label] = parent
                 self._group_tree.addTopLevelItem(parent)
-            display = (
-                group.display_name
-                or group.mail
-                or group.mail_nickname
-                or group_id
-            )
-            child = QTreeWidgetItem([display])
-            child.setData(0, Qt.ItemDataRole.UserRole, group_id)
-            tooltip_parts = [
-                group.description or "",
-                f"Mail: {group.mail}" if group.mail else "",
-            ]
-            tooltip = "\n".join(part for part in tooltip_parts if part)
-            if tooltip:
-                child.setToolTip(0, tooltip)
-            parent.addChild(child)
-            self._tree_item_map[group_id] = child
+            item = self._create_tree_item_for_group(group)
+            parent.addChild(item)
+            self._tree_item_map[group_id] = item
 
         for parent in categories.values():
             parent.setExpanded(True)
 
-        self._group_tree.blockSignals(False)
-        if self._selected_group_ids:
-            self._set_tree_selection(self._selected_group_ids)
+    def _populate_hierarchy_tree(self, groups: Iterable[DirectoryGroup]) -> None:
+        visible_lookup = {
+            group.id: group
+            for group in groups
+            if getattr(group, "id", None)
+        }
+        visible_ids = set(visible_lookup.keys())
+        if not visible_ids:
+            return
+
+        parent_map = {
+            group_id: {
+                parent
+                for parent in self._group_parents.get(group_id, set())
+                if parent in visible_ids
+            }
+            for group_id in visible_ids
+        }
+        child_map: dict[str, list[str]] = {}
+        for parent_id, children in self._group_children.items():
+            filtered = [child for child in children if child in visible_ids]
+            if filtered:
+                child_map[parent_id] = filtered
+
+        def sort_key(group_id: str) -> tuple[str, str]:
+            group = visible_lookup.get(group_id)
+            label = (
+                group.display_name
+                or group.mail
+                or group.mail_nickname
+                or group_id
+                or ""
+            )
+            return (label.lower(), group_id)
+
+        roots = [group_id for group_id in visible_ids if not parent_map.get(group_id)]
+        if not roots:
+            roots = list(visible_ids)
+        roots.sort(key=sort_key)
+
+        for root_id in roots:
+            group = visible_lookup.get(root_id)
+            if group is None:
+                continue
+            root_item = self._create_tree_item_for_group(group)
+            self._group_tree.addTopLevelItem(root_item)
+            self._tree_item_map[root_id] = root_item
+            self._populate_hierarchy_children(
+                root_item,
+                root_id,
+                visible_lookup,
+                child_map,
+                sort_key,
+                path={root_id},
+            )
+            root_item.setExpanded(True)
+
+    def _populate_hierarchy_children(
+        self,
+        parent_item: QTreeWidgetItem,
+        parent_id: str,
+        lookup: dict[str, DirectoryGroup],
+        child_map: dict[str, list[str]],
+        sort_key,
+        *,
+        path: set[str],
+    ) -> None:
+        children = child_map.get(parent_id, [])
+        for child_id in sorted(children, key=sort_key):
+            if child_id in path:
+                continue
+            group = lookup.get(child_id)
+            if group is None:
+                continue
+            child_item = self._create_tree_item_for_group(group)
+            parent_item.addChild(child_item)
+            self._tree_item_map[child_id] = child_item
+            new_path = set(path)
+            new_path.add(child_id)
+            self._populate_hierarchy_children(
+                child_item,
+                child_id,
+                lookup,
+                child_map,
+                sort_key,
+                path=new_path,
+            )
+            child_item.setExpanded(True)
+
+    def _create_tree_item_for_group(self, group: DirectoryGroup) -> QTreeWidgetItem:
+        group_id = getattr(group, "id", None)
+        display = (
+            group.display_name
+            or group.mail
+            or group.mail_nickname
+            or group_id
+            or "Unnamed group"
+        )
+        item = QTreeWidgetItem([display])
+        if group_id:
+            item.setData(0, Qt.ItemDataRole.UserRole, group_id)
+        tooltip_parts = []
+        if group.description:
+            tooltip_parts.append(group.description)
+        if group.mail:
+            tooltip_parts.append(f"Mail: {group.mail}")
+        tooltip = "\n".join(part for part in tooltip_parts if part)
+        if tooltip:
+            item.setToolTip(0, tooltip)
+        return item
 
     def _set_tree_selection(self, group_ids: Iterable[str]) -> None:
         self._group_tree.blockSignals(True)
@@ -1197,7 +1557,8 @@ class GroupsWidget(PageScaffold):
             if proxy_index.isValid():
                 selection_model.select(
                     proxy_index,
-                    QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
                 )
                 if first_proxy is None:
                     first_proxy = proxy_index
@@ -1256,9 +1617,7 @@ class GroupsWidget(PageScaffold):
     def _apply_group_selection(self, groups: list[DirectoryGroup]) -> None:
         previous_id = self._selected_group.id if self._selected_group else None
         self._selected_group_ids = {
-            group.id
-            for group in groups
-            if getattr(group, "id", None)
+            group.id for group in groups if getattr(group, "id", None)
         }
         next_group = groups[0] if groups else None
         self._selected_group = next_group
@@ -1274,7 +1633,10 @@ class GroupsWidget(PageScaffold):
                 self._prepare_member_state_for_group(next_group)
             owner_cache = self._controller.cached_owners(next_group.id)
             if owner_cache is not None:
-                self._detail_pane.set_owners(owner_cache)
+                self._detail_pane.set_owners(
+                    owner_cache,
+                    refreshed_at=self._controller.owner_freshness(next_group.id),
+                )
             else:
                 self._detail_pane.clear_owners()
 
@@ -1318,15 +1680,23 @@ class GroupsWidget(PageScaffold):
         elif self._member_stream is not None and self._member_stream.has_more:
             has_more = True
         self._member_page_index = index
+        refreshed_at = (
+            self._controller.member_freshness(self._member_group_id)
+            if self._member_group_id
+            else None
+        )
         self._detail_pane.set_members(
             page,
             page_index=index,
             has_more=has_more,
             total_loaded=self._member_total_loaded or len(page),
+            refreshed_at=refreshed_at,
         )
 
     def _start_member_stream(self, group_id: str) -> None:
-        self._member_stream = self._controller.member_stream(group_id, page_size=self._member_page_size)
+        self._member_stream = self._controller.member_stream(
+            group_id, page_size=self._member_page_size
+        )
         self._member_group_id = group_id
         self._member_pages = []
         self._member_page_index = -1
@@ -1350,9 +1720,19 @@ class GroupsWidget(PageScaffold):
                 self._controller.cache_members(group_id, page, append=True)
                 self._display_member_page(len(self._member_pages) - 1)
             elif not self._member_pages:
-                self._detail_pane.set_members([], page_index=0, has_more=False, total_loaded=0)
+                self._detail_pane.set_members(
+                    [],
+                    page_index=0,
+                    has_more=False,
+                    total_loaded=0,
+                    refreshed_at=self._controller.member_freshness(group_id),
+                )
             else:
-                current_index = self._member_page_index if self._member_page_index >= 0 else len(self._member_pages) - 1
+                current_index = (
+                    self._member_page_index
+                    if self._member_page_index >= 0
+                    else len(self._member_pages) - 1
+                )
                 self._display_member_page(max(0, current_index))
         except Exception as exc:  # noqa: BLE001
             self._context.show_notification(
@@ -1429,7 +1809,9 @@ class GroupsWidget(PageScaffold):
         if (group.membership_rule or "").strip():
             return True
         group_types = group.group_types or []
-        return any(value.lower() == "dynamicmembership" for value in group_types if value)
+        return any(
+            value.lower() == "dynamicmembership" for value in group_types if value
+        )
 
     def _handle_service_unavailable(self) -> None:
         self._table.setEnabled(False)

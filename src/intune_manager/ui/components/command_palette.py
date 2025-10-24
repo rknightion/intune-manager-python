@@ -29,7 +29,9 @@ class CommandPalette(QDialog):
         executor: CommandExecutor,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        super().__init__(
+            parent, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+        )
         self.setModal(True)
         self.setObjectName("CommandPalette")
         self._registry = registry

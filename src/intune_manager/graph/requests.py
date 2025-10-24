@@ -102,7 +102,9 @@ def mobile_app_assignment_update_request(
     return GraphRequest(method="PATCH", url=path, body=payload)
 
 
-def mobile_app_assignment_delete_request(app_id: str, assignment_id: str) -> GraphRequest:
+def mobile_app_assignment_delete_request(
+    app_id: str, assignment_id: str
+) -> GraphRequest:
     path = f"/deviceAppManagement/mobileApps/{app_id}/assignments/{assignment_id}"
     return GraphRequest(method="DELETE", url=path)
 
@@ -132,7 +134,9 @@ def configuration_assign_request(
     configuration_id: str,
     body: dict[str, Any],
     *,
-    endpoint: Literal["deviceConfigurations", "configurationPolicies"] = "deviceConfigurations",
+    endpoint: Literal[
+        "deviceConfigurations", "configurationPolicies"
+    ] = "deviceConfigurations",
 ) -> GraphRequest:
     """Build assign request for configuration profiles and templates."""
 

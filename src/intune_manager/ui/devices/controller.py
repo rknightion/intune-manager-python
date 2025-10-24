@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Iterable, List
 
 from intune_manager.data import ManagedDevice
 from intune_manager.graph.requests import DeviceActionName
 from intune_manager.services import DeviceService, ServiceErrorEvent, ServiceRegistry
-from intune_manager.services.devices import DeviceActionEvent, DeviceRefreshProgressEvent
-from intune_manager.utils import CancellationToken
+from intune_manager.services.devices import (
+    DeviceActionEvent,
+    DeviceRefreshProgressEvent,
+)
+from intune_manager.utils import CancellationToken, get_logger
+
+from .models import DeviceTimelineEntry
+
+
+logger = get_logger(__name__)
 
 
 class DeviceController:
@@ -41,7 +50,9 @@ class DeviceController:
         if action is not None:
             self._subscriptions.append(self._service.actions.subscribe(action))
         if progress is not None:
-            self._subscriptions.append(self._service.refresh_progress.subscribe(progress))
+            self._subscriptions.append(
+                self._service.refresh_progress.subscribe(progress)
+            )
 
     def dispose(self) -> None:
         while self._subscriptions:
@@ -62,6 +73,11 @@ class DeviceController:
         if self._service is None:
             return True
         return self._service.is_cache_stale(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        if self._service is None:
+            return None
+        return self._service.last_refresh(tenant_id=tenant_id)
 
     def available_actions(self) -> List[DeviceActionName]:
         return ["syncDevice", "retire", "wipe", "rebootNow", "shutDown"]
@@ -101,6 +117,54 @@ class DeviceController:
             parameters=parameters,
             cancellation_token=cancellation_token,
         )
+
+    # ------------------------------------------------------------ Timeline data
+
+    async def load_timeline(
+        self,
+        device_id: str,
+        *,
+        tenant_id: str | None = None,
+        limit: int = 50,
+        force_refresh: bool = False,
+        aliases: Iterable[str] | None = None,
+    ) -> list[DeviceTimelineEntry]:
+        """Return recent audit events associated with a device."""
+
+        audit_service = self._services.audit
+        if audit_service is None or not device_id:
+            return []
+
+        try:
+            if force_refresh or audit_service.is_cache_stale(tenant_id=tenant_id):
+                await audit_service.refresh(
+                    tenant_id=tenant_id,
+                    force=True,
+                    top=max(limit * 2, 100),
+                )
+        except Exception:  # noqa: BLE001 - timeline fetch should not crash UI
+            logger.exception("Failed to refresh audit timeline", device_id=device_id)
+            return []
+
+        events = audit_service.list_cached(tenant_id=tenant_id)
+        targets = {device_id.lower()}
+        if aliases:
+            targets.update(alias.lower() for alias in aliases if alias)
+        entries: list[DeviceTimelineEntry] = []
+        for event in events:
+            if not any(
+                DeviceTimelineEntry.references_device(event, target)
+                for target in targets
+            ):
+                continue
+            entries.append(DeviceTimelineEntry.from_audit_event(event))
+        entries.sort(
+            key=lambda entry: entry.timestamp or datetime.min,
+            reverse=True,
+        )
+        if limit:
+            return entries[:limit]
+        return entries
 
 
 __all__ = ["DeviceController"]

@@ -97,7 +97,10 @@ class AssignmentCreateDialog(QDialog):
         for assignment_filter in filters:
             if not assignment_filter.id:
                 continue
-            self._filter_combo.addItem(assignment_filter.display_name or assignment_filter.id, assignment_filter.id)
+            self._filter_combo.addItem(
+                assignment_filter.display_name or assignment_filter.id,
+                assignment_filter.id,
+            )
         form.addWidget(QLabel("Assignment filter"), 2, 0)
         form.addWidget(self._filter_combo, 2, 1)
 
@@ -109,7 +112,9 @@ class AssignmentCreateDialog(QDialog):
 
         layout.addLayout(form)
 
-        self._button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         self._button_box.accepted.connect(self._handle_accept)
         self._button_box.rejected.connect(self.reject)
         layout.addWidget(self._button_box)
@@ -131,11 +136,15 @@ class AssignmentCreateDialog(QDialog):
         if target_type == "group":
             group_id = self._group_combo.currentData()
             if not group_id:
-                QMessageBox.warning(self, "Missing group", "Select a group target before continuing.")
+                QMessageBox.warning(
+                    self, "Missing group", "Select a group target before continuing."
+                )
                 return
             filter_id = self._filter_combo.currentData()
             if filter_id:
-                target = FilteredGroupAssignmentTarget(group_id=group_id, assignment_filter_id=filter_id)
+                target = FilteredGroupAssignmentTarget(
+                    group_id=group_id, assignment_filter_id=filter_id
+                )
             else:
                 target = GroupAssignmentTarget(group_id=group_id)
         else:
@@ -175,7 +184,11 @@ class AssignmentEditorDialog(QDialog):
         self._groups = groups
         self._filters = filters
         self._group_lookup = {group.id: group for group in groups if group.id}
-        self._filter_lookup = {assignment_filter.id: assignment_filter for assignment_filter in filters if assignment_filter.id}
+        self._filter_lookup = {
+            assignment_filter.id: assignment_filter
+            for assignment_filter in filters
+            if assignment_filter.id
+        }
         self._combos: list[QComboBox] = []
         self._export_callback = on_export
         self._updating_settings = False
@@ -189,7 +202,9 @@ class AssignmentEditorDialog(QDialog):
         layout.addWidget(header)
 
         self._table = QTableWidget(0, 5, parent=self)
-        self._table.setHorizontalHeaderLabels(["Target", "Intent", "Filter", "Type", "Schedule"])
+        self._table.setHorizontalHeaderLabels(
+            ["Target", "Intent", "Filter", "Type", "Schedule"]
+        )
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -225,7 +240,9 @@ class AssignmentEditorDialog(QDialog):
 
         settings_box = QGroupBox("Assignment settings (JSON)")
         settings_layout = QVBoxLayout(settings_box)
-        settings_hint = QLabel("Paste Graph assignment settings payloads (optional). Leave empty for defaults.")
+        settings_hint = QLabel(
+            "Paste Graph assignment settings payloads (optional). Leave empty for defaults."
+        )
         settings_hint.setWordWrap(True)
         settings_hint.setStyleSheet("color: palette(mid);")
         settings_layout.addWidget(settings_hint)
@@ -246,16 +263,21 @@ class AssignmentEditorDialog(QDialog):
         )
         layout.addWidget(helper_box)
 
-        self._auto_export_checkbox = QCheckBox("Export assignments before applying", parent=self)
+        self._auto_export_checkbox = QCheckBox(
+            "Export assignments before applying", parent=self
+        )
         self._auto_export_checkbox.setChecked(auto_export_default)
         layout.addWidget(self._auto_export_checkbox)
 
         self._button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Save,
+            QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Save,
             parent=self,
         )
         self._export_button = QPushButton("Export JSON", parent=self)
-        self._button_box.addButton(self._export_button, QDialogButtonBox.ButtonRole.ActionRole)
+        self._button_box.addButton(
+            self._export_button, QDialogButtonBox.ButtonRole.ActionRole
+        )
         layout.addWidget(self._button_box)
 
         self._button_box.accepted.connect(self.accept)
@@ -319,15 +341,27 @@ class AssignmentEditorDialog(QDialog):
     def _apply_settings_clicked(self) -> None:
         row = self._selected_row()
         if row is None:
-            QMessageBox.information(self, "No selection", "Select a target before applying settings.")
+            QMessageBox.information(
+                self, "No selection", "Select a target before applying settings."
+            )
             return
         text = self._settings_edit.toPlainText().strip()
         existing = self._assignments[row].settings
 
-        start_dt = _qdatetime_to_datetime(self._start_edit.dateTime()) if self._start_checkbox.isChecked() else None
-        deadline_dt = _qdatetime_to_datetime(self._deadline_edit.dateTime()) if self._deadline_checkbox.isChecked() else None
+        start_dt = (
+            _qdatetime_to_datetime(self._start_edit.dateTime())
+            if self._start_checkbox.isChecked()
+            else None
+        )
+        deadline_dt = (
+            _qdatetime_to_datetime(self._deadline_edit.dateTime())
+            if self._deadline_checkbox.isChecked()
+            else None
+        )
         if start_dt and deadline_dt and start_dt >= deadline_dt:
-            QMessageBox.warning(self, "Invalid schedule", "The deadline must be after the start time.")
+            QMessageBox.warning(
+                self, "Invalid schedule", "The deadline must be after the start time."
+            )
             return
 
         if text:
@@ -335,7 +369,9 @@ class AssignmentEditorDialog(QDialog):
                 payload = json.loads(text)
                 base_settings = AssignmentSettings.model_validate(payload)
             except (json.JSONDecodeError, ValidationError) as exc:
-                QMessageBox.warning(self, "Invalid settings", f"Unable to parse settings JSON: {exc}")
+                QMessageBox.warning(
+                    self, "Invalid settings", f"Unable to parse settings JSON: {exc}"
+                )
                 return
         else:
             base_settings = existing or AssignmentSettings()
@@ -350,18 +386,30 @@ class AssignmentEditorDialog(QDialog):
                 },
             )
 
-        self._assignments[row] = self._assignments[row].model_copy(update={"settings": settings_obj})
+        self._assignments[row] = self._assignments[row].model_copy(
+            update={"settings": settings_obj}
+        )
         self._rebuild_table()
         if self._table.rowCount() > 0:
             self._table.selectRow(min(row, self._table.rowCount() - 1))
             self._load_settings_for_row(min(row, self._table.rowCount() - 1))
 
         if settings_obj is None:
-            QMessageBox.information(self, "Settings cleared", "Advanced settings removed for the selected assignment.")
+            QMessageBox.information(
+                self,
+                "Settings cleared",
+                "Advanced settings removed for the selected assignment.",
+            )
         else:
-            QMessageBox.information(self, "Settings updated", "Advanced settings applied to the selected assignment.")
+            QMessageBox.information(
+                self,
+                "Settings updated",
+                "Advanced settings applied to the selected assignment.",
+            )
 
-    def _handle_selection_changed(self, current_row: int, _current_col: int, _prev_row: int, _prev_col: int) -> None:
+    def _handle_selection_changed(
+        self, current_row: int, _current_col: int, _prev_row: int, _prev_col: int
+    ) -> None:
         if current_row < 0:
             self._settings_edit.clear()
             return
@@ -376,7 +424,9 @@ class AssignmentEditorDialog(QDialog):
         self._updating_settings = True
         try:
             payload = assignment.settings.to_graph() if assignment.settings else {}
-            self._settings_edit.setPlainText(json.dumps(payload, indent=2) if payload else "")
+            self._settings_edit.setPlainText(
+                json.dumps(payload, indent=2) if payload else ""
+            )
         finally:
             self._updating_settings = False
         self._set_schedule_controls(assignment)
@@ -395,13 +445,17 @@ class AssignmentEditorDialog(QDialog):
             for intent in AssignmentIntent:
                 combo.addItem(intent.value, intent.value)
             combo.setCurrentText(assignment.intent.value)
-            combo.currentIndexChanged.connect(lambda _idx, row=row, widget=combo: self._update_intent(row, widget))
+            combo.currentIndexChanged.connect(
+                lambda _idx, row=row, widget=combo: self._update_intent(row, widget)
+            )
             self._table.setCellWidget(row, 1, combo)
             self._combos.append(combo)
             self._table.setItem(row, 2, filter_item)
             self._table.setItem(row, 3, type_item)
             schedule_item = QTableWidgetItem(self._schedule_label(assignment))
-            schedule_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            schedule_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
             self._table.setItem(row, 4, schedule_item)
 
         self._table.resizeColumnsToContents()
@@ -423,7 +477,9 @@ class AssignmentEditorDialog(QDialog):
         assignment = self._assignments[row]
         if selected == assignment.intent.value:
             return
-        self._assignments[row] = assignment.model_copy(update={"intent": AssignmentIntent(selected)})
+        self._assignments[row] = assignment.model_copy(
+            update={"intent": AssignmentIntent(selected)}
+        )
         schedule_item = self._table.item(row, 4)
         if schedule_item is not None:
             schedule_item.setText(self._schedule_label(self._assignments[row]))
@@ -436,7 +492,9 @@ class AssignmentEditorDialog(QDialog):
         if group_id:
             group = self._group_lookup.get(group_id)
             if group:
-                return group.display_name or group.mail or group.mail_nickname or group_id
+                return (
+                    group.display_name or group.mail or group.mail_nickname or group_id
+                )
             return group_id
         return getattr(target, "odata_type", "Unknown target")
 
@@ -445,7 +503,11 @@ class AssignmentEditorDialog(QDialog):
         if not filter_id:
             return "—"
         filter_obj = self._filter_lookup.get(filter_id)
-        return filter_obj.display_name if filter_obj and filter_obj.display_name else filter_id
+        return (
+            filter_obj.display_name
+            if filter_obj and filter_obj.display_name
+            else filter_id
+        )
 
     def _target_type_label(self, assignment: MobileAppAssignment) -> str:
         odata_type = getattr(assignment.target, "odata_type", "")
@@ -485,7 +547,6 @@ class AssignmentEditorDialog(QDialog):
     def _sync_schedule_inputs(self) -> None:
         self._start_edit.setEnabled(self._start_checkbox.isChecked())
         self._deadline_edit.setEnabled(self._deadline_checkbox.isChecked())
-
 
 
 __all__ = [

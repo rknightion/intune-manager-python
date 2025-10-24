@@ -267,18 +267,6 @@ src/intune_manager/
 
 
 
-NOT DONE INTENTIONALLY EXCLUDED (for now!):
- [ ] P6.8 Build Reports module (audit log viewer, export buttons, filter controls).
-  - Table view for audit events with filter toolbar (date range, actor, category) and integration with `ExportService`.
-  - Provide quick actions: export CSV/JSON, copy row, link to Azure portal entry.
-**P6.8 Reports Module** should expand to:
-- [ ] P6.8.1: Implement audit log table with pagination
-- [ ] P6.8.2: Add filter toolbar (date range picker, actor search, category dropdown)
-- [ ] P6.8.3: Build detail panel with full audit event JSON viewer
-- [ ] P6.8.4: Add export buttons (CSV, JSON) with range selection
-- [ ] P6.8.5: Implement copy row action for sharing
-- [ ] P6.8.6: Add deep link to Azure Portal audit entry
-- [ ] P6.8.7: Build compliance dashboard with charts (if Phase 6.3 charts implemented)
 
 
 - [x] P6.10.0 Ensure usability, keyboard shortcuts, light theme throughout (no dark theme). — NOTE: Added centralized shortcut map + overlay (src/intune_manager/ui/main/window.py, ui/components/shortcuts.py), enforced light-only theme with focus styling and removed toggles (ui/components/theme.py, ui/settings/page.py, ui/main/window.py), bootstrapped Qt translation manager + cached count optimisations for dashboard metrics (intune_manager/__init__.py, ui/i18n/manager.py, data/repositories/base.py, services/*/count_cached).
@@ -310,3 +298,46 @@ NOT DONE INTENTIONALLY EXCLUDED (for now!):
 - [x] P7.0.3: Wire cancellation tokens into all long-running service operations — NOTE: Extended cancellation support across Graph client, repositories, services, and controllers (devices/apps/groups/filters/configs/audit/sync/import)
 - [x] P7.0.4: Build reusable progress dialog with cancel button — NOTE: Added ui/components/progress.ProgressDialog and token-aware helpers
 - [x] P7.0.5: Integrate progress tracking into bulk operations UI — NOTE: Shared progress dialog + cancellation for assignment import, device/group refresh, and dashboard sync flows
+
+
+- [x] P7.0.6: Add inline error states in list views (error details) if suitable — NOTE: Added InlineStatusMessage component and wired devices/applications/groups tables to surface inline error details with toggleable diagnostics
+- [x] P7.0.9: Build transient error detection and surface issues to users if not already implemented — NOTE: Introduced describe_exception helper to classify transient Graph/network errors and updated major list views to surface inline guidance and levelled notifications
+- [x] P7.1 Implement Intune audit logs/events viewing and export workflow (collect intune logs from Graph API and device diagnostic logs if available and display them with an optional save dialog) — NOTE: Added Reports module with audit event table/detail, JSON export, and diagnostics log tab (`src/intune_manager/ui/reports/*`, `ui/main/window.py`).
+- [x] P7.2 Add clipboard utilities (permission list copy, device info copy etc) using Qt clipboard APIs. We do not need to be able to paste only copy to clipboard so users can paste information from the app in external locations — NOTE: Enabled copy actions for device summaries and Graph scopes/missing scopes (`ui/devices/widgets.py`, `ui/settings/widgets.py`) plus audit event JSON copy.
+- [x] P7.3 Implement notifications/haptics or alternatives (system notifications, subtle animations) respecting platform conventions. — NOTE: Wired toast notifications to OS-level alerts via `QSystemTrayIcon` fallback (`ui/main/window.py`).
+- [x] P7.4 Add cache management UI (display current cache status, clear local data, refresh triggers and other relevant functionality). — NOTE: Extended cache management tab with last refresh metadata and per-resource Graph refresh buttons (`ui/settings/page.py`, `data/cache_health.py`).
+- [x] P7.5 Assess and potentially improve performance for large tenants (list virtualization/pagination, incremental loading, cancellation support). — NOTE: Added chunked lazy loading for large application catalogs with deferred reselection (`ui/applications/models.py`, `ui/applications/widgets.py`).
+
+## Phase 7 – Supporting Features & Polish  ✳️ Goal: Match Swift niceties
+
+- [x] P7.7.3: Integrate command palette actions for bulk workflows and assignment exports — NOTE: `AssignmentsWidget` registers palette commands for apply/preview/exports/imports to cover bulk workflows (`src/intune_manager/ui/assignments/widgets.py`)
+- [x] P7.7.4: Add inline compliance badges and custom delegates for richer device table cells — NOTE: added device summary + compliance badge delegates for the grid (`src/intune_manager/ui/devices/delegates.py`, `widgets.py`)
+- [x] P7.7.5: Extend device detail pane with timeline/history once telemetry/historical device events arrive — NOTE: device detail pane loads audit timeline asynchronously via controller (`src/intune_manager/ui/devices/widgets.py`, `controller.py`, `models.py`)
+- [x] P7.7.6: Introduce advanced device filtering (enrollment source, threat state and others) — NOTE: expanded filter bar + proxy filters for management/ownership/enrollment/threat (`src/intune_manager/ui/devices/widgets.py`, `models.py`)
+- [x] P7.7.7: Extend groups hierarchy view to show real nested memberships from Graph member-of data — NOTE: batch memberOf loader + hierarchical tree rendering (`src/intune_manager/services/groups.py`, `src/intune_manager/ui/groups/widgets.py`)
+- [x] P7.7.9: Surface cached owner/member freshness indicators with manual "refresh page" control — NOTE: member/owner timestamps + refresh controls in detail pane (`src/intune_manager/ui/groups/widgets.py`, `controller.py`)
+- [x] P7.7.9.2: Roll out 7.7.9 to other modules/pages where appropriate or where it'd add value to do so — NOTE: Added `last_refresh` accessors to cache-backed services/controllers and surfaced freshness badges in Devices, Applications, and Dashboard metric cards (`services/*`, `ui/devices/widgets.py`, `ui/applications/widgets.py`, `ui/dashboard/widgets.py`)
+- [x] P7.7.10: Wire quick actions in dashboard for launching module-specific dialogs — NOTE: dashboard quick action buttons invoke command palette navigation/import workflows (`src/intune_manager/ui/dashboard/widgets.py`)
+- [x] P7.7.11: Extend assignment preview with side-by-side payload difference visualization — NOTE: added payload diff viewer with HTML side-by-side comparison (`src/intune_manager/ui/assignments/widgets.py`, `models.py`)
+
+
+
+
+
+
+
+
+
+NOT DONE INTENTIONALLY EXCLUDED (for now!):
+ [ ] P6.8 Build Reports module (audit log viewer, export buttons, filter controls).
+  - Table view for audit events with filter toolbar (date range, actor, category) and integration with `ExportService`.
+  - Provide quick actions: export CSV/JSON, copy row, link to Azure portal entry.
+**P6.8 Reports Module** should expand to:
+- [ ] P6.8.1: Implement audit log table with pagination
+- [ ] P6.8.2: Add filter toolbar (date range picker, actor search, category dropdown)
+- [ ] P6.8.3: Build detail panel with full audit event JSON viewer
+- [ ] P6.8.4: Add export buttons (CSV, JSON) with range selection
+- [ ] P6.8.5: Implement copy row action for sharing
+- [ ] P6.8.6: Add deep link to Azure Portal audit entry
+- [ ] P6.8.7: Build compliance dashboard with charts (if Phase 6.3 charts implemented)
+- [ ] P7.7.8: Integrate drag-drop between group tree and assignment editors

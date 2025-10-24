@@ -62,6 +62,7 @@ class AlertBanner(QFrame):
 
         self._message_label = QLabel()
         self._message_label.setWordWrap(True)
+        self._message_label.setStyleSheet("background: transparent;")
         layout.addWidget(self._message_label, stretch=1)
 
         self._action_button.setVisible(False)
@@ -95,8 +96,9 @@ class AlertBanner(QFrame):
             f"  border: 1px solid {style['border']};"
             "  border-radius: 10px;"
             "}"
-            "QLabel {"
+            "QFrame#AlertBanner QLabel {"
             f"  color: {style['text']};"
+            "  background: transparent;"
             "}"
         )
         self._message_label.setText(message)

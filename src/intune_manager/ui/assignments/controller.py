@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp, MobileAppAssignment
+from intune_manager.data import (
+    AssignmentFilter,
+    DirectoryGroup,
+    MobileApp,
+    MobileAppAssignment,
+)
 from intune_manager.services import (
     ApplicationService,
     AssignmentFilterService,
@@ -26,8 +31,12 @@ class AssignmentCenterController:
         self._application_service: ApplicationService | None = services.applications
         self._assignment_service: AssignmentService | None = services.assignments
         self._group_service: GroupService | None = services.groups
-        self._filter_service: AssignmentFilterService | None = services.assignment_filters
-        self._import_service: AssignmentImportService | None = services.assignment_import
+        self._filter_service: AssignmentFilterService | None = (
+            services.assignment_filters
+        )
+        self._import_service: AssignmentImportService | None = (
+            services.assignment_import
+        )
         self._subscriptions: list[Callable[[], None]] = []
 
     # ----------------------------------------------------------------- Events
@@ -39,12 +48,18 @@ class AssignmentCenterController:
         error: Callable[[ServiceErrorEvent], None] | None = None,
     ) -> None:
         if self._assignment_service is not None and applied is not None:
-            self._subscriptions.append(self._assignment_service.applied.subscribe(applied))
+            self._subscriptions.append(
+                self._assignment_service.applied.subscribe(applied)
+            )
         if error is not None:
             if self._assignment_service is not None:
-                self._subscriptions.append(self._assignment_service.errors.subscribe(error))
+                self._subscriptions.append(
+                    self._assignment_service.errors.subscribe(error)
+                )
             if self._application_service is not None:
-                self._subscriptions.append(self._application_service.errors.subscribe(error))
+                self._subscriptions.append(
+                    self._application_service.errors.subscribe(error)
+                )
             if self._group_service is not None:
                 self._subscriptions.append(self._group_service.errors.subscribe(error))
             if self._filter_service is not None:

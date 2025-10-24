@@ -1,0 +1,258 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64
+          - os: linux
+            arch: x64
+            runner: ubuntu-latest
+            artifact_name: IntuneManager.bin
+            output_path: src/intune_manager.dist/intune_manager.bin
+            asset_name: IntuneManager-linux-x64.bin
+            content_type: application/octet-stream
+
+          # Linux ARM64
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            artifact_name: IntuneManager.bin
+            output_path: src/intune_manager.dist/intune_manager.bin
+            asset_name: IntuneManager-linux-arm64.bin
+            content_type: application/octet-stream
+
+          # Windows x64
+          - os: windows
+            arch: x64
+            runner: windows-latest
+            artifact_name: IntuneManager.exe
+            output_path: src/intune_manager.dist/intune_manager.exe
+            asset_name: IntuneManager-windows-x64.exe
+            content_type: application/vnd.microsoft.portable-executable
+
+          # Windows ARM64
+          - os: windows
+            arch: arm64
+            runner: windows-11-arm
+            artifact_name: IntuneManager.exe
+            output_path: src/intune_manager.dist/intune_manager.exe
+            asset_name: IntuneManager-windows-arm64.exe
+            content_type: application/vnd.microsoft.portable-executable
+
+          # macOS Intel
+          - os: macos
+            arch: x64
+            runner: macos-13
+            artifact_name: IntuneManager.app
+            output_path: src/intune_manager.dist/IntuneManager.app
+            asset_name: IntuneManager-macos-x64.app.zip
+            content_type: application/zip
+
+          # macOS ARM64
+          - os: macos
+            arch: arm64
+            runner: macos-14
+            artifact_name: IntuneManager.app
+            output_path: src/intune_manager.dist/IntuneManager.app
+            asset_name: IntuneManager-macos-arm64.app.zip
+            content_type: application/zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+          enable-cache: true
+
+      # Install ccache on supported platforms
+      - name: Install ccache (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ccache
+
+      - name: Install ccache (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ccache
+
+      # Restore ccache
+      - name: Cache ccache
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ~/.cache/ccache
+          key: ccache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          restore-keys: |
+            ccache-${{ matrix.os }}-${{ matrix.arch }}-
+
+      # Cache Nuitka build directory
+      - name: Cache Nuitka build
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/intune_manager.build
+            src/intune_manager.dist
+            src/intune_manager.onefile-build
+          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          restore-keys: |
+            nuitka-${{ matrix.os }}-${{ matrix.arch }}-
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run tests
+        run: uv run pytest -v
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION (from tag: $TAG)"
+
+      - name: Build with Nuitka
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: uv run nuitka src/intune_manager
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          echo "Checking for build output at: ${{ matrix.output_path }}"
+          if [ -e "${{ matrix.output_path }}" ]; then
+            echo "✓ Build artifact found"
+            ls -lh "${{ matrix.output_path }}"
+          else
+            echo "✗ Build artifact not found!"
+            echo "Contents of src directory:"
+            ls -la src/
+            exit 1
+          fi
+
+      # Zip macOS .app bundles for easier distribution
+      - name: Package macOS app bundle
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          cd src/intune_manager.dist
+          zip -r "../../${{ matrix.asset_name }}" IntuneManager.app
+          cd ../..
+          echo "Created: ${{ matrix.asset_name }}"
+          ls -lh "${{ matrix.asset_name }}"
+
+      # For non-macOS, just copy the binary
+      - name: Prepare release asset
+        if: matrix.os != 'macos'
+        shell: bash
+        run: |
+          cp "${{ matrix.output_path }}" "${{ matrix.asset_name }}"
+          echo "Prepared: ${{ matrix.asset_name }}"
+          ls -lh "${{ matrix.asset_name }}"
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: ${{ matrix.asset_name }}
+          fail_on_unmatched_files: true
+
+      - name: Upload to GitHub Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 0  # Keep forever
+
+      - name: Save ccache statistics
+        if: runner.os != 'Windows' && always()
+        run: |
+          echo "ccache statistics:"
+          ccache -s || true
+
+  create-package:
+    name: Publish to GitHub Packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lhR artifacts/
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+
+      - name: Create package metadata
+        run: |
+          cat > package.json << EOF
+          {
+            "name": "@${{ github.repository_owner }}/intune-manager",
+            "version": "${{ steps.version.outputs.version }}",
+            "description": "Microsoft Intune Manager - Cross-platform GUI for Intune management",
+            "repository": "${{ github.repository }}",
+            "license": "MIT",
+            "binaries": {
+              "linux-x64": "IntuneManager-linux-x64.bin",
+              "linux-arm64": "IntuneManager-linux-arm64.bin",
+              "windows-x64": "IntuneManager-windows-x64.exe",
+              "windows-arm64": "IntuneManager-windows-arm64.exe",
+              "macos-x64": "IntuneManager-macos-x64.app.zip",
+              "macos-arm64": "IntuneManager-macos-arm64.app.zip"
+            }
+          }
+          EOF
+          cat package.json
+
+      - name: Publish metadata to GitHub Packages
+        run: |
+          echo "Package published with version ${{ steps.version.outputs.version }}"
+          echo "Artifacts are available in GitHub Releases and as workflow artifacts"

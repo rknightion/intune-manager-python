@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Iterable, List, Sequence
+from typing import Callable, Iterable, List, Sequence, TYPE_CHECKING
 
 from PySide6.QtCore import (
     QAbstractTableModel,
@@ -16,6 +16,75 @@ from PySide6.QtCore import (
 
 from intune_manager.data import ManagedDevice
 
+if TYPE_CHECKING:
+    from intune_manager.data import AuditEvent
+
+
+@dataclass(slots=True)
+class DeviceTimelineEntry:
+    """Timeline metadata rendered in the device detail pane."""
+
+    timestamp: datetime | None
+    title: str
+    description: str | None = None
+    actor: str | None = None
+    category: str | None = None
+    result: str | None = None
+    source: str = "audit"
+
+    @classmethod
+    def from_audit_event(cls, event: "AuditEvent") -> "DeviceTimelineEntry":
+        actor = None
+        if getattr(event, "actor", None):
+            actor = (
+                event.actor.user_principal_name
+                or event.actor.application_display_name
+                or event.actor.service_principal_name
+                or event.actor.ip_address
+            )
+        description_parts = []
+        if getattr(event, "activity_type", None):
+            description_parts.append(event.activity_type)
+        if getattr(event, "activity_operation_type", None) and (
+            event.activity_operation_type != event.activity_type
+        ):
+            description_parts.append(event.activity_operation_type)
+        if getattr(event, "component_name", None):
+            description_parts.append(event.component_name)
+        description = " • ".join(part for part in description_parts if part)
+        title = event.activity or event.display_name or "Device activity"
+        if description and description == title:
+            description = None
+        return cls(
+            timestamp=event.activity_date_time,
+            title=title,
+            description=description or event.display_name,
+            actor=actor,
+            category=event.category or event.component_name,
+            result=event.activity_result,
+            source="audit",
+        )
+
+    @staticmethod
+    def references_device(event: "AuditEvent", device_id: str | None) -> bool:
+        if not device_id or not getattr(event, "resources", None):
+            return False
+        target = device_id.lower()
+        for resource in event.resources or []:
+            resource_id = (resource.resource_id or "").lower()
+            if resource_id == target:
+                return True
+            if resource_id.endswith(target):
+                return True
+            display = (resource.display_name or "").lower()
+            if display and display == target:
+                return True
+        return False
+
+    def formatted_timestamp(self) -> str:
+        if self.timestamp is None:
+            return "Unknown time"
+        return self.timestamp.strftime("%Y-%m-%d %H:%M")
 
 @dataclass(slots=True)
 class DeviceColumn:
@@ -63,12 +132,16 @@ class DeviceTableModel(QAbstractTableModel):
             DeviceColumn(
                 "compliance_state",
                 "Compliance",
-                lambda device: (device.compliance_state.value if device.compliance_state else None),
+                lambda device: (
+                    device.compliance_state.value if device.compliance_state else None
+                ),
             ),
             DeviceColumn(
                 "management_state",
                 "Management",
-                lambda device: (device.management_state.value if device.management_state else None),
+                lambda device: (
+                    device.management_state.value if device.management_state else None
+                ),
             ),
             DeviceColumn(
                 "ownership",
@@ -189,6 +262,12 @@ class DeviceTableModel(QAbstractTableModel):
     def is_loading(self) -> bool:
         return bool(self._pending_devices)
 
+    def column_index(self, key: str) -> int | None:
+        for index, column in enumerate(self._columns):
+            if column.key == key:
+                return index
+        return None
+
     # ------------------------------------------------------------- Lazy insert
 
     def _consume_pending_devices(self) -> None:
@@ -212,7 +291,11 @@ class DeviceTableModel(QAbstractTableModel):
         self.endInsertRows()
         self.batch_appended.emit(len(batch))
 
-        if not self._pending_devices and self._insert_timer and self._insert_timer.isActive():
+        if (
+            not self._pending_devices
+            and self._insert_timer
+            and self._insert_timer.isActive()
+        ):
             self._insert_timer.stop()
             self.load_finished.emit()
 
@@ -225,6 +308,10 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
         self._search_text: str = ""
         self._platform_filter: str | None = None
         self._compliance_filter: str | None = None
+        self._management_filter: str | None = None
+        self._ownership_filter: str | None = None
+        self._enrollment_filter: str | None = None
+        self._threat_filter: str | None = None
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.setDynamicSortFilter(True)
@@ -250,6 +337,34 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
         if self._compliance_filter == key:
             return
         self._compliance_filter = key
+        self.invalidateFilter()
+
+    def set_management_filter(self, state: str | None) -> None:
+        key = state.lower() if state else None
+        if self._management_filter == key:
+            return
+        self._management_filter = key
+        self.invalidateFilter()
+
+    def set_ownership_filter(self, ownership: str | None) -> None:
+        key = ownership.lower() if ownership else None
+        if self._ownership_filter == key:
+            return
+        self._ownership_filter = key
+        self.invalidateFilter()
+
+    def set_enrollment_filter(self, enrollment: str | None) -> None:
+        key = enrollment.lower() if enrollment else None
+        if self._enrollment_filter == key:
+            return
+        self._enrollment_filter = key
+        self.invalidateFilter()
+
+    def set_threat_filter(self, threat: str | None) -> None:
+        key = threat.lower() if threat else None
+        if self._threat_filter == key:
+            return
+        self._threat_filter = key
         self.invalidateFilter()
 
     # --------------------------------------------------------------- Filtering
@@ -294,14 +409,36 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
 
         if self._compliance_filter:
             compliance = (
-                device.compliance_state.value.lower()
-                if device.compliance_state
-                else ""
+                device.compliance_state.value.lower() if device.compliance_state else ""
             )
             if compliance != self._compliance_filter:
+                return False
+
+        if self._management_filter:
+            management = (
+                device.management_state.value.lower() if device.management_state else ""
+            )
+            if management != self._management_filter:
+                return False
+
+        if self._ownership_filter:
+            ownership = (
+                device.ownership.value.lower() if device.ownership else ""
+            )
+            if ownership != self._ownership_filter:
+                return False
+
+        if self._enrollment_filter:
+            enrollment = (device.enrolled_managed_by or "").lower()
+            if enrollment != self._enrollment_filter:
+                return False
+
+        if self._threat_filter:
+            threat = (device.partner_reported_threat_state or "").lower()
+            if threat != self._threat_filter:
                 return False
 
         return True
 
 
-__all__ = ["DeviceTableModel", "DeviceFilterProxyModel"]
+__all__ = ["DeviceTimelineEntry", "DeviceTableModel", "DeviceFilterProxyModel"]

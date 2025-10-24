@@ -44,7 +44,9 @@ class MobileAppRepository(BaseCacheRepository[MobileApp, MobileAppRecord]):
         for app in models:
             if app.assignments:
                 assignment_records.extend(
-                    assignments_to_records(app.id, app.assignments, tenant_id=tenant_id),
+                    assignments_to_records(
+                        app.id, app.assignments, tenant_id=tenant_id
+                    ),
                 )
 
         del_stmt = delete(MobileAppAssignmentRecord)
@@ -59,7 +61,9 @@ class MobileAppRepository(BaseCacheRepository[MobileApp, MobileAppRecord]):
             records = session.exec(self._select_records(tenant_id)).all()
             app_ids = [record.id for record in records]
 
-            assignments_map: dict[str, list[MobileAppAssignmentRecord]] = defaultdict(list)
+            assignments_map: dict[str, list[MobileAppAssignmentRecord]] = defaultdict(
+                list
+            )
             if app_ids:
                 stmt = select(MobileAppAssignmentRecord).where(
                     MobileAppAssignmentRecord.app_id.in_(app_ids),

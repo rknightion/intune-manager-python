@@ -13,7 +13,13 @@ from .assignment import (
 from .audit import AuditEvent
 from .common import GraphBaseModel, GraphResource, TimestampedResource
 from .configuration import ConfigurationProfile, ConfigurationSetting, SettingTemplate
-from .device import InstalledApp, ManagedDevice
+from .device import (
+    ComplianceState,
+    InstalledApp,
+    ManagedDevice,
+    ManagementState,
+    Ownership,
+)
 from .filters import AssignmentFilter
 from .group import DirectoryGroup, GroupMember
 
@@ -23,6 +29,9 @@ __all__ = [
     "TimestampedResource",
     "ManagedDevice",
     "InstalledApp",
+    "ComplianceState",
+    "ManagementState",
+    "Ownership",
     "MobileApp",
     "AssignmentTarget",
     "GroupAssignmentTarget",

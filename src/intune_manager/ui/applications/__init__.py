@@ -3,4 +3,3 @@
 from .widgets import ApplicationsWidget
 
 __all__ = ["ApplicationsWidget"]
-

@@ -13,7 +13,13 @@ def show_error_dialog(
     *,
     details: str | None = None,
 ) -> None:
-    dialog = QMessageBox(QMessageBox.Icon.Critical, title, message, QMessageBox.StandardButton.Close, parent)
+    dialog = QMessageBox(
+        QMessageBox.Icon.Critical,
+        title,
+        message,
+        QMessageBox.StandardButton.Close,
+        parent,
+    )
     dialog.setInformativeText(message)
     if details:
         dialog.setDetailedText(details)
@@ -27,7 +33,13 @@ def show_info_dialog(
     *,
     informative: str | None = None,
 ) -> None:
-    dialog = QMessageBox(QMessageBox.Icon.Information, title, message, QMessageBox.StandardButton.Ok, parent)
+    dialog = QMessageBox(
+        QMessageBox.Icon.Information,
+        title,
+        message,
+        QMessageBox.StandardButton.Ok,
+        parent,
+    )
     if informative:
         dialog.setInformativeText(informative)
     dialog.exec()

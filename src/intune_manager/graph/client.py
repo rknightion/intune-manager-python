@@ -7,7 +7,17 @@ import time
 from collections.abc import Callable as CallableABC, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Tuple, TypeAlias, TypeVar
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    TypeVar,
+)
 
 import httpx
 from httpx._client import UseClientDefault, USE_CLIENT_DEFAULT
@@ -710,7 +720,9 @@ class GraphClientFactory:
     ) -> str | None:
         if json_body is not None:
             try:
-                body_text = json.dumps(json_body, ensure_ascii=True, separators=(",", ":"))
+                body_text = json.dumps(
+                    json_body, ensure_ascii=True, separators=(",", ":")
+                )
             except TypeError:
                 body_text = repr(json_body)
             return GraphClientFactory._truncate_cli_value(body_text)

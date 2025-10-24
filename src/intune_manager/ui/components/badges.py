@@ -28,6 +28,7 @@ class TenantBadge(QFrame):
             "QFrame#TenantBadge {"
             "  border-radius: 10px;"
             "  padding: 4px 12px;"
+            "  margin: 2px 8px;"
             "  background-color: rgba(0, 99, 177, 0.12);"
             "  border: 1px solid rgba(0, 99, 177, 0.35);"
             "}"
@@ -48,12 +49,16 @@ class TenantBadge(QFrame):
 
         self._label = QLabel()
         self._label.setObjectName("TenantLabel")
-        self._label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         layout.addWidget(self._label)
 
         self._id_label = QLabel()
         self._id_label.setObjectName("TenantId")
-        self._id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._id_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         layout.addWidget(self._id_label)
 
         layout.addStretch()
@@ -77,4 +82,3 @@ class TenantBadge(QFrame):
 
 
 __all__ = ["TenantBadge", "TenantIdentity"]
-

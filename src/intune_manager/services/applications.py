@@ -71,6 +71,9 @@ class ApplicationService:
     def count_cached(self, tenant_id: str | None = None) -> int:
         return self._repository.cached_count(tenant_id=tenant_id)
 
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        return self._repository.last_refresh(tenant_id=tenant_id)
+
     # ----------------------------------------------------------------- Actions
 
     async def refresh(
@@ -145,7 +148,9 @@ class ApplicationService:
         except CancellationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to refresh mobile applications", tenant_id=tenant_id)
+            logger.exception(
+                "Failed to refresh mobile applications", tenant_id=tenant_id
+            )
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
 
@@ -164,7 +169,9 @@ class ApplicationService:
             if cached:
                 payload, timestamp = cached
                 if datetime.utcnow() - timestamp < self._summary_ttl:
-                    self.install_summary.emit(InstallSummaryEvent(app_id=app_id, summary=payload))
+                    self.install_summary.emit(
+                        InstallSummaryEvent(app_id=app_id, summary=payload)
+                    )
                     logger.debug("Install summary served from cache", app_id=app_id)
                     return payload
 

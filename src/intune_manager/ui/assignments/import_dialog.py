@@ -124,7 +124,9 @@ class AssignmentImportDialog(QDialog):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 0:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
                 self._table.setItem(index, column, item)
 
             if row.errors:
@@ -149,7 +151,9 @@ class AssignmentImportDialog(QDialog):
         total_rows = len(self._result.rows)
         error_count = len(self._result.errors)
         warning_count = len(self._result.warnings)
-        assignments_count = sum(len(payload) for payload in self._result.assignments_by_app.values())
+        assignments_count = sum(
+            len(payload) for payload in self._result.assignments_by_app.values()
+        )
 
         fragments: list[str] = [
             f"{assignments_count} assignment(s) parsed across {total_rows} row(s).",
@@ -183,7 +187,9 @@ class AssignmentImportDialog(QDialog):
         has_errors = self._result.has_fatal_errors()
         assignments_available = False
         if self._expected_app_id:
-            assignments_available = bool(self._result.assignments_by_app.get(self._expected_app_id))
+            assignments_available = bool(
+                self._result.assignments_by_app.get(self._expected_app_id)
+            )
         else:
             assignments_available = bool(self._result.assignments_by_app)
         self._ok_button.setEnabled(assignments_available and not has_errors)
@@ -233,18 +239,26 @@ class AssignmentImportDialog(QDialog):
     def _handle_copy_log(self) -> None:
         log_text = self._build_log_text()
         if not log_text:
-            QMessageBox.information(self, "No log entries", "There are no warnings or errors to copy.")
+            QMessageBox.information(
+                self, "No log entries", "There are no warnings or errors to copy."
+            )
             return
         QApplication.clipboard().setText(log_text)
-        QMessageBox.information(self, "Log copied", "Warnings and errors copied to the clipboard.")
+        QMessageBox.information(
+            self, "Log copied", "Warnings and errors copied to the clipboard."
+        )
 
     def _handle_save_log(self) -> None:
         log_text = self._build_log_text()
         if not log_text:
-            QMessageBox.information(self, "No log entries", "There are no warnings or errors to save.")
+            QMessageBox.information(
+                self, "No log entries", "There are no warnings or errors to save."
+            )
             return
         suggested_name = (
-            f"{self._source_path.stem}-import-log.txt" if self._source_path is not None else "assignment-import-log.txt"
+            f"{self._source_path.stem}-import-log.txt"
+            if self._source_path is not None
+            else "assignment-import-log.txt"
         )
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -257,7 +271,9 @@ class AssignmentImportDialog(QDialog):
         try:
             Path(path).write_text(log_text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Failed to save log", f"Unable to save log: {exc}")
+            QMessageBox.critical(
+                self, "Failed to save log", f"Unable to save log: {exc}"
+            )
             return
         QMessageBox.information(self, "Log saved", f"Import log saved to {path}.")
 

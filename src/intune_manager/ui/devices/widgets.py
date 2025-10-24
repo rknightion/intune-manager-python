@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import re
 from datetime import datetime
 from collections import OrderedDict
 from collections.abc import Callable
@@ -33,7 +35,10 @@ from PySide6.QtWidgets import (
 from intune_manager.data import ManagedDevice
 from intune_manager.graph.requests import DeviceActionName
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
-from intune_manager.services.devices import DeviceActionEvent, DeviceRefreshProgressEvent
+from intune_manager.services.devices import (
+    DeviceActionEvent,
+    DeviceRefreshProgressEvent,
+)
 from intune_manager.ui.components import (
     CommandAction,
     InlineStatusMessage,
@@ -41,12 +46,19 @@ from intune_manager.ui.components import (
     ProgressDialog,
     ToastLevel,
     UIContext,
+    format_relative_timestamp,
     make_toolbar_button,
 )
-from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
+from intune_manager.utils import (
+    CancellationError,
+    CancellationTokenSource,
+    ProgressUpdate,
+)
+from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
 from .controller import DeviceController
-from .models import DeviceFilterProxyModel, DeviceTableModel
+from .delegates import ComplianceBadgeDelegate, DeviceSummaryDelegate
+from .models import DeviceFilterProxyModel, DeviceTableModel, DeviceTimelineEntry
 
 
 def _format_value(value: object | None) -> str:
@@ -71,6 +83,13 @@ def _format_bytes(value: int | None) -> str:
     if index == 0:
         return f"{int(size)} {units[index]}"
     return f"{size:.1f} {units[index]}"
+
+
+def _toast_level_for(severity: ErrorSeverity) -> ToastLevel:
+    try:
+        return ToastLevel(severity.value)
+    except ValueError:  # pragma: no cover - defensive mapping fallback
+        return ToastLevel.ERROR
 
 
 class DeviceDetailCache:
@@ -192,10 +211,16 @@ class DeviceDetailPane(QWidget):
             ("bootstrap", "Bootstrap escrowed"),
         ]
 
-        self._overview_tab, self._overview_fields = self._create_form_tab(overview_fields)
-        self._hardware_tab, self._hardware_fields = self._create_form_tab(hardware_fields)
+        self._overview_tab, self._overview_fields = self._create_form_tab(
+            overview_fields
+        )
+        self._hardware_tab, self._hardware_fields = self._create_form_tab(
+            hardware_fields
+        )
         self._network_tab, self._network_fields = self._create_form_tab(network_fields)
-        self._security_tab, self._security_fields = self._create_form_tab(security_fields)
+        self._security_tab, self._security_fields = self._create_form_tab(
+            security_fields
+        )
 
         self._tabs.addTab(self._overview_tab, "Overview")
         self._tabs.addTab(self._hardware_tab, "Hardware")
@@ -218,6 +243,29 @@ class DeviceDetailPane(QWidget):
 
         self._tabs.addTab(self._apps_widget, "Installed Apps")
 
+        self._timeline_widget = QWidget()
+        timeline_layout = QVBoxLayout(self._timeline_widget)
+        timeline_layout.setContentsMargins(0, 8, 0, 0)
+        timeline_layout.setSpacing(6)
+
+        self._timeline_status = QLabel(
+            "Device actions, audit events, and applied policies appear here when available."
+        )
+        self._timeline_status.setWordWrap(True)
+        self._timeline_status.setStyleSheet("color: palette(mid);")
+        timeline_layout.addWidget(self._timeline_status)
+
+        self._timeline_list = QListWidget()
+        self._timeline_list.setObjectName("DeviceTimelineList")
+        self._timeline_list.setAlternatingRowColors(True)
+        self._timeline_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self._timeline_list.setUniformItemSizes(False)
+        timeline_layout.addWidget(self._timeline_list, stretch=1)
+
+        self._tabs.addTab(self._timeline_widget, "Timeline")
+
         detail_layout.addWidget(self._tabs, stretch=1)
         self._stack.addWidget(self._detail_widget)
 
@@ -226,6 +274,68 @@ class DeviceDetailPane(QWidget):
     def show_placeholder(self, message: str) -> None:
         self._empty_label.setText(message)
         self._stack.setCurrentWidget(self._empty_state)
+        self.set_timeline([], error="Select a device to view timeline.")
+
+    def set_timeline(
+        self,
+        entries: Iterable[DeviceTimelineEntry],
+        *,
+        loading: bool = False,
+        error: str | None = None,
+    ) -> None:
+        self._timeline_list.clear()
+        if loading:
+            self._timeline_status.setText(
+                "Fetching device history from Microsoft Graph…"
+            )
+            placeholder = QListWidgetItem("Loading timeline…")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._timeline_list.addItem(placeholder)
+            return
+        if error:
+            self._timeline_status.setText(error)
+            placeholder = QListWidgetItem("Timeline unavailable.")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._timeline_list.addItem(placeholder)
+            return
+        entries_list = list(entries)
+        if not entries_list:
+            self._timeline_status.setText(
+                "No historical activity found for this device."
+            )
+            placeholder = QListWidgetItem("No timeline events.")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._timeline_list.addItem(placeholder)
+            return
+
+        self._timeline_status.setText(
+            "Latest audit and management events for this device."
+        )
+        for entry in entries_list:
+            timestamp = entry.formatted_timestamp()
+            lines = [f"{timestamp} — {entry.title}"]
+            details: list[str] = []
+            if entry.description and entry.description != entry.title:
+                details.append(entry.description)
+            if entry.actor:
+                details.append(f"Actor: {entry.actor}")
+            if entry.result:
+                details.append(f"Result: {entry.result}")
+            if entry.category:
+                details.append(f"Category: {entry.category}")
+            text = "\n".join(lines + details)
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, entry)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            tooltip_lines = [entry.title]
+            if entry.description and entry.description != entry.title:
+                tooltip_lines.append(entry.description)
+            if entry.actor:
+                tooltip_lines.append(f"Actor: {entry.actor}")
+            if entry.result:
+                tooltip_lines.append(f"Result: {entry.result}")
+            item.setToolTip("\n".join(tooltip_lines))
+            self._timeline_list.addItem(item)
 
     def focus_overview(self) -> None:
         self._tabs.setCurrentWidget(self._overview_tab)
@@ -250,8 +360,12 @@ class DeviceDetailPane(QWidget):
             {
                 "user": device.user_display_name or device.user_principal_name,
                 "ownership": device.ownership.value if device.ownership else None,
-                "compliance": device.compliance_state.value if device.compliance_state else None,
-                "management": device.management_state.value if device.management_state else None,
+                "compliance": device.compliance_state.value
+                if device.compliance_state
+                else None,
+                "management": device.management_state.value
+                if device.management_state
+                else None,
                 "enrollment": device.enrolled_managed_by,
                 "registration": device.device_registration_state,
                 "category": device.device_category_display_name,
@@ -270,8 +384,12 @@ class DeviceDetailPane(QWidget):
                 "storage_total": _format_bytes(device.total_storage_space_in_bytes),
                 "storage_free": _format_bytes(device.free_storage_space_in_bytes),
                 "memory": _format_bytes(device.physical_memory_in_bytes),
-                "battery_health": f"{device.battery_health_percentage} %" if device.battery_health_percentage is not None else None,
-                "battery_level": f"{device.battery_level_percentage:.0f} %" if device.battery_level_percentage is not None else None,
+                "battery_health": f"{device.battery_health_percentage} %"
+                if device.battery_health_percentage is not None
+                else None,
+                "battery_level": f"{device.battery_level_percentage:.0f} %"
+                if device.battery_level_percentage is not None
+                else None,
             },
         )
         self._set_fields(
@@ -318,7 +436,9 @@ class DeviceDetailPane(QWidget):
             layout.addRow(f"{label}:", value_label)
         return widget, labels
 
-    def _set_fields(self, mapping: dict[str, QLabel], values: dict[str, object | None]) -> None:
+    def _set_fields(
+        self, mapping: dict[str, QLabel], values: dict[str, object | None]
+    ) -> None:
         for key, value in values.items():
             label = mapping.get(key)
             if label is None:
@@ -330,7 +450,9 @@ class DeviceDetailPane(QWidget):
         apps = device.installed_apps or []
         if not apps:
             self._apps_summary.setText("Installed applications: inventory not loaded.")
-            placeholder = QListWidgetItem("No installed applications reported for this device.")
+            placeholder = QListWidgetItem(
+                "No installed applications reported for this device."
+            )
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             self._apps_list.addItem(placeholder)
             return
@@ -358,7 +480,6 @@ class DeviceDetailPane(QWidget):
         if value is None:
             return "—"
         return value.strftime("%Y-%m-%d %H:%M")
-
 
 
 class DevicesWidget(PageScaffold):
@@ -391,6 +512,7 @@ class DevicesWidget(PageScaffold):
         self._refresh_token_source: CancellationTokenSource | None = None
         self._refresh_progress_dialog: ProgressDialog | None = None
         self._refresh_in_progress = False
+        self._last_refresh: datetime | None = None
 
         self._refresh_button = make_toolbar_button(
             "Refresh",
@@ -426,10 +548,17 @@ class DevicesWidget(PageScaffold):
         )
         self._export_button.setEnabled(False)
 
+        self._copy_button = make_toolbar_button(
+            "Copy details",
+            tooltip="Copy selected device details to the clipboard.",
+        )
+        self._copy_button.setEnabled(False)
+
         actions: List[QToolButton] = [
             self._refresh_button,
             self._force_refresh_button,
             self._export_button,
+            self._copy_button,
             self._sync_device_button,
             self._retire_button,
             self._wipe_button,
@@ -456,18 +585,30 @@ class DevicesWidget(PageScaffold):
         self._bulk_action_active = False
         self._bulk_action_summary: dict[str, int | str] | None = None
         self._command_unregister: Callable[[], None] | None = None
+        self._active_timeline_device_id: str | None = None
+        self._table_delegates: list[object] = []
+        self._table_delegates.clear()
 
         self._build_filters()
         self._build_body()
 
         self._refresh_button.clicked.connect(self._handle_refresh_clicked)
         self._force_refresh_button.clicked.connect(self._handle_force_refresh_clicked)
-        self._sync_device_button.clicked.connect(lambda: self._handle_device_action("syncDevice"))
-        self._retire_button.clicked.connect(lambda: self._handle_device_action("retire"))
+        self._sync_device_button.clicked.connect(
+            lambda: self._handle_device_action("syncDevice")
+        )
+        self._retire_button.clicked.connect(
+            lambda: self._handle_device_action("retire")
+        )
         self._wipe_button.clicked.connect(lambda: self._handle_device_action("wipe"))
-        self._reboot_button.clicked.connect(lambda: self._handle_device_action("rebootNow"))
-        self._shutdown_button.clicked.connect(lambda: self._handle_device_action("shutDown"))
+        self._reboot_button.clicked.connect(
+            lambda: self._handle_device_action("rebootNow")
+        )
+        self._shutdown_button.clicked.connect(
+            lambda: self._handle_device_action("shutDown")
+        )
         self._export_button.clicked.connect(self._handle_export_selected)
+        self._copy_button.clicked.connect(self._handle_copy_selected_devices)
 
         self._controller.register_callbacks(
             refreshed=self._handle_devices_refreshed,
@@ -505,12 +646,39 @@ class DevicesWidget(PageScaffold):
 
         self._compliance_combo = QComboBox()
         self._compliance_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._compliance_combo.currentIndexChanged.connect(self._handle_compliance_changed)
+        self._compliance_combo.currentIndexChanged.connect(
+            self._handle_compliance_changed
+        )
         layout.addWidget(self._compliance_combo)
+
+        self._management_combo = QComboBox()
+        self._management_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._management_combo.currentIndexChanged.connect(
+            self._handle_management_changed
+        )
+        layout.addWidget(self._management_combo)
+
+        self._ownership_combo = QComboBox()
+        self._ownership_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._ownership_combo.currentIndexChanged.connect(self._handle_ownership_changed)
+        layout.addWidget(self._ownership_combo)
+
+        self._enrollment_combo = QComboBox()
+        self._enrollment_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._enrollment_combo.currentIndexChanged.connect(
+            self._handle_enrollment_changed
+        )
+        layout.addWidget(self._enrollment_combo)
+
+        self._threat_combo = QComboBox()
+        self._threat_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._threat_combo.currentIndexChanged.connect(self._handle_threat_changed)
+        layout.addWidget(self._threat_combo)
 
         self._summary_label = QLabel()
         self._summary_label.setObjectName("DeviceSummaryLabel")
         self._summary_label.setStyleSheet("color: palette(mid);")
+        self._summary_label.setToolTip("No refresh recorded yet.")
         layout.addWidget(self._summary_label, stretch=1)
 
         self.body_layout.addWidget(self._filters_widget)
@@ -537,9 +705,24 @@ class DevicesWidget(PageScaffold):
         self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(48)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
+        self._table.setWordWrap(False)
+
+        device_column = self._model.column_index("device_name")
+        if device_column is not None:
+            device_delegate = DeviceSummaryDelegate(parent=self._table)
+            self._table.setItemDelegateForColumn(device_column, device_delegate)
+            self._table_delegates.append(device_delegate)
+
+        compliance_column = self._model.column_index("compliance_state")
+        if compliance_column is not None:
+            compliance_delegate = ComplianceBadgeDelegate(parent=self._table)
+            self._table.setItemDelegateForColumn(compliance_column, compliance_delegate)
+            self._table_delegates.append(compliance_delegate)
+
         table_layout.addWidget(self._table)
 
         splitter.addWidget(table_container)
@@ -624,6 +807,7 @@ class DevicesWidget(PageScaffold):
 
     def _load_cached_devices(self) -> None:
         devices = self._controller.list_cached()
+        self._last_refresh = self._controller.last_refresh()
         self._set_devices_for_view(devices, auto_select_first=True)
 
     def _handle_devices_refreshed(
@@ -635,6 +819,7 @@ class DevicesWidget(PageScaffold):
         devices_list = list(devices)
         previous_ids = set(self._selected_device_ids)
         auto_select_first = not previous_ids
+        self._last_refresh = self._controller.last_refresh()
         self._set_devices_for_view(
             devices_list,
             preserve_selection=previous_ids,
@@ -648,15 +833,23 @@ class DevicesWidget(PageScaffold):
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
         self._finish_refresh()
-        detail = f"{type(event.error).__name__}: {event.error}"
-        self._list_message.display(
-            "Device operation failed. Review the details below and retry when ready.",
-            level=ToastLevel.ERROR,
-            detail=detail,
-        )
+        descriptor = describe_exception(event.error)
+        detail_lines = [descriptor.detail]
+        if descriptor.transient:
+            detail_lines.append(
+                "This issue appears to be transient. Retry after a short wait."
+            )
+        if descriptor.suggestion:
+            detail_lines.append(f"Suggested action: {descriptor.suggestion}")
+        detail_text = "\n\n".join(detail_lines)
+        level = _toast_level_for(descriptor.severity)
+        self._list_message.display(descriptor.headline, level=level, detail=detail_text)
+        toast_message = descriptor.headline
+        if descriptor.transient:
+            toast_message = f"{descriptor.headline} Retry after a short wait."
         self._context.show_notification(
-            "Device operation failed. See inline details for more information.",
-            level=ToastLevel.ERROR,
+            toast_message,
+            level=level,
             duration_ms=8000,
         )
 
@@ -673,7 +866,10 @@ class DevicesWidget(PageScaffold):
                     level=ToastLevel.ERROR,
                     duration_ms=8000,
                 )
-            processed = self._bulk_action_summary["success"] + self._bulk_action_summary["failure"]
+            processed = (
+                self._bulk_action_summary["success"]
+                + self._bulk_action_summary["failure"]
+            )
             total = self._bulk_action_summary["total"]
             remaining = max(total - processed, 0)
             self._context.set_busy_message(
@@ -705,9 +901,7 @@ class DevicesWidget(PageScaffold):
                 successes = summary["success"]
                 failures = summary["failure"]
                 level = ToastLevel.SUCCESS if failures == 0 else ToastLevel.WARNING
-                message = (
-                    f"{summary['label']} completed for {total} device(s): {successes} success, {failures} failed."
-                )
+                message = f"{summary['label']} completed for {total} device(s): {successes} success, {failures} failed."
                 self._context.show_notification(message, level=level, duration_ms=6000)
             self._bulk_action_active = False
             self._bulk_action_summary = None
@@ -788,15 +982,21 @@ class DevicesWidget(PageScaffold):
         dialog.set_message("Refreshing devices…")
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
-        self._context.run_async(self._refresh_async(force=force, token_source=token_source))
+        self._context.run_async(
+            self._refresh_async(force=force, token_source=token_source)
+        )
 
-    async def _refresh_async(self, *, force: bool, token_source: CancellationTokenSource) -> None:
+    async def _refresh_async(
+        self, *, force: bool, token_source: CancellationTokenSource
+    ) -> None:
         token = token_source.token
         try:
             await self._controller.refresh(force=force, cancellation_token=token)
         except CancellationError:
             self._finish_refresh()
-            self._context.show_notification("Device refresh cancelled.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "Device refresh cancelled.", level=ToastLevel.INFO
+            )
         except Exception:  # noqa: BLE001
             raise
 
@@ -845,6 +1045,42 @@ class DevicesWidget(PageScaffold):
             self._context.clear_busy()
             self._update_action_buttons()
 
+    async def _load_timeline_async(
+        self,
+        device_id: str | None,
+        *,
+        aliases: Iterable[str] | None = None,
+    ) -> None:
+        if device_id is None:
+            self._detail_pane.set_timeline(
+                [],
+                error="Timeline unavailable — missing device identifier.",
+            )
+            return
+        try:
+            entries = await self._controller.load_timeline(
+                device_id, aliases=aliases
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to load device timeline", device_id=device_id)
+            if self._active_timeline_device_id == device_id:
+                self._detail_pane.set_timeline(
+                    [],
+                    error=(
+                        "Timeline failed to load. Verify audit permissions and try again."
+                    ),
+                )
+            return
+        if self._active_timeline_device_id != device_id:
+            return
+        if not entries and self._services.audit is None:
+            self._detail_pane.set_timeline(
+                [],
+                error="Timeline unavailable — audit service not configured.",
+            )
+            return
+        self._detail_pane.set_timeline(entries)
+
     # ----------------------------------------------------------------- Filters
 
     def _handle_search_changed(self, text: str) -> None:
@@ -861,6 +1097,26 @@ class DevicesWidget(PageScaffold):
         self._proxy.set_compliance_filter(compliance)
         self._update_summary()
 
+    def _handle_management_changed(self, index: int) -> None:  # noqa: ARG002
+        management = self._management_combo.currentData()
+        self._proxy.set_management_filter(management)
+        self._update_summary()
+
+    def _handle_ownership_changed(self, index: int) -> None:  # noqa: ARG002
+        ownership = self._ownership_combo.currentData()
+        self._proxy.set_ownership_filter(ownership)
+        self._update_summary()
+
+    def _handle_enrollment_changed(self, index: int) -> None:  # noqa: ARG002
+        enrollment = self._enrollment_combo.currentData()
+        self._proxy.set_enrollment_filter(enrollment)
+        self._update_summary()
+
+    def _handle_threat_changed(self, index: int) -> None:  # noqa: ARG002
+        threat = self._threat_combo.currentData()
+        self._proxy.set_threat_filter(threat)
+        self._update_summary()
+
     def _apply_filter_options(self, devices: Iterable[ManagedDevice]) -> None:
         platforms = sorted(
             {
@@ -872,22 +1128,84 @@ class DevicesWidget(PageScaffold):
         )
         compliance_states = sorted(
             {
-                (device.compliance_state.value if device.compliance_state else "").strip()
+                (
+                    device.compliance_state.value if device.compliance_state else ""
+                ).strip()
                 for device in devices
                 if device.compliance_state
             },
             key=lambda value: value.lower(),
         )
+        management_states = sorted(
+            {
+                (
+                    device.management_state.value
+                    if device.management_state
+                    else ""
+                ).strip()
+                for device in devices
+                if device.management_state
+            },
+            key=lambda value: value.lower(),
+        )
+        ownership_states = sorted(
+            {
+                (device.ownership.value if device.ownership else "").strip()
+                for device in devices
+                if device.ownership
+            },
+            key=lambda value: value.lower(),
+        )
+        enrollment_sources = sorted(
+            {
+                (device.enrolled_managed_by or "").strip()
+                for device in devices
+                if device.enrolled_managed_by
+            },
+            key=lambda value: value.lower(),
+        )
+        threat_states = sorted(
+            {
+                (device.partner_reported_threat_state or "").strip()
+                for device in devices
+                if device.partner_reported_threat_state
+            },
+            key=lambda value: value.lower(),
+        )
         self._populate_combo(self._platform_combo, "All platforms", platforms)
-        self._populate_combo(self._compliance_combo, "All compliance states", compliance_states)
+        self._populate_combo(
+            self._compliance_combo, "All compliance states", compliance_states
+        )
+        self._populate_combo(
+            self._management_combo, "All management states", management_states
+        )
+        self._populate_combo(
+            self._ownership_combo, "All ownership", ownership_states
+        )
+        self._populate_combo(
+            self._enrollment_combo, "All enrollment sources", enrollment_sources
+        )
+        self._populate_combo(
+            self._threat_combo, "All threat states", threat_states
+        )
 
-    def _populate_combo(self, combo: QComboBox, placeholder: str, values: List[str]) -> None:
+    def _format_filter_label(self, value: str | None) -> str:
+        if not value:
+            return "Unknown"
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
+        spaced = spaced.replace("_", " ")
+        return spaced.strip().title()
+
+    def _populate_combo(
+        self, combo: QComboBox, placeholder: str, values: List[str]
+    ) -> None:
         current = combo.currentData()
         combo.blockSignals(True)
         combo.clear()
         combo.addItem(placeholder, None)
         for value in values:
-            combo.addItem(value or "Unknown", value or None)
+            label = self._format_filter_label(value)
+            combo.addItem(label, value or None)
         if current:
             index = combo.findData(current)
             combo.setCurrentIndex(index if index != -1 else 0)
@@ -906,6 +1224,8 @@ class DevicesWidget(PageScaffold):
             self._selected_devices = []
             self._selected_device_ids = set()
             self._detail_pane.display_device(None)
+            self._detail_pane.set_timeline([], error="Select a device to view timeline.")
+            self._active_timeline_device_id = None
             self._update_action_buttons()
             self._update_summary()
             return
@@ -926,6 +1246,15 @@ class DevicesWidget(PageScaffold):
             detail = self._detail_cache.get(device.id) or device
             self._detail_pane.display_device(detail)
             self._detail_pane.focus_overview()
+            self._active_timeline_device_id = device.id
+            self._detail_pane.set_timeline([], loading=True)
+            aliases: list[str] = []
+            azure_id = getattr(detail, "azure_ad_device_id", None)
+            if isinstance(azure_id, str) and azure_id:
+                aliases.append(azure_id)
+            self._context.run_async(
+                self._load_timeline_async(device.id, aliases=aliases or None)
+            )
         else:
             self._detail_pane.show_placeholder(
                 (
@@ -933,6 +1262,11 @@ class DevicesWidget(PageScaffold):
                     "Select a single device to inspect details or use Export to CSV for reporting."
                 ),
             )
+            self._detail_pane.set_timeline(
+                [],
+                error="Timeline available when a single device is selected.",
+            )
+            self._active_timeline_device_id = None
         self._update_action_buttons()
         self._update_summary()
 
@@ -941,17 +1275,22 @@ class DevicesWidget(PageScaffold):
         index = self._table.indexAt(position)
         if index.isValid():
             selection_model = self._table.selectionModel()
-            if selection_model and not selection_model.isRowSelected(index.row(), QModelIndex()):
+            if selection_model and not selection_model.isRowSelected(
+                index.row(), QModelIndex()
+            ):
                 selection_model.select(
                     index,
-                    QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    | QItemSelectionModel.SelectionFlag.Rows,
                 )
 
         menu = QMenu(self)
         has_selection = bool(self._selected_devices)
         single_selection = len(self._selected_devices) == 1
         service_available = self._services.devices is not None
-        actions_enabled = service_available and has_selection and not self._bulk_action_active
+        actions_enabled = (
+            service_available and has_selection and not self._bulk_action_active
+        )
 
         open_action = menu.addAction("Open details")
         open_action.setEnabled(single_selection)
@@ -959,7 +1298,9 @@ class DevicesWidget(PageScaffold):
 
         copy_name = menu.addAction("Copy device name")
         copy_name.setEnabled(single_selection)
-        copy_name.triggered.connect(lambda: self._copy_selection_field(lambda d: d.device_name, "Device name"))
+        copy_name.triggered.connect(
+            lambda: self._copy_selection_field(lambda d: d.device_name, "Device name")
+        )
 
         copy_user = menu.addAction("Copy primary user")
         copy_user.setEnabled(single_selection)
@@ -972,7 +1313,9 @@ class DevicesWidget(PageScaffold):
 
         copy_device_id = menu.addAction("Copy device ID")
         copy_device_id.setEnabled(single_selection)
-        copy_device_id.triggered.connect(lambda: self._copy_selection_field(lambda d: d.id, "Device ID"))
+        copy_device_id.triggered.connect(
+            lambda: self._copy_selection_field(lambda d: d.id, "Device ID")
+        )
 
         menu.addSeparator()
 
@@ -1049,7 +1392,10 @@ class DevicesWidget(PageScaffold):
             return
 
         try:
-            rows = [self._serialize_device_for_export(device) for device in self._selected_devices]
+            rows = [
+                self._serialize_device_for_export(device)
+                for device in self._selected_devices
+            ]
             if not rows:
                 self._context.show_notification(
                     "No device data available to export.",
@@ -1075,6 +1421,53 @@ class DevicesWidget(PageScaffold):
             duration_ms=6000,
         )
 
+    def _handle_copy_selected_devices(self) -> None:
+        devices = list(self._selected_devices)
+        if not devices:
+            self._context.show_notification(
+                "Select at least one device before copying details.",
+                level=ToastLevel.WARNING,
+                duration_ms=4000,
+            )
+            return
+
+        summaries: list[dict[str, object | None]] = []
+        for device in devices:
+            summaries.append(
+                {
+                    "id": device.id,
+                    "deviceName": device.device_name,
+                    "manufacturer": device.manufacturer,
+                    "model": device.model,
+                    "operatingSystem": device.operating_system,
+                    "osVersion": device.os_version,
+                    "primaryUser": device.user_display_name
+                    or device.user_principal_name,
+                    "complianceState": device.compliance_state.value
+                    if device.compliance_state
+                    else None,
+                    "managementState": device.management_state.value
+                    if device.management_state
+                    else None,
+                    "ownership": device.ownership.value if device.ownership else None,
+                    "serialNumber": device.serial_number,
+                    "enrollmentType": device.enrolled_managed_by,
+                    "lastSync": (
+                        device.last_sync_date_time.isoformat()
+                        if device.last_sync_date_time
+                        else None
+                    ),
+                },
+            )
+
+        data: object = summaries[0] if len(summaries) == 1 else summaries
+        QGuiApplication.clipboard().setText(json.dumps(data, indent=2))
+        self._context.show_notification(
+            f"Copied {len(summaries)} device detail{'s' if len(summaries) != 1 else ''} to clipboard.",
+            level=ToastLevel.SUCCESS,
+            duration_ms=3000,
+        )
+
     def _serialize_device_for_export(self, device: ManagedDevice) -> dict[str, str]:
         return {
             "Device Name": device.device_name,
@@ -1083,8 +1476,12 @@ class DevicesWidget(PageScaffold):
             or "",
             "Operating System": device.operating_system,
             "OS Version": device.os_version or "",
-            "Compliance": device.compliance_state.value if device.compliance_state else "",
-            "Management": device.management_state.value if device.management_state else "",
+            "Compliance": device.compliance_state.value
+            if device.compliance_state
+            else "",
+            "Management": device.management_state.value
+            if device.management_state
+            else "",
             "Ownership": device.ownership.value if device.ownership else "",
             "Enrollment": device.enrolled_managed_by or "",
             "Last Sync": DeviceDetailPane._format_datetime(device.last_sync_date_time),
@@ -1113,7 +1510,8 @@ class DevicesWidget(PageScaffold):
             if proxy_index.isValid():
                 selection_model.select(
                     proxy_index,
-                    QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
                 )
                 self._table.scrollTo(proxy_index)
 
@@ -1139,16 +1537,27 @@ class DevicesWidget(PageScaffold):
             parts.append(f"{len(self._selected_devices):,} selected")
         if self._bulk_action_active and self._bulk_action_summary is not None:
             remaining = self._bulk_action_summary["total"] - (
-                self._bulk_action_summary["success"] + self._bulk_action_summary["failure"]
+                self._bulk_action_summary["success"]
+                + self._bulk_action_summary["failure"]
             )
             if remaining > 0:
                 parts.append(f"Bulk action in progress ({remaining} remaining)")
+        if self._last_refresh:
+            parts.append(f"Updated {format_relative_timestamp(self._last_refresh)}")
+            self._summary_label.setToolTip(
+                f"Last refresh: {self._last_refresh.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            )
+        else:
+            parts.append("Never refreshed")
+            self._summary_label.setToolTip("No refresh recorded yet.")
         self._summary_label.setText(" · ".join(parts))
 
     def _update_action_buttons(self, disabled: bool | None = None) -> None:
         service_available = self._services.devices is not None
         has_selection = bool(self._selected_devices)
-        enable_actions = service_available and has_selection and self._pending_actions == 0
+        enable_actions = (
+            service_available and has_selection and self._pending_actions == 0
+        )
         if disabled is not None and disabled:
             enable_actions = False
         if self._pending_actions > 0:
@@ -1166,6 +1575,7 @@ class DevicesWidget(PageScaffold):
         self._refresh_button.setEnabled(refresh_enabled)
         self._force_refresh_button.setEnabled(refresh_enabled)
         self._export_button.setEnabled(bool(self._selected_devices))
+        self._copy_button.setEnabled(bool(self._selected_devices))
 
     def _handle_service_unavailable(self) -> None:
         self._table.setEnabled(False)

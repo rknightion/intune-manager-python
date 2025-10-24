@@ -15,12 +15,18 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
+    QSystemTrayIcon,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
 
 from intune_manager.config import FirstRunStatus, detect_first_run
-from intune_manager.services import ServiceErrorEvent, ServiceRegistry, SyncProgressEvent
+from intune_manager.services import (
+    ServiceErrorEvent,
+    ServiceRegistry,
+    SyncProgressEvent,
+)
 from intune_manager.ui.components import (
     AlertBanner,
     BusyOverlay,
@@ -41,6 +47,7 @@ from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
 from intune_manager.ui.devices import DevicesWidget
 from intune_manager.ui.groups import GroupsWidget
+from intune_manager.ui.reports import ReportsWidget
 from intune_manager.ui.settings import SettingsPage
 from intune_manager.utils import get_logger
 from intune_manager.utils.asyncio import AsyncBridge
@@ -86,6 +93,7 @@ class MainWindow(QMainWindow):
         self._settings_store = QSettings("IntuneManager", "IntuneManagerApp")
         self._theme_manager = ThemeManager()
         self._toast_manager: ToastManager | None = None
+        self._tray_icon: QSystemTrayIcon | None = None
         self._busy_overlay: BusyOverlay | None = None
         self._command_registry = CommandRegistry()
         self._command_palette: CommandPalette | None = None
@@ -119,8 +127,8 @@ class MainWindow(QMainWindow):
 
     def _configure_window(self) -> None:
         self.setWindowTitle("Intune Manager")
-        self.resize(1280, 820)
-        self.setMinimumSize(QSize(960, 640))
+        self.resize(1440, 900)  # Increased for better dashboard layout
+        self.setMinimumSize(QSize(1200, 700))
         status = QStatusBar()
         status.setObjectName("MainStatusBar")
         status.setSizeGripEnabled(False)
@@ -172,6 +180,16 @@ class MainWindow(QMainWindow):
             return
         self._busy_overlay = BusyOverlay(central)
         self._toast_manager = ToastManager(central, theme=self._theme_manager)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            icon = self.windowIcon()
+            if icon.isNull():
+                icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+            tray = QSystemTrayIcon(icon, self)
+            tray.setToolTip("Intune Manager")
+            tray.show()
+            self._tray_icon = tray
+        else:
+            self._tray_icon = None
         self._command_palette = CommandPalette(
             self._command_registry,
             executor=self._execute_command,
@@ -255,7 +273,9 @@ class MainWindow(QMainWindow):
     def _build_page_for_item(self, item: NavigationItem) -> QWidget:
         if item.key == "dashboard":
             if self._ui_context is None:
-                raise RuntimeError("UI context not initialised before dashboard creation")
+                raise RuntimeError(
+                    "UI context not initialised before dashboard creation"
+                )
             dashboard = DashboardWidget(
                 self._services,
                 context=self._ui_context,
@@ -265,7 +285,9 @@ class MainWindow(QMainWindow):
             return dashboard
         if item.key == "devices":
             if self._ui_context is None:
-                raise RuntimeError("UI context not initialised before device view creation")
+                raise RuntimeError(
+                    "UI context not initialised before device view creation"
+                )
             return DevicesWidget(
                 self._services,
                 context=self._ui_context,
@@ -273,7 +295,9 @@ class MainWindow(QMainWindow):
             )
         if item.key == "applications":
             if self._ui_context is None:
-                raise RuntimeError("UI context not initialised before applications view creation")
+                raise RuntimeError(
+                    "UI context not initialised before applications view creation"
+                )
             return ApplicationsWidget(
                 self._services,
                 context=self._ui_context,
@@ -281,7 +305,9 @@ class MainWindow(QMainWindow):
             )
         if item.key == "groups":
             if self._ui_context is None:
-                raise RuntimeError("UI context not initialised before groups view creation")
+                raise RuntimeError(
+                    "UI context not initialised before groups view creation"
+                )
             return GroupsWidget(
                 self._services,
                 context=self._ui_context,
@@ -289,8 +315,20 @@ class MainWindow(QMainWindow):
             )
         if item.key == "assignments":
             if self._ui_context is None:
-                raise RuntimeError("UI context not initialised before assignments view creation")
+                raise RuntimeError(
+                    "UI context not initialised before assignments view creation"
+                )
             return AssignmentsWidget(
+                self._services,
+                context=self._ui_context,
+                parent=self._stack,
+            )
+        if item.key == "reports":
+            if self._ui_context is None:
+                raise RuntimeError(
+                    "UI context not initialised before reports view creation"
+                )
+            return ReportsWidget(
                 self._services,
                 context=self._ui_context,
                 parent=self._stack,
@@ -305,6 +343,7 @@ class MainWindow(QMainWindow):
             )
             settings_page = SettingsPage(
                 diagnostics=self._services.diagnostics if self._services else None,
+                services=self._services,
                 parent=page,
             )
             page.add_body_widget(settings_page, stretch=1)
@@ -472,8 +511,23 @@ class MainWindow(QMainWindow):
         duration_ms: int = 4500,
     ) -> None:
         if self._toast_manager:
-            self._toast_manager.show_toast(message, level=level, duration_ms=duration_ms)
+            self._toast_manager.show_toast(
+                message, level=level, duration_ms=duration_ms
+            )
         self.statusBar().showMessage(message, 3000)
+        if self._tray_icon:
+            notify_levels = {ToastLevel.ERROR, ToastLevel.WARNING}
+            if not self.isActiveWindow():
+                notify_levels.add(ToastLevel.SUCCESS)
+            if level in notify_levels:
+                icon = QSystemTrayIcon.MessageIcon.Warning
+                if level is ToastLevel.ERROR:
+                    icon = QSystemTrayIcon.MessageIcon.Critical
+                elif level is ToastLevel.SUCCESS:
+                    icon = QSystemTrayIcon.MessageIcon.Information
+                self._tray_icon.showMessage(
+                    "Intune Manager", message, icon, duration_ms
+                )
 
     def show_banner(
         self,
@@ -529,7 +583,9 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts_overlay(self) -> None:
         if self._shortcuts_dialog is None:
-            self._shortcuts_dialog = ShortcutHelpDialog(self._shortcut_definitions, parent=self)
+            self._shortcuts_dialog = ShortcutHelpDialog(
+                self._shortcut_definitions, parent=self
+            )
         else:
             self._shortcuts_dialog.set_shortcuts(self._shortcut_definitions)
         self._shortcuts_dialog.show()
@@ -550,7 +606,9 @@ class MainWindow(QMainWindow):
                         self._bridge.run_coroutine(result)  # type: ignore[arg-type]
                     return
                 except Exception:  # noqa: BLE001
-                    logger.exception("Refresh handler failed", widget=type(page).__name__)
+                    logger.exception(
+                        "Refresh handler failed", widget=type(page).__name__
+                    )
                     self.show_notification(
                         "Refresh failed to start.",
                         level=ToastLevel.ERROR,
@@ -588,7 +646,9 @@ class MainWindow(QMainWindow):
                 handler()
                 return
             except Exception:  # noqa: BLE001
-                logger.exception("Focus search handler failed", widget=type(page).__name__)
+                logger.exception(
+                    "Focus search handler failed", widget=type(page).__name__
+                )
                 self.show_notification(
                     "Search field failed to focus.",
                     level=ToastLevel.ERROR,

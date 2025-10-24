@@ -22,7 +22,7 @@
 # nuitka-project: --nofollow-import-to=mypy
 # nuitka-project: --nofollow-import-to=ruff
 # nuitka-project: --enable-plugin=pyside6
-  # nuitka-project: --include-qt-plugins=sensible
+# nuitka-project: --include-qt-plugins=sensible
 # nuitka-project: --lto=auto
 
 """

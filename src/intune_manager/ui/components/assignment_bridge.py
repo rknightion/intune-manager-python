@@ -43,4 +43,3 @@ def clear_groups() -> None:
 
 
 __all__ = ["stage_groups", "consume_groups", "clear_groups", "StagedGroups"]
-

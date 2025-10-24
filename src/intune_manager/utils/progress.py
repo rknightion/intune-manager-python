@@ -36,8 +36,7 @@ class ProgressUpdate:
 class ProgressReporter(Protocol):
     """Protocol describing callables that consume progress updates."""
 
-    def __call__(self, update: ProgressUpdate) -> None:
-        ...
+    def __call__(self, update: ProgressUpdate) -> None: ...
 
 
 class ProgressTracker:
@@ -55,7 +54,9 @@ class ProgressTracker:
     def bind(self, callback: ProgressReporter) -> None:
         self._callback = callback
 
-    def start(self, *, total: int | None = None, current: str | None = None) -> ProgressUpdate:
+    def start(
+        self, *, total: int | None = None, current: str | None = None
+    ) -> ProgressUpdate:
         self._total = total
         self._completed = 0
         self._failed = 0
@@ -67,7 +68,9 @@ class ProgressTracker:
             self._current = current
         return self._emit()
 
-    def succeeded(self, *, count: int = 1, current: str | None = None) -> ProgressUpdate:
+    def succeeded(
+        self, *, count: int = 1, current: str | None = None
+    ) -> ProgressUpdate:
         self._completed += count
         if current is not None:
             self._current = current

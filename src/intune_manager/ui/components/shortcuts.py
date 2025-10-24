@@ -67,7 +67,9 @@ class ShortcutHelpDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
 
-        intro = QLabel("Quickly navigate Intune Manager using these keyboard shortcuts.")
+        intro = QLabel(
+            "Quickly navigate Intune Manager using these keyboard shortcuts."
+        )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -113,8 +115,12 @@ class ShortcutHelpDialog(QDialog):
                 row.addWidget(title, stretch=3)
 
                 keys = QLabel(shortcut.display_sequences() or "—")
-                keys.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                keys.setStyleSheet("font-family: 'Menlo', 'Consolas', 'Courier New', monospace;")
+                keys.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                keys.setStyleSheet(
+                    "font-family: 'Menlo', 'Consolas', 'Courier New', monospace;"
+                )
                 row.addWidget(keys, stretch=2)
 
                 group_layout.addLayout(row)

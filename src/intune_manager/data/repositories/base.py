@@ -68,7 +68,9 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
 
     def get(self, item_id: str, *, tenant_id: str | None = None) -> DomainT | None:
         with self._db.session() as session:
-            stmt = self._select_records(tenant_id).where(self._record_model.id == item_id)
+            stmt = self._select_records(tenant_id).where(
+                self._record_model.id == item_id
+            )
             record = session.exec(stmt).one_or_none()
             return self._from_record(record) if record else None
 
@@ -109,7 +111,13 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
         with self._db.session() as session:
             return session.get(CacheEntry, (self._resource, self._scope(tenant_id)))
 
-    def is_cache_stale(self, *, tenant_id: str | None = None, now: datetime | None = None) -> bool:
+    def last_refresh(self, *, tenant_id: str | None = None) -> datetime | None:
+        entry = self.cache_entry(tenant_id=tenant_id)
+        return entry.last_refresh if entry is not None else None
+
+    def is_cache_stale(
+        self, *, tenant_id: str | None = None, now: datetime | None = None
+    ) -> bool:
         entry = self.cache_entry(tenant_id=tenant_id)
         if entry is None or entry.last_refresh is None:
             return True

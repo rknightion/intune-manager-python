@@ -10,6 +10,14 @@ from PySide6.QtWidgets import QApplication
 ThemeName = Literal["light"]
 
 
+# Spacing system for consistent layout throughout the application
+SPACING_XS = 4   # Tight spacing for closely related items
+SPACING_SM = 8   # Compact spacing for component internals
+SPACING_MD = 12  # Default spacing between related elements
+SPACING_LG = 16  # Section spacing, breathing room
+SPACING_XL = 24  # Page margins and major section separators
+
+
 class ThemeTokens(TypedDict):
     """Tokenised color palette used across UI widgets."""
 
@@ -29,16 +37,16 @@ class ThemeTokens(TypedDict):
 
 _THEME_MAP: Dict[ThemeName, ThemeTokens] = {
     "light": ThemeTokens(
-        background="#f5f7fb",
+        background="#ffffff",  # Changed to white (was #f5f7fb grey)
         surface="#ffffff",
-        surface_alt="#f0f2f6",
+        surface_alt="#f5f7fb",  # Light grey for alternating/sidebar
         border="#d5dae3",
         text="#1b1f24",
         text_muted="#5f6673",
         accent="#0063b1",
         accent_contrast="#ffffff",
         success="#1b8651",
-        warning="#c15d12",
+        warning="#a84d0e",  # Darkened for better contrast (was #c15d12)
         error="#c92a2a",
         shadow="rgba(15, 23, 42, 0.18)",
     ),
@@ -149,63 +157,80 @@ class ThemeManager(QObject):
         tokens = self._state.tokens
         return f"""
             QWidget {{
-                color: {tokens['text']};
-                background-color: {tokens['background']};
+                color: {tokens["text"]};
+                background-color: {tokens["background"]};
+            }}
+            QLabel {{
+                background: transparent;
             }}
             QFrame#Card {{
-                background-color: {tokens['surface']};
-                border: 1px solid {tokens['border']};
+                background-color: {tokens["surface"]};
+                border: 1px solid {tokens["border"]};
                 border-radius: 10px;
             }}
             QLabel[class='page-title'] {{
                 font-size: 24px;
                 font-weight: 600;
+                background: transparent;
             }}
             QLabel[class='page-subtitle'] {{
-                color: {tokens['text_muted']};
+                color: {tokens["text_muted"]};
+                background: transparent;
             }}
             QPushButton, QToolButton {{
-                background-color: {tokens['surface']};
-                border: 1px solid {tokens['border']};
+                background-color: {tokens["surface"]};
+                border: 1px solid {tokens["border"]};
                 border-radius: 6px;
                 padding: 6px 12px;
             }}
             QPushButton:disabled, QToolButton:disabled {{
-                color: {tokens['text_muted']};
-                border-color: {tokens['border']};
+                color: {tokens["text_muted"]};
+                border-color: {tokens["border"]};
             }}
             QPushButton:focus, QToolButton:focus {{
-                border: 2px solid {tokens['accent']};
+                border: 2px solid {tokens["accent"]};
             }}
             QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {{
-                background-color: {tokens['surface']};
-                border: 1px solid {tokens['border']};
+                background-color: {tokens["surface"]};
+                border: 1px solid {tokens["border"]};
                 border-radius: 6px;
                 padding: 6px 8px;
             }}
             QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus {{
-                border: 2px solid {tokens['accent']};
+                border: 2px solid {tokens["accent"]};
             }}
             QFocusFrame {{
-                border: 2px solid {tokens['accent']};
+                border: 2px solid {tokens["accent"]};
                 border-radius: 6px;
             }}
             QListWidget, QTreeWidget, QTableView {{
-                background-color: {tokens['surface']};
-                border: 1px solid {tokens['border']};
+                background-color: {tokens["surface"]};
+                border: 1px solid {tokens["border"]};
                 border-radius: 6px;
             }}
             QListWidget:focus, QTreeWidget:focus, QTableView:focus {{
-                border: 2px solid {tokens['accent']};
+                border: 2px solid {tokens["accent"]};
+            }}
+            QListWidget#NavigationList {{
+                background-color: {tokens["surface_alt"]};
             }}
             QListWidget#NavigationList::item:selected {{
-                background-color: {tokens['accent']};
-                color: {tokens['accent_contrast']};
+                background-color: {tokens["accent"]};
+                color: {tokens["accent_contrast"]};
             }}
             QListWidget#NavigationList::item:hover {{
-                background-color: {tokens['surface_alt']};
+                background-color: {tokens["background"]};
             }}
         """
 
 
-__all__ = ["ThemeManager", "ThemeName", "ThemeTokens"]
+__all__ = [
+    "ThemeManager",
+    "ThemeName",
+    "ThemeTokens",
+    "SPACING_XS",
+    "SPACING_SM",
+    "SPACING_MD",
+    "SPACING_LG",
+    "SPACING_XL",
+]

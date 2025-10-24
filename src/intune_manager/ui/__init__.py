@@ -4,6 +4,7 @@ from .applications import ApplicationsWidget
 from .assignments import AssignmentsWidget
 from .devices import DevicesWidget
 from .groups import GroupsWidget
+from .reports import ReportsWidget
 from .settings import (
     AuthStatus,
     SettingsController,
@@ -24,6 +25,7 @@ __all__ = [
     "DevicesWidget",
     "ApplicationsWidget",
     "GroupsWidget",
+    "ReportsWidget",
     "AssignmentsWidget",
     "MainWindow",
     "NavigationItem",

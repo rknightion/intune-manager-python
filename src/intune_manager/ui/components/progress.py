@@ -43,7 +43,9 @@ class ProgressDialog(QDialog):
 
         self._buttons = QDialogButtonBox(self)
         self._cancel_button = QPushButton(cancel_text, self)
-        self._buttons.addButton(self._cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
+        self._buttons.addButton(
+            self._cancel_button, QDialogButtonBox.ButtonRole.RejectRole
+        )
         self._cancel_button.clicked.connect(self.cancel)  # type: ignore[arg-type]
 
         layout = QVBoxLayout(self)

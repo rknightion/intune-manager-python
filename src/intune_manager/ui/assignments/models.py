@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor, QFont
@@ -77,6 +77,8 @@ class DiffDetail:
     filter_label: str
     detail: str
     is_warning: bool = False
+    current_payload: dict[str, Any] | None = None
+    desired_payload: dict[str, Any] | None = None
 
 
 class AssignmentTableModel(QAbstractTableModel):
@@ -124,7 +126,12 @@ class AssignmentTableModel(QAbstractTableModel):
                 return QColor(Qt.GlobalColor.darkYellow)
         return None
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: ANN001
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):  # noqa: ANN001
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         if orientation == Qt.Orientation.Horizontal:
@@ -158,7 +165,13 @@ class AssignmentTableModel(QAbstractTableModel):
 class DiffSummaryModel(QAbstractTableModel):
     """Model summarising diff results per target application."""
 
-    _columns: Sequence[str] = ("Application", "Creates", "Updates", "Deletes", "Warnings")
+    _columns: Sequence[str] = (
+        "Application",
+        "Creates",
+        "Updates",
+        "Deletes",
+        "Warnings",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -194,10 +207,17 @@ class DiffSummaryModel(QAbstractTableModel):
             return font
         return None
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: ANN001
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):  # noqa: ANN001
         if role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self._columns):
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(
+            self._columns
+        ):
             return self._columns[section]
         return super().headerData(section, orientation, role)
 
@@ -251,10 +271,17 @@ class DiffDetailModel(QAbstractTableModel):
             return QColor(Qt.GlobalColor.darkYellow)
         return None
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):  # noqa: ANN001
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):  # noqa: ANN001
         if role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self._columns):
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(
+            self._columns
+        ):
             return self._columns[section]
         return super().headerData(section, orientation, role)
 
@@ -266,6 +293,11 @@ class DiffDetailModel(QAbstractTableModel):
         self.beginResetModel()
         self._details = list(details)
         self.endResetModel()
+
+    def detail_at(self, row: int) -> DiffDetail | None:
+        if 0 <= row < len(self._details):
+            return self._details[row]
+        return None
 
     @staticmethod
     def from_diff(
@@ -287,6 +319,8 @@ class DiffDetailModel(QAbstractTableModel):
                     filter_label=filter_label,
                     detail="New target assignment",
                     is_warning=target_warning or filter_warning,
+                    current_payload=None,
+                    desired_payload=_assignment_payload(assignment),
                 ),
             )
 
@@ -302,6 +336,8 @@ class DiffDetailModel(QAbstractTableModel):
                     filter_label=filter_label,
                     detail=detail_text,
                     is_warning=target_warning or filter_warning,
+                    current_payload=_assignment_payload(update.current),
+                    desired_payload=_assignment_payload(update.desired),
                 ),
             )
 
@@ -316,9 +352,22 @@ class DiffDetailModel(QAbstractTableModel):
                     filter_label=filter_label,
                     detail="Remove existing assignment",
                     is_warning=target_warning or filter_warning,
+                    current_payload=_assignment_payload(assignment),
+                    desired_payload=None,
                 ),
             )
         return details
+
+
+def _assignment_payload(
+    assignment: MobileAppAssignment | None,
+) -> dict[str, Any] | None:
+    if assignment is None:
+        return None
+    try:
+        return assignment.to_graph()
+    except Exception:  # noqa: BLE001 - fallback for unexpected serialization issues
+        return None
 
 
 def _describe_update(update: AssignmentUpdate) -> str:

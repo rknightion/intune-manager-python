@@ -49,7 +49,9 @@ class CancellationToken:
     async def wait(self) -> None:
         await self._state.event.wait()
 
-    def on_cancel(self, callback: Callable[["CancellationToken"], None]) -> Callable[[], None]:
+    def on_cancel(
+        self, callback: Callable[["CancellationToken"], None]
+    ) -> Callable[[], None]:
         if self.cancelled:
             callback(self)
 
@@ -70,8 +72,12 @@ class CancellationToken:
 
     def link_task(self, task: asyncio.Task[object] | None = None) -> Callable[[], None]:
         target = task or asyncio.current_task()
-        if target is None:  # pragma: no cover - should only occur in synchronous contexts
-            raise RuntimeError("CancellationToken.link_task() must be called from within a running task")
+        if (
+            target is None
+        ):  # pragma: no cover - should only occur in synchronous contexts
+            raise RuntimeError(
+                "CancellationToken.link_task() must be called from within a running task"
+            )
         self._state.tasks.add(target)
         target.add_done_callback(self._state.tasks.discard)
 
@@ -96,7 +102,9 @@ class CancellationTokenSource:
         self._token = CancellationToken(self._state)
         self._linked_subscription: Callable[[], None] | None = None
         if linked_token is not None:
-            self._linked_subscription = linked_token.on_cancel(lambda _token: self.cancel(reason=_token.reason))
+            self._linked_subscription = linked_token.on_cancel(
+                lambda _token: self.cancel(reason=_token.reason)
+            )
 
     @property
     def token(self) -> CancellationToken:
@@ -111,7 +119,9 @@ class CancellationTokenSource:
         for callback in list(self._state.callbacks):
             try:
                 callback(self._token)
-            except Exception:  # pragma: no cover - error during cancellation notifications
+            except (
+                Exception
+            ):  # pragma: no cover - error during cancellation notifications
                 logger.exception("Cancellation callback raised an exception.")
         for task in list(self._state.tasks):
             task.cancel(error)

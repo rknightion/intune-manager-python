@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from intune_manager.data import AuditEvent, AuditEventRepository
@@ -40,6 +40,9 @@ class AuditLogService:
 
     def count_cached(self, tenant_id: str | None = None) -> int:
         return self._repository.cached_count(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        return self._repository.last_refresh(tenant_id=tenant_id)
 
     async def refresh(
         self,

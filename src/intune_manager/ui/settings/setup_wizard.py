@@ -34,7 +34,9 @@ class WizardContext:
 
 
 class _WizardPage(QWizardPage):
-    def __init__(self, wizard: "SetupWizard", *, title: str, subtitle: str | None = None) -> None:
+    def __init__(
+        self, wizard: "SetupWizard", *, title: str, subtitle: str | None = None
+    ) -> None:
         super().__init__(wizard)
         self._wizard = wizard
         self.setTitle(title)
@@ -182,7 +184,9 @@ class _ConfigurationPage(_WizardPage):
         redirect = self.redirect_input.text().strip() or "http://localhost:8400"
         authority = self.authority_input.text().strip() or None
 
-        existing_scopes = self.context.settings.graph_scopes or list(DEFAULT_GRAPH_SCOPES)
+        existing_scopes = self.context.settings.graph_scopes or list(
+            DEFAULT_GRAPH_SCOPES
+        )
         scopes = list(existing_scopes)
         settings = Settings(
             tenant_id=tenant,
@@ -217,7 +221,9 @@ class _ConfigurationPage(_WizardPage):
 
     def _open_portal(self) -> None:
         QDesktopServices.openUrl(
-            QUrl("https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"),
+            QUrl(
+                "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps"
+            ),
         )
 
 
@@ -267,7 +273,9 @@ class _PermissionsPage(_WizardPage):
     def update_status(self, status: AuthStatus) -> None:
         if status.username:
             detail = status.display_name or status.username
-            self._status_label.setText(f"Signed in as {detail} (tenant {status.tenant_id or 'unknown'})")
+            self._status_label.setText(
+                f"Signed in as {detail} (tenant {status.tenant_id or 'unknown'})"
+            )
         else:
             self._status_label.setText("Not signed in.")
 
@@ -312,7 +320,7 @@ class _TestConnectionPage(_WizardPage):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setPlaceholderText("Click \"Run test\" to validate Graph access.")
+        self.log.setPlaceholderText('Click "Run test" to validate Graph access.')
 
         self.run_button = QPushButton("Run test")
 
@@ -433,7 +441,9 @@ class SetupWizard(QWizard):
             self.controller.busyStateChanged.disconnect(self._handle_busy_state)
             self.controller.infoMessage.disconnect(self._handle_info)
             self.controller.errorOccurred.disconnect(self._handle_error)
-            self.controller.testConnectionCompleted.disconnect(self._handle_test_completed)
+            self.controller.testConnectionCompleted.disconnect(
+                self._handle_test_completed
+            )
         except Exception:  # pragma: no cover - defensive
             pass
 

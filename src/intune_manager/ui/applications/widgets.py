@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
@@ -48,8 +49,10 @@ from intune_manager.ui.components import (
     PageScaffold,
     ToastLevel,
     UIContext,
+    format_relative_timestamp,
     make_toolbar_button,
 )
+from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
 from intune_manager.ui.assignments.assignment_editor import AssignmentEditorDialog
 from .controller import ApplicationController
@@ -61,6 +64,13 @@ def _format_value(value: object | None) -> str:
     if value is None:
         return "—"
     return str(value)
+
+
+def _toast_level_for(severity: ErrorSeverity) -> ToastLevel:
+    try:
+        return ToastLevel(severity.value)
+    except ValueError:  # pragma: no cover - defensive mapping fallback
+        return ToastLevel.ERROR
 
 
 class ApplicationDetailPane(QWidget):
@@ -86,7 +96,9 @@ class ApplicationDetailPane(QWidget):
         self._icon_label = QLabel()
         self._icon_label.setFixedSize(96, 96)
         self._icon_label.setScaledContents(True)
-        self._icon_label.setStyleSheet("border: 1px solid palette(midlight); border-radius: 12px;")
+        self._icon_label.setStyleSheet(
+            "border: 1px solid palette(midlight); border-radius: 12px;"
+        )
         header_layout.addWidget(self._icon_label)
 
         title_container = QWidget()
@@ -165,7 +177,9 @@ class ApplicationDetailPane(QWidget):
         assignments_hint.setStyleSheet("color: palette(mid);")
         assignments_layout.addWidget(assignments_hint)
         self._assignments_list = QListWidget()
-        self._assignments_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._assignments_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
         assignments_layout.addWidget(self._assignments_list, stretch=1)
 
         # Install status tab
@@ -173,13 +187,19 @@ class ApplicationDetailPane(QWidget):
         install_layout = QVBoxLayout(self._install_tab)
         install_layout.setContentsMargins(0, 0, 0, 0)
         install_layout.setSpacing(6)
-        install_hint = QLabel("Fetch install summaries to review deployment cohorts and drill into raw payloads.")
+        install_hint = QLabel(
+            "Fetch install summaries to review deployment cohorts and drill into raw payloads."
+        )
         install_hint.setWordWrap(True)
         install_hint.setStyleSheet("color: palette(mid);")
         install_layout.addWidget(install_hint)
         self._install_summary_list = QListWidget()
-        self._install_summary_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self._install_summary_list.itemActivated.connect(self._handle_install_summary_activated)
+        self._install_summary_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
+        self._install_summary_list.itemActivated.connect(
+            self._handle_install_summary_activated
+        )
         install_layout.addWidget(self._install_summary_list, stretch=1)
 
         self._tab_widget.addTab(self._overview_tab, "Overview")
@@ -203,12 +223,17 @@ class ApplicationDetailPane(QWidget):
 
         self._title_label.setText(app.display_name)
         subtitle_parts = [app.owner or "", app.publisher or ""]
-        self._subtitle_label.setText(" · ".join(part for part in subtitle_parts if part))
+        self._subtitle_label.setText(
+            " · ".join(part for part in subtitle_parts if part)
+        )
         self._description_label.setText(app.description or "")
         self._update_badges(app)
 
         platform = app.platform_type.value if app.platform_type else "Unknown"
-        categories = ", ".join(category.display_name for category in (app.categories or [])) or "—"
+        categories = (
+            ", ".join(category.display_name for category in (app.categories or []))
+            or "—"
+        )
 
         self._set_field("platform", platform)
         self._set_field("publisher", app.publisher)
@@ -216,11 +241,15 @@ class ApplicationDetailPane(QWidget):
         self._set_field("developer", app.developer)
         self._set_field(
             "created",
-            app.created_date_time.strftime("%Y-%m-%d %H:%M") if app.created_date_time else None,
+            app.created_date_time.strftime("%Y-%m-%d %H:%M")
+            if app.created_date_time
+            else None,
         )
         self._set_field(
             "modified",
-            app.last_modified_date_time.strftime("%Y-%m-%d %H:%M") if app.last_modified_date_time else None,
+            app.last_modified_date_time.strftime("%Y-%m-%d %H:%M")
+            if app.last_modified_date_time
+            else None,
         )
         self._set_field("categories", categories)
 
@@ -286,7 +315,9 @@ class ApplicationDetailPane(QWidget):
         if not intents:
             return
         for intent_key in sorted(intents):
-            label_text, color = self._INTENT_BADGES.get(intent_key, (intent_key.title(), "#4b5563"))
+            label_text, color = self._INTENT_BADGES.get(
+                intent_key, (intent_key.title(), "#4b5563")
+            )
             badge = QLabel(label_text)
             badge.setStyleSheet(
                 "QLabel {"
@@ -305,7 +336,11 @@ class ApplicationDetailPane(QWidget):
         if not payload:
             return
         key, value = payload
-        formatted = json.dumps(value, indent=2, default=str) if isinstance(value, (dict, list)) else str(value)
+        formatted = (
+            json.dumps(value, indent=2, default=str)
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
         dialog = QMessageBox(self)
         dialog.setWindowTitle(f"Install summary — {key}")
         dialog.setIcon(QMessageBox.Icon.Information)
@@ -329,10 +364,18 @@ class ApplicationsWidget(PageScaffold):
         self._context = context
         self._controller = ApplicationController(services)
 
-        self._refresh_button = make_toolbar_button("Refresh", tooltip="Refresh applications from Microsoft Graph.")
-        self._force_refresh_button = make_toolbar_button("Force refresh", tooltip="Refetch regardless of cache state.")
-        self._install_summary_button = make_toolbar_button("Install summary", tooltip="Fetch install summary for selection.")
-        self._cache_icon_button = make_toolbar_button("Fetch icon", tooltip="Cache application icon for selection.")
+        self._refresh_button = make_toolbar_button(
+            "Refresh", tooltip="Refresh applications from Microsoft Graph."
+        )
+        self._force_refresh_button = make_toolbar_button(
+            "Force refresh", tooltip="Refetch regardless of cache state."
+        )
+        self._install_summary_button = make_toolbar_button(
+            "Install summary", tooltip="Fetch install summary for selection."
+        )
+        self._cache_icon_button = make_toolbar_button(
+            "Fetch icon", tooltip="Cache application icon for selection."
+        )
         self._edit_assignments_button = make_toolbar_button(
             "Edit assignments",
             tooltip="Open the assignment editor for the selected application.",
@@ -367,6 +410,12 @@ class ApplicationsWidget(PageScaffold):
         self._model = ApplicationTableModel()
         self._proxy = ApplicationFilterProxyModel()
         self._proxy.setSourceModel(self._model)
+        self._lazy_threshold = 800
+        self._lazy_chunk_size = 300
+        self._pending_selection_id: str | None = None
+        self._last_refresh: datetime | None = None
+        self._model.load_finished.connect(self._handle_model_load_finished)
+        self._model.batch_appended.connect(lambda *_: self._update_summary())
 
         self._icon_cache: dict[str, QIcon] = {}
         self._install_summaries: dict[str, dict[str, object]] = {}
@@ -381,10 +430,16 @@ class ApplicationsWidget(PageScaffold):
 
         self._refresh_button.clicked.connect(self._handle_refresh_clicked)
         self._force_refresh_button.clicked.connect(self._handle_force_refresh_clicked)
-        self._install_summary_button.clicked.connect(self._handle_install_summary_clicked)
+        self._install_summary_button.clicked.connect(
+            self._handle_install_summary_clicked
+        )
         self._cache_icon_button.clicked.connect(self._handle_cache_icon_clicked)
-        self._edit_assignments_button.clicked.connect(self._handle_edit_assignments_clicked)
-        self._export_assignments_button.clicked.connect(self._handle_export_assignments_clicked)
+        self._edit_assignments_button.clicked.connect(
+            self._handle_edit_assignments_clicked
+        )
+        self._export_assignments_button.clicked.connect(
+            self._handle_export_assignments_clicked
+        )
         self._bulk_assign_button.clicked.connect(self._handle_bulk_assign_clicked)
 
         self._controller.register_callbacks(
@@ -426,6 +481,7 @@ class ApplicationsWidget(PageScaffold):
 
         self._summary_label = QLabel()
         self._summary_label.setStyleSheet("color: palette(mid);")
+        self._summary_label.setToolTip("No refresh recorded yet.")
         layout.addWidget(self._summary_label, stretch=1)
 
         self.body_layout.addWidget(filters)
@@ -490,12 +546,12 @@ class ApplicationsWidget(PageScaffold):
 
     def _load_cached_apps(self) -> None:
         self._list_message.clear()
-        apps = self._controller.list_cached()
-        self._model.set_apps(apps)
-        self._apply_filter_options(apps)
-        self._update_summary()
-        if apps:
-            self._table.selectRow(0)
+        apps = list(self._controller.list_cached())
+        self._last_refresh = self._controller.last_refresh()
+        self._set_apps_for_view(
+            apps,
+            preserve_selection=self._selected_app.id if self._selected_app else None,
+        )
 
     def _handle_apps_refreshed(
         self,
@@ -505,13 +561,8 @@ class ApplicationsWidget(PageScaffold):
         self._list_message.clear()
         apps_list = list(apps)
         selected_id = self._selected_app.id if self._selected_app else None
-        self._model.set_apps(apps_list)
-        self._apply_filter_options(apps_list)
-        self._update_summary()
-        if selected_id:
-            self._reselect_app(selected_id)
-        elif apps_list:
-            self._table.selectRow(0)
+        self._last_refresh = self._controller.last_refresh()
+        self._set_apps_for_view(apps_list, preserve_selection=selected_id)
         if not from_cache:
             self._context.show_notification(
                 f"Loaded {len(apps_list):,} applications.",
@@ -521,19 +572,52 @@ class ApplicationsWidget(PageScaffold):
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
 
+    def _set_apps_for_view(
+        self,
+        apps_list: list[MobileApp],
+        *,
+        preserve_selection: str | None = None,
+    ) -> None:
+        if len(apps_list) > self._lazy_threshold:
+            self._pending_selection_id = preserve_selection
+            self._model.set_apps_lazy(apps_list, chunk_size=self._lazy_chunk_size)
+        else:
+            self._pending_selection_id = None
+            self._model.set_apps(apps_list)
+            if preserve_selection:
+                self._reselect_app(preserve_selection)
+            elif apps_list:
+                self._table.selectRow(0)
+        self._apply_filter_options(apps_list)
+        self._update_summary()
+
+    def _handle_model_load_finished(self) -> None:
+        if self._pending_selection_id:
+            self._reselect_app(self._pending_selection_id)
+        elif self._model.rowCount() > 0 and not self._selected_app:
+            self._table.selectRow(0)
+        self._pending_selection_id = None
+        self._update_summary()
+
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
         self._context.clear_busy()
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
-        detail = f"{type(event.error).__name__}: {event.error}"
-        self._list_message.display(
-            "Application operation failed. Review the inline details and retry when resolved.",
-            level=ToastLevel.ERROR,
-            detail=detail,
-        )
+        descriptor = describe_exception(event.error)
+        detail_lines = [descriptor.detail]
+        if descriptor.transient:
+            detail_lines.append("This issue appears transient. Retry in a moment.")
+        if descriptor.suggestion:
+            detail_lines.append(f"Suggested action: {descriptor.suggestion}")
+        detail_text = "\n\n".join(detail_lines)
+        level = _toast_level_for(descriptor.severity)
+        self._list_message.display(descriptor.headline, level=level, detail=detail_text)
+        toast_message = descriptor.headline
+        if descriptor.transient:
+            toast_message = f"{descriptor.headline} Retry after a short wait."
         self._context.show_notification(
-            "Application operation failed. See inline details for more information.",
-            level=ToastLevel.ERROR,
+            toast_message,
+            level=level,
             duration_ms=8000,
         )
 
@@ -542,7 +626,9 @@ class ApplicationsWidget(PageScaffold):
         if self._selected_app and self._selected_app.id == event.app_id:
             self._detail_pane.update_install_summary(event.summary)
         self._context.clear_busy()
-        self._context.show_notification("Install summary refreshed.", level=ToastLevel.SUCCESS)
+        self._context.show_notification(
+            "Install summary refreshed.", level=ToastLevel.SUCCESS
+        )
 
     def _handle_icon_cached(self, metadata: AttachmentMetadata) -> None:
         if metadata is None:
@@ -600,14 +686,24 @@ class ApplicationsWidget(PageScaffold):
             self._context.clear_busy()
             self._refresh_button.setEnabled(True)
             self._force_refresh_button.setEnabled(True)
+            descriptor = describe_exception(exc)
+            detail_lines = [descriptor.detail]
+            if descriptor.transient:
+                detail_lines.append("This issue may be temporary. Retry in a moment.")
+            if descriptor.suggestion:
+                detail_lines.append(f"Suggested action: {descriptor.suggestion}")
+            detail_text = "\n\n".join(detail_lines)
+            level = _toast_level_for(descriptor.severity)
             self._list_message.display(
-                "Application refresh failed. Review the error details below before retrying.",
-                level=ToastLevel.ERROR,
-                detail=f"{type(exc).__name__}: {exc}",
+                descriptor.headline, level=level, detail=detail_text
             )
+            if descriptor.transient:
+                toast_message = f"{descriptor.headline} Retry after a short wait."
+            else:
+                toast_message = f"Failed to refresh applications: {exc}"
             self._context.show_notification(
-                f"Failed to refresh applications: {exc}",
-                level=ToastLevel.ERROR,
+                toast_message,
+                level=level,
             )
 
     def _handle_install_summary_clicked(self) -> None:
@@ -618,7 +714,9 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
-        force_refresh = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        force_refresh = bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        )
         if app.id:
             cached = self._install_summaries.get(app.id)
         else:
@@ -631,9 +729,13 @@ class ApplicationsWidget(PageScaffold):
             )
             return
         self._context.set_busy("Fetching install summary…")
-        self._context.run_async(self._fetch_install_summary_async(app.id, force=force_refresh))
+        self._context.run_async(
+            self._fetch_install_summary_async(app.id, force=force_refresh)
+        )
 
-    async def _fetch_install_summary_async(self, app_id: str, *, force: bool = False) -> None:
+    async def _fetch_install_summary_async(
+        self, app_id: str, *, force: bool = False
+    ) -> None:
         try:
             await self._controller.fetch_install_summary(app_id, force=force)
         except Exception as exc:  # noqa: BLE001
@@ -714,7 +816,9 @@ class ApplicationsWidget(PageScaffold):
             filters = self._services.assignment_filters.list_cached()
             if not filters:
                 try:
-                    filters = await self._services.assignment_filters.refresh(force=False)
+                    filters = await self._services.assignment_filters.refresh(
+                        force=False
+                    )
                 except Exception:  # noqa: BLE001
                     filters = []
 
@@ -725,17 +829,26 @@ class ApplicationsWidget(PageScaffold):
             groups=groups,
             filters=filters,
             subject_name=subject,
-            on_export=lambda payload: self._export_assignments(payload, suggested_name=f"{subject}_assignments.json"),
+            on_export=lambda payload: self._export_assignments(
+                payload, suggested_name=f"{subject}_assignments.json"
+            ),
             parent=self,
         )
         if dialog.exec() == dialog.Accepted:
             desired = dialog.desired_assignments()
-            diff = self._controller.diff_assignments(current=assignments, desired=desired)
+            diff = self._controller.diff_assignments(
+                current=assignments, desired=desired
+            )
             if diff is None or diff.is_noop:
-                self._context.show_notification("No assignment changes detected.", level=ToastLevel.INFO)
+                self._context.show_notification(
+                    "No assignment changes detected.", level=ToastLevel.INFO
+                )
                 return
             if dialog.auto_export_enabled():
-                self._export_assignments(desired, suggested_name=f"{app.display_name}_assignments_backup.json")
+                self._export_assignments(
+                    desired,
+                    suggested_name=f"{app.display_name}_assignments_backup.json",
+                )
             self._context.set_busy("Applying assignment changes…")
             self._context.run_async(self._apply_assignment_diff_async(app.id, diff))
 
@@ -816,9 +929,13 @@ class ApplicationsWidget(PageScaffold):
             return
         assignments = app.assignments or []
         if not assignments:
-            self._context.show_notification("No assignments cached for export.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "No assignments cached for export.", level=ToastLevel.INFO
+            )
             return
-        self._export_assignments(assignments, suggested_name=f"{app.display_name}_assignments.json")
+        self._export_assignments(
+            assignments, suggested_name=f"{app.display_name}_assignments.json"
+        )
 
     async def _apply_bulk_assignments_async(self, plan: BulkAssignmentPlan) -> None:
         successes = 0
@@ -845,8 +962,13 @@ class ApplicationsWidget(PageScaffold):
                         plan.intent,
                     )
                     if existing:
-                        if plan.settings is not None and existing.settings != plan.settings:
-                            replacement = existing.model_copy(update={"settings": plan.settings})
+                        if (
+                            plan.settings is not None
+                            and existing.settings != plan.settings
+                        ):
+                            replacement = existing.model_copy(
+                                update={"settings": plan.settings}
+                            )
                             desired_assignments = [
                                 replacement if assignment is existing else assignment
                                 for assignment in desired_assignments
@@ -854,7 +976,9 @@ class ApplicationsWidget(PageScaffold):
                             updated = True
                         continue
                     target = (
-                        FilteredGroupAssignmentTarget(group_id=group.id, assignment_filter_id=plan.filter_id)
+                        FilteredGroupAssignmentTarget(
+                            group_id=group.id, assignment_filter_id=plan.filter_id
+                        )
                         if plan.filter_id
                         else GroupAssignmentTarget(group_id=group.id)
                     )
@@ -963,7 +1087,9 @@ class ApplicationsWidget(PageScaffold):
         self._populate_combo(self._platform_combo, "All platforms", platforms)
         self._populate_combo(self._intent_combo, "All intents", intents)
 
-    def _populate_combo(self, combo: QComboBox, placeholder: str, values: List[str]) -> None:
+    def _populate_combo(
+        self, combo: QComboBox, placeholder: str, values: List[str]
+    ) -> None:
         current = combo.currentData()
         combo.blockSignals(True)
         combo.clear()
@@ -1035,7 +1161,10 @@ class ApplicationsWidget(PageScaffold):
     def _update_summary(self) -> None:
         total = self._model.rowCount()
         visible = self._proxy.rowCount()
-        stale = self._services.applications is not None and self._controller.is_cache_stale()
+        stale = (
+            self._services.applications is not None
+            and self._controller.is_cache_stale()
+        )
         parts = [f"{visible:,} applications shown"]
         if visible != total:
             parts.append(f"{total:,} cached")
@@ -1043,6 +1172,15 @@ class ApplicationsWidget(PageScaffold):
             parts.append("Cache stale — refresh recommended")
         if self._selected_apps:
             parts.append(f"{len(self._selected_apps):,} selected")
+        if self._last_refresh:
+            parts.append(f"Updated {format_relative_timestamp(self._last_refresh)}")
+            tooltip = (
+                f"Last refresh: {self._last_refresh.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            )
+        else:
+            parts.append("Never refreshed")
+            tooltip = "No refresh recorded yet."
+        self._summary_label.setToolTip(tooltip)
         self._summary_label.setText(" · ".join(parts))
 
     def _update_action_buttons(self) -> None:
@@ -1053,12 +1191,19 @@ class ApplicationsWidget(PageScaffold):
         assignment_service_available = self._services.assignments is not None
 
         for button in [self._install_summary_button, self._cache_icon_button]:
-            button.setEnabled(service_available and app_selected and not multiple_selected)
+            button.setEnabled(
+                service_available and app_selected and not multiple_selected
+            )
 
         self._edit_assignments_button.setEnabled(
-            service_available and assignment_service_available and app_selected and not multiple_selected,
+            service_available
+            and assignment_service_available
+            and app_selected
+            and not multiple_selected,
         )
-        self._export_assignments_button.setEnabled(service_available and app_selected and not multiple_selected)
+        self._export_assignments_button.setEnabled(
+            service_available and app_selected and not multiple_selected
+        )
         self._bulk_assign_button.setEnabled(
             service_available and assignment_service_available and any_selected,
         )
@@ -1103,7 +1248,9 @@ class ApplicationsWidget(PageScaffold):
         try:
             with Path(filename).open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2)
-            self._context.show_notification("Assignments exported.", level=ToastLevel.SUCCESS)
+            self._context.show_notification(
+                "Assignments exported.", level=ToastLevel.SUCCESS
+            )
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", f"Unable to write file: {exc}")
 

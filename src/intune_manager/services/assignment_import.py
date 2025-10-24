@@ -16,10 +16,16 @@ from intune_manager.data import (
     MobileAppAssignment,
 )
 from intune_manager.data.models.assignment import GroupAssignmentTarget
-from intune_manager.utils import CancellationToken, ProgressCallback, ProgressTracker, get_logger
+from intune_manager.utils import (
+    CancellationToken,
+    ProgressCallback,
+    ProgressTracker,
+    get_logger,
+)
 
 
 logger = get_logger(__name__)
+
 
 @dataclass(slots=True)
 class AssignmentImportRowResult:
@@ -60,6 +66,7 @@ class AssignmentImportResult:
 class AssignmentImportError(Exception):
     """Raised when an import file cannot be processed."""
 
+
 class AssignmentImportService:
     """Parse CSV-based assignment imports into validated MobileAppAssignment payloads."""
 
@@ -87,7 +94,9 @@ class AssignmentImportService:
                 raise AssignmentImportError("CSV file is missing a header row.")
 
             missing_columns = [
-                column for column in self.REQUIRED_COLUMNS if column not in reader.fieldnames
+                column
+                for column in self.REQUIRED_COLUMNS
+                if column not in reader.fieldnames
             ]
             if missing_columns:
                 raise AssignmentImportError(
@@ -129,7 +138,9 @@ class AssignmentImportService:
             if result.errors:
                 if tracker:
                     tracker.failed(current=f"Row {result.row_number} failed validation")
-                aggregated_errors.extend(f"Row {result.row_number}: {error}" for error in result.errors)
+                aggregated_errors.extend(
+                    f"Row {result.row_number}: {error}" for error in result.errors
+                )
                 continue
             if result.warnings:
                 aggregated_warnings.extend(
@@ -138,7 +149,9 @@ class AssignmentImportService:
             if tracker:
                 tracker.succeeded(current=f"Row {result.row_number} processed")
             if result.assignment is not None and result.resolved_app_id is not None:
-                assignments.setdefault(result.resolved_app_id, []).append(result.assignment)
+                assignments.setdefault(result.resolved_app_id, []).append(
+                    result.assignment
+                )
 
         if tracker:
             tracker.finish()
@@ -224,11 +237,17 @@ class AssignmentImportService:
         result.resolved_group_id = group.id
 
         if app.platform_type is None:
-            result.warnings.append("App platform unknown; review compatibility after import.")
-        elif intent is AssignmentIntent.AVAILABLE_WITHOUT_ENROLLMENT and app.platform_type not in {
-            "ios",
-            "iosVpp",
-        }:
+            result.warnings.append(
+                "App platform unknown; review compatibility after import."
+            )
+        elif (
+            intent is AssignmentIntent.AVAILABLE_WITHOUT_ENROLLMENT
+            and app.platform_type
+            not in {
+                "ios",
+                "iosVpp",
+            }
+        ):
             result.warnings.append(
                 f"Intent '{intent.value}' typically targets iOS apps; review platform '{app.platform_type}'.",
             )
@@ -236,7 +255,9 @@ class AssignmentImportService:
         return result
 
     def _resolve_intent(self, value: str) -> AssignmentIntent:
-        normalised = value.strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+        normalised = (
+            value.strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+        )
 
         for intent in AssignmentIntent:
             token = intent.value.lower().replace(" ", "").replace("-", "")
@@ -263,7 +284,9 @@ class AssignmentImportService:
             index[key] = app
         return index
 
-    def _build_group_index(self, groups: Iterable[DirectoryGroup]) -> dict[str, DirectoryGroup]:
+    def _build_group_index(
+        self, groups: Iterable[DirectoryGroup]
+    ) -> dict[str, DirectoryGroup]:
         index: dict[str, DirectoryGroup] = {}
         for group in groups:
             if not group.display_name:
@@ -279,6 +302,7 @@ class AssignmentImportService:
                 continue
             index[key] = group
         return index
+
 
 __all__ = [
     "AssignmentImportError",

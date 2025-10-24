@@ -4,6 +4,7 @@ import datetime as dt
 from typing import Iterable
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QPlainTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QMessageBox,
@@ -129,6 +131,17 @@ class SettingsWidget(QWidget):
         self.scope_hint.setWordWrap(True)
 
         layout.addWidget(self.scopes_input)
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        self.copy_scopes_button = QToolButton()
+        self.copy_scopes_button.setText("Copy scopes")
+        self.copy_scopes_button.setToolTip(
+            "Copy the configured scope list to the clipboard."
+        )
+        self.copy_scopes_button.clicked.connect(self._copy_configured_scopes)
+        button_row.addWidget(self.copy_scopes_button)
+        button_row.addStretch()
+        layout.addLayout(button_row)
         layout.addWidget(self.scope_hint)
         return group
 
@@ -167,12 +180,28 @@ class SettingsWidget(QWidget):
 
         self.missing_scopes_label = QLabel("Missing scopes:")
         self.missing_scopes_label.setWordWrap(True)
+        self.missing_scopes_label.setVisible(False)
+
+        label_row = QHBoxLayout()
+        label_row.setContentsMargins(0, 0, 0, 0)
+        label_row.addWidget(self.missing_scopes_label)
+        self.copy_missing_scopes_button = QToolButton()
+        self.copy_missing_scopes_button.setText("Copy list")
+        self.copy_missing_scopes_button.setToolTip(
+            "Copy missing scopes to the clipboard."
+        )
+        self.copy_missing_scopes_button.clicked.connect(self._copy_missing_scopes)
+        self.copy_missing_scopes_button.setEnabled(False)
+        self.copy_missing_scopes_button.setVisible(False)
+        label_row.addWidget(self.copy_missing_scopes_button)
+        label_row.addStretch()
 
         self.missing_scopes_list = QListWidget()
+        self.missing_scopes_list.setVisible(False)
 
         layout.addWidget(self.status_label)
         layout.addWidget(self.busy_label)
-        layout.addWidget(self.missing_scopes_label)
+        layout.addLayout(label_row)
         layout.addWidget(self.missing_scopes_list)
         return group
 
@@ -192,7 +221,9 @@ class SettingsWidget(QWidget):
         self._controller.errorOccurred.connect(self._handle_error)
         self._controller.infoMessage.connect(self._handle_info)
         self._controller.busyStateChanged.connect(self._handle_busy_state)
-        self._controller.testConnectionCompleted.connect(self._handle_test_connection_result)
+        self._controller.testConnectionCompleted.connect(
+            self._handle_test_connection_result
+        )
 
     # ----------------------------------------------------------------- Handlers
 
@@ -241,14 +272,15 @@ class SettingsWidget(QWidget):
             self.status_label.setText("Not signed in.")
 
         self.missing_scopes_list.clear()
-        if status_obj.missing_scopes:
-            for scope in status_obj.missing_scopes:
+        missing = list(status_obj.missing_scopes or [])
+        if missing:
+            for scope in missing:
                 QListWidgetItem(scope, self.missing_scopes_list)
-            self.missing_scopes_label.setVisible(True)
-            self.missing_scopes_list.setVisible(True)
-        else:
-            self.missing_scopes_label.setVisible(False)
-            self.missing_scopes_list.setVisible(False)
+        has_missing = bool(missing)
+        self.missing_scopes_label.setVisible(has_missing)
+        self.missing_scopes_list.setVisible(has_missing)
+        self.copy_missing_scopes_button.setVisible(has_missing)
+        self.copy_missing_scopes_button.setEnabled(has_missing)
 
     def _handle_save_clicked(self) -> None:
         settings = self._collect_settings()
@@ -335,6 +367,24 @@ class SettingsWidget(QWidget):
         self.busy_label.setText(message or "")
 
     # ---------------------------------------------------------------- Utilities
+
+    def _copy_configured_scopes(self) -> None:
+        scopes = self._parse_scopes(self.scopes_input.toPlainText())
+        if not scopes:
+            scopes = list(DEFAULT_GRAPH_SCOPES)
+        QGuiApplication.clipboard().setText("\n".join(scopes))
+        self._set_feedback(f"Copied {len(scopes)} scope(s) to clipboard.", error=False)
+
+    def _copy_missing_scopes(self) -> None:
+        count = self.missing_scopes_list.count()
+        if count == 0:
+            self._set_feedback("No missing scopes to copy.", error=True)
+            return
+        scopes = [self.missing_scopes_list.item(index).text() for index in range(count)]
+        QGuiApplication.clipboard().setText("\n".join(scopes))
+        self._set_feedback(
+            f"Copied {count} missing scope(s) to clipboard.", error=False
+        )
 
     def _collect_settings(self, require_identifiers: bool = False) -> Settings | None:
         tenant_id = self.tenant_input.text().strip() or None

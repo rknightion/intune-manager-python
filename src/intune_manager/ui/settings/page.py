@@ -24,7 +24,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from intune_manager.services import DiagnosticsService
+from functools import partial
+
+from intune_manager.data.repositories.base import DEFAULT_SCOPE
+from intune_manager.services import DiagnosticsService, ServiceRegistry
+from intune_manager.utils import AsyncBridge
 from intune_manager.ui.settings.widgets import SettingsWidget
 
 
@@ -48,10 +52,12 @@ class SettingsPage(QWidget):
         self,
         *,
         diagnostics: DiagnosticsService | None,
+        services: ServiceRegistry | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._diagnostics = diagnostics
+        self._services = services
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -69,7 +75,11 @@ class SettingsPage(QWidget):
         about_tab = AboutWidget(diagnostics=self._diagnostics, parent=self)
 
         if self._diagnostics is not None:
-            self._cache_tab = CacheManagementWidget(self._diagnostics, parent=self)
+            self._cache_tab = CacheManagementWidget(
+                self._diagnostics,
+                services=self._services,
+                parent=self,
+            )
             tabs.addTab(self._cache_tab, "Cache & Storage")
 
             self._diagnostics_tab = DiagnosticsWidget(self._diagnostics, parent=self)
@@ -92,9 +102,22 @@ class SettingsPage(QWidget):
 class CacheManagementWidget(QWidget):
     """Provide cache inspection, repair, and attachment management controls."""
 
-    def __init__(self, diagnostics: DiagnosticsService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        diagnostics: DiagnosticsService,
+        *,
+        services: ServiceRegistry | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._diagnostics = diagnostics
+        self._services = services
+        self._bridge: AsyncBridge | None = (
+            AsyncBridge() if services is not None else None
+        )
+        if self._bridge is not None:
+            self._bridge.task_completed.connect(self._handle_async_completed)
+        self._pending_refresh: tuple[str, str | None] | None = None
         self._latest_report = diagnostics.last_cache_report()
         self._build_ui()
         self._refresh_ui()
@@ -111,15 +134,25 @@ class CacheManagementWidget(QWidget):
         status_layout.addWidget(self._status_label)
         status_layout.addStretch()
 
-        inspect_button = QPushButton("Inspect & repair cache")
-        inspect_button.clicked.connect(self._run_inspection)
-        status_layout.addWidget(inspect_button)
+        self._inspect_button = QPushButton("Inspect & repair cache")
+        self._inspect_button.clicked.connect(self._run_inspection)
+        status_layout.addWidget(self._inspect_button)
 
         layout.addWidget(status_group)
 
-        self._table = QTableWidget(0, 6)
+        self._table = QTableWidget(0, 9)
         self._table.setHorizontalHeaderLabels(
-            ["Resource", "Scope", "Recorded", "Actual", "Repaired", "Issues"],
+            [
+                "Resource",
+                "Scope",
+                "Last Refresh",
+                "Expires",
+                "Recorded",
+                "Actual",
+                "Repaired",
+                "Issues",
+                "Actions",
+            ],
         )
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setSelectionMode(QTableWidget.NoSelection)
@@ -132,16 +165,16 @@ class CacheManagementWidget(QWidget):
         self._attachment_label = QLabel()
         attachment_layout.addWidget(self._attachment_label)
         attachment_layout.addStretch()
-        purge_button = QPushButton("Purge attachments")
-        purge_button.clicked.connect(self._purge_attachments)
-        attachment_layout.addWidget(purge_button)
+        self._purge_button = QPushButton("Purge attachments")
+        self._purge_button.clicked.connect(self._purge_attachments)
+        attachment_layout.addWidget(self._purge_button)
         layout.addWidget(attachment_group)
 
         action_row = QHBoxLayout()
         action_row.addStretch()
-        clear_button = QPushButton("Clear all cached data")
-        clear_button.clicked.connect(self._clear_all)
-        action_row.addWidget(clear_button)
+        self._clear_button = QPushButton("Clear all cached data")
+        self._clear_button.clicked.connect(self._clear_all)
+        action_row.addWidget(self._clear_button)
         layout.addLayout(action_row)
 
         layout.addStretch()
@@ -150,9 +183,7 @@ class CacheManagementWidget(QWidget):
         reply = QMessageBox.question(
             self,
             "Inspect cache",
-            (
-                "Run cache validation now? This may purge invalid records automatically."
-            ),
+            ("Run cache validation now? This may purge invalid records automatically."),
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
@@ -196,7 +227,9 @@ class CacheManagementWidget(QWidget):
     def _refresh_ui(self) -> None:
         if self._latest_report is not None:
             severity_key = self._latest_report.severity.value
-            style = SEVERITY_STYLES.get(severity_key, CacheSeverityStyle("Unknown", "#5f6673"))
+            style = SEVERITY_STYLES.get(
+                severity_key, CacheSeverityStyle("Unknown", "#5f6673")
+            )
             self._status_label.setText(style.label)
             self._status_label.setStyleSheet(f"color: {style.color}; font-weight: 600;")
             self._populate_table(self._latest_report.entries)
@@ -212,15 +245,51 @@ class CacheManagementWidget(QWidget):
             row = self._table.rowCount()
             self._table.insertRow(row)
             self._table.setItem(row, 0, QTableWidgetItem(entry.resource))
-            self._table.setItem(row, 1, QTableWidgetItem(entry.scope))
-            recorded = "–" if entry.recorded_count is None else str(entry.recorded_count)
-            self._table.setItem(row, 2, QTableWidgetItem(recorded))
-            self._table.setItem(row, 3, QTableWidgetItem(str(entry.actual_count)))
+            scope_display = entry.scope if entry.scope != DEFAULT_SCOPE else "default"
+            self._table.setItem(row, 1, QTableWidgetItem(scope_display))
+            if entry.last_refresh is not None:
+                last_refresh = entry.last_refresh.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_refresh = "—"
+            self._table.setItem(row, 2, QTableWidgetItem(last_refresh))
+            if entry.expires_at is not None:
+                expires = entry.expires_at.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                expires = "—"
+            self._table.setItem(row, 3, QTableWidgetItem(expires))
+            recorded = (
+                "–" if entry.recorded_count is None else str(entry.recorded_count)
+            )
+            self._table.setItem(row, 4, QTableWidgetItem(recorded))
+            self._table.setItem(row, 5, QTableWidgetItem(str(entry.actual_count)))
             repaired_text = "Yes" if entry.repaired else "No"
-            self._table.setItem(row, 4, QTableWidgetItem(repaired_text))
-            issue_lines = [f"[{issue.severity.value.upper()}] {issue.message}" for issue in entry.issues]
+            self._table.setItem(row, 6, QTableWidgetItem(repaired_text))
+            issue_lines = [
+                f"[{issue.severity.value.upper()}] {issue.message}"
+                for issue in entry.issues
+            ]
             issue_text = "\n".join(issue_lines)
-            self._table.setItem(row, 5, QTableWidgetItem(issue_text))
+            self._table.setItem(row, 7, QTableWidgetItem(issue_text))
+            if self._services is not None and self._bridge is not None:
+                button = QPushButton("Refresh…")
+                available = self._service_available(entry.resource)
+                button.setEnabled(available)
+                button.setProperty("cache_refresh_available", available)
+                if available:
+                    button.clicked.connect(
+                        partial(
+                            self._handle_refresh_clicked,
+                            entry.resource,
+                            entry.tenant_id,
+                        ),
+                    )
+                else:
+                    button.setToolTip("Refresh service not available in this session.")
+                self._table.setCellWidget(row, 8, button)
+            else:
+                placeholder = QLabel("—")
+                placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setCellWidget(row, 8, placeholder)
         self._table.resizeColumnsToContents()
 
     def _update_attachment_stats(self) -> None:
@@ -245,13 +314,105 @@ class CacheManagementWidget(QWidget):
                 return f"{size:.2f} {unit}"
         return f"{size:.2f} PiB"
 
+    def _service_available(self, resource: str) -> bool:
+        return self._resolve_service(resource) is not None
+
+    def _resolve_service(self, resource: str):  # noqa: ANN001 - dynamic return
+        if self._services is None:
+            return None
+        mapping = {
+            "devices": "devices",
+            "mobile_apps": "applications",
+            "groups": "groups",
+            "configuration_profiles": "configurations",
+            "audit_events": "audit",
+            "assignment_filters": "assignment_filters",
+        }
+        attr = mapping.get(resource)
+        if not attr:
+            return None
+        return getattr(self._services, attr, None)
+
+    def _handle_refresh_clicked(self, resource: str, tenant_id: str | None) -> None:
+        if self._bridge is None or self._services is None:
+            QMessageBox.information(
+                self,
+                "Refresh unavailable",
+                "No active services are available to refresh this cache.",
+            )
+            return
+        if not self._service_available(resource):
+            QMessageBox.information(
+                self,
+                "Service unavailable",
+                "The corresponding service is not configured in this session.",
+            )
+            return
+        if self._pending_refresh is not None:
+            return
+        self._pending_refresh = (resource, tenant_id)
+        friendly = resource.replace("_", " ").title()
+        self._status_label.setText(f"Refreshing {friendly} cache…")
+        self._set_controls_enabled(False)
+        self._bridge.run_coroutine(self._refresh_resource_async(resource, tenant_id))
+
+    async def _refresh_resource_async(
+        self, resource: str, tenant_id: str | None
+    ) -> str:
+        service = self._resolve_service(resource)
+        if service is None:
+            raise RuntimeError("Service not configured")
+        await service.refresh(tenant_id=tenant_id, force=True)
+        return resource
+
+    def _handle_async_completed(self, result: object, error: object) -> None:
+        if self._pending_refresh is None:
+            return
+        resource, _tenant_id = self._pending_refresh
+        self._pending_refresh = None
+        self._set_controls_enabled(True)
+        if error:
+            QMessageBox.critical(
+                self,
+                "Refresh failed",
+                f"Failed to refresh {resource.replace('_', ' ')} cache: {error}",
+            )
+            self._refresh_ui()
+            return
+        try:
+            self._latest_report = self._diagnostics.inspect_cache(auto_repair=True)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Inspection warning",
+                f"Cache refreshed but inspection failed: {exc}",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Cache refreshed",
+                f"Updated {resource.replace('_', ' ')} cache from Microsoft Graph.",
+            )
+        self._refresh_ui()
+
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        for button in [self._inspect_button, self._purge_button, self._clear_button]:
+            button.setEnabled(enabled)
+        for row in range(self._table.rowCount()):
+            widget = self._table.cellWidget(row, 8)
+            if isinstance(widget, QPushButton):
+                available = bool(widget.property("cache_refresh_available"))
+                widget.setEnabled(enabled and available)
+
 
 class DiagnosticsWidget(QWidget):
     """Expose log export, keyring status, and telemetry preferences."""
 
     telemetryChanged = Signal(bool)
 
-    def __init__(self, diagnostics: DiagnosticsService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, diagnostics: DiagnosticsService, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._diagnostics = diagnostics
         self._build_ui()
@@ -300,7 +461,9 @@ class DiagnosticsWidget(QWidget):
         telemetry_group = QGroupBox("Telemetry")
         telemetry_layout = QVBoxLayout(telemetry_group)
         telemetry_layout.setContentsMargins(12, 12, 12, 12)
-        self._telemetry_toggle = QCheckBox("Share anonymised diagnostics to improve Intune Manager")
+        self._telemetry_toggle = QCheckBox(
+            "Share anonymised diagnostics to improve Intune Manager"
+        )
         self._telemetry_toggle.toggled.connect(self._handle_telemetry_toggled)
         telemetry_layout.addWidget(self._telemetry_toggle)
         hint = QLabel(
@@ -429,7 +592,11 @@ class AboutWidget(QWidget):
 
     def _about_markup(self) -> str:
         version = self._resolve_version()
-        telemetry_hint = "Enabled" if self._diagnostics and self._diagnostics.telemetry_opt_in() else "Disabled"
+        telemetry_hint = (
+            "Enabled"
+            if self._diagnostics and self._diagnostics.telemetry_opt_in()
+            else "Disabled"
+        )
         return (
             "<h3>Intune Manager</h3>"
             f"<p><b>Version:</b> {version}</p>"

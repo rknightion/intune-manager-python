@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Iterable
+from collections.abc import Callable, Iterable
+from datetime import datetime
 
 from intune_manager.data import DirectoryGroup, GroupMember
 from intune_manager.services import GroupService, ServiceErrorEvent, ServiceRegistry
@@ -19,6 +19,8 @@ class GroupController:
         self._member_cache: dict[str, list[GroupMember]] = {}
         self._owner_cache: dict[str, list[GroupMember]] = {}
         self._member_streams: dict[str, GroupMemberStream] = {}
+        self._member_freshness: dict[str, datetime] = {}
+        self._owner_freshness: dict[str, datetime] = {}
 
     def register_callbacks(
         self,
@@ -66,6 +68,12 @@ class GroupController:
     def cached_owners(self, group_id: str) -> list[GroupMember] | None:
         return self._owner_cache.get(group_id)
 
+    def member_freshness(self, group_id: str) -> datetime | None:
+        return self._member_freshness.get(group_id)
+
+    def owner_freshness(self, group_id: str) -> datetime | None:
+        return self._owner_freshness.get(group_id)
+
     def member_stream(
         self,
         group_id: str,
@@ -100,6 +108,8 @@ class GroupController:
             self._member_cache[group_id].extend(items)
         else:
             self._member_cache[group_id] = items
+        if items:
+            self._member_freshness[group_id] = datetime.utcnow()
 
     # ----------------------------------------------------------------- Actions
 
@@ -126,9 +136,12 @@ class GroupController:
     ) -> list[GroupMember]:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        members = await self._service.list_members(group_id, cancellation_token=cancellation_token)
+        members = await self._service.list_members(
+            group_id, cancellation_token=cancellation_token
+        )
         self._member_cache[group_id] = members
         self._member_streams.pop(group_id, None)
+        self._member_freshness[group_id] = datetime.utcnow()
         return members
 
     async def list_owners(
@@ -139,8 +152,11 @@ class GroupController:
     ) -> list[GroupMember]:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        owners = await self._service.list_owners(group_id, cancellation_token=cancellation_token)
+        owners = await self._service.list_owners(
+            group_id, cancellation_token=cancellation_token
+        )
         self._owner_cache[group_id] = owners
+        self._owner_freshness[group_id] = datetime.utcnow()
         return owners
 
     async def add_member(
@@ -152,7 +168,9 @@ class GroupController:
     ) -> None:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        await self._service.add_member(group_id, member_id, cancellation_token=cancellation_token)
+        await self._service.add_member(
+            group_id, member_id, cancellation_token=cancellation_token
+        )
         self._member_cache.pop(group_id, None)
         self._member_streams.pop(group_id, None)
 
@@ -165,7 +183,9 @@ class GroupController:
     ) -> None:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        await self._service.remove_member(group_id, member_id, cancellation_token=cancellation_token)
+        await self._service.remove_member(
+            group_id, member_id, cancellation_token=cancellation_token
+        )
         self._member_cache.pop(group_id, None)
         self._member_streams.pop(group_id, None)
 
@@ -177,7 +197,9 @@ class GroupController:
     ) -> None:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        await self._service.delete_group(group_id, cancellation_token=cancellation_token)
+        await self._service.delete_group(
+            group_id, cancellation_token=cancellation_token
+        )
         self._member_cache.pop(group_id, None)
         self._owner_cache.pop(group_id, None)
         self._member_streams.pop(group_id, None)
@@ -190,7 +212,9 @@ class GroupController:
     ) -> DirectoryGroup:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        return await self._service.create_group(payload, cancellation_token=cancellation_token)
+        return await self._service.create_group(
+            payload, cancellation_token=cancellation_token
+        )
 
     async def update_membership_rule(
         self,
@@ -201,7 +225,21 @@ class GroupController:
     ) -> None:
         if self._service is None:
             raise RuntimeError("Group service not configured")
-        await self._service.update_membership_rule(group_id, rule, cancellation_token=cancellation_token)
+        await self._service.update_membership_rule(
+            group_id, rule, cancellation_token=cancellation_token
+        )
+
+    async def member_of_map(
+        self,
+        group_ids: Iterable[str],
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict[str, list[str]]:
+        if self._service is None:
+            return {}
+        return await self._service.fetch_member_of_map(
+            group_ids, cancellation_token=cancellation_token
+        )
 
 
 __all__ = ["GroupController"]

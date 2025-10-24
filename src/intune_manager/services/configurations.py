@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from intune_manager.data import ConfigurationProfile, ConfigurationProfileRepository
@@ -43,13 +43,17 @@ class ConfigurationService:
         self._default_ttl = timedelta(minutes=30)
         self._validator = GraphResponseValidator("configuration_profiles")
 
-        self.refreshed: EventHook[RefreshEvent[list[ConfigurationProfile]]] = EventHook()
+        self.refreshed: EventHook[RefreshEvent[list[ConfigurationProfile]]] = (
+            EventHook()
+        )
         self.errors: EventHook[ServiceErrorEvent] = EventHook()
         self.assignments: EventHook[ConfigurationAssignmentEvent] = EventHook()
 
     def list_cached(self, tenant_id: str | None = None) -> list[ConfigurationProfile]:
         profiles = self._repository.list_all(tenant_id=tenant_id)
-        logger.debug("Configuration cache read", tenant_id=tenant_id, count=len(profiles))
+        logger.debug(
+            "Configuration cache read", tenant_id=tenant_id, count=len(profiles)
+        )
         return profiles
 
     def is_cache_stale(self, tenant_id: str | None = None) -> bool:
@@ -57,6 +61,9 @@ class ConfigurationService:
 
     def count_cached(self, tenant_id: str | None = None) -> int:
         return self._repository.cached_count(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        return self._repository.last_refresh(tenant_id=tenant_id)
 
     async def refresh(
         self,
@@ -97,7 +104,9 @@ class ConfigurationService:
             self._validator.reset()
             invalid_count = 0
             for endpoint in endpoints:
-                api_version = "beta" if endpoint.endswith("configurationPolicies") else None
+                api_version = (
+                    "beta" if endpoint.endswith("configurationPolicies") else None
+                )
                 async for item in self._client_factory.iter_collection(
                     "GET",
                     endpoint,
@@ -138,7 +147,9 @@ class ConfigurationService:
         except CancellationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to refresh configuration profiles", tenant_id=tenant_id)
+            logger.exception(
+                "Failed to refresh configuration profiles", tenant_id=tenant_id
+            )
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
 
@@ -159,7 +170,10 @@ class ConfigurationService:
             body,
             endpoint=endpoint,
         )
-        def event_builder(status: MutationStatus, error: Exception | None = None) -> ConfigurationAssignmentEvent:
+
+        def event_builder(
+            status: MutationStatus, error: Exception | None = None
+        ) -> ConfigurationAssignmentEvent:
             return ConfigurationAssignmentEvent(
                 profile_id=profile_id,
                 payload=body,

@@ -251,7 +251,11 @@ class SettingsController(QObject):
         self._set_busy(False, "")
 
         if action is None:
-            logger.warning("Async result received without pending action", result=result, error=error)
+            logger.warning(
+                "Async result received without pending action",
+                result=result,
+                error=error,
+            )
             return
 
         if error:
@@ -264,7 +268,9 @@ class SettingsController(QObject):
         if action == "test_connection":
             if not isinstance(result, tuple) or len(result) != 2:
                 logger.warning("Unexpected test connection result: %r", result)
-                self.testConnectionCompleted.emit(False, "Unexpected result from connectivity test.")
+                self.testConnectionCompleted.emit(
+                    False, "Unexpected result from connectivity test."
+                )
                 return
             success, detail = bool(result[0]), str(result[1])
             if success:

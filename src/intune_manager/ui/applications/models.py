@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable, List, Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    Qt,
+    QSortFilterProxyModel,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QIcon
 
 from intune_manager.data import MobileApp
@@ -39,6 +46,9 @@ def assignment_summary(app: MobileApp) -> str:
 class ApplicationTableModel(QAbstractTableModel):
     """Table projection for managed mobile applications."""
 
+    load_finished = Signal()
+    batch_appended = Signal(int)
+
     def __init__(
         self,
         apps: Sequence[MobileApp] | None = None,
@@ -47,7 +57,9 @@ class ApplicationTableModel(QAbstractTableModel):
     ) -> None:
         super().__init__()
         self._columns: List[ApplicationColumn] = [
-            ApplicationColumn("display_name", "Application", lambda app: app.display_name),
+            ApplicationColumn(
+                "display_name", "Application", lambda app: app.display_name
+            ),
             ApplicationColumn(
                 "platform_type",
                 "Platform",
@@ -64,6 +76,9 @@ class ApplicationTableModel(QAbstractTableModel):
         ]
         self._apps: list[MobileApp] = list(apps or [])
         self._icon_provider = icon_provider or (lambda _: None)
+        self._pending_apps: deque[MobileApp] = deque()
+        self._insert_timer: QTimer | None = None
+        self._chunk_size = 400
 
     # ----------------------------------------------------------------- Qt API
 
@@ -122,9 +137,32 @@ class ApplicationTableModel(QAbstractTableModel):
     # ----------------------------------------------------------------- Helpers
 
     def set_apps(self, apps: Iterable[MobileApp]) -> None:
+        if self._insert_timer and self._insert_timer.isActive():
+            self._insert_timer.stop()
+        self._pending_apps.clear()
         self.beginResetModel()
         self._apps = list(apps)
         self.endResetModel()
+        self.load_finished.emit()
+
+    def set_apps_lazy(
+        self, apps: Iterable[MobileApp], *, chunk_size: int = 400
+    ) -> None:
+        if self._insert_timer and self._insert_timer.isActive():
+            self._insert_timer.stop()
+        self.beginResetModel()
+        self._apps = []
+        self.endResetModel()
+        self._pending_apps = deque(apps)
+        self._chunk_size = max(1, chunk_size)
+        if self._insert_timer is None:
+            self._insert_timer = QTimer(self)
+            self._insert_timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self._insert_timer.timeout.connect(self._consume_pending_apps)
+        if not self._pending_apps:
+            self.load_finished.emit()
+            return
+        self._insert_timer.start(0)
 
     def app_at(self, row: int) -> MobileApp | None:
         if 0 <= row < len(self._apps):
@@ -136,6 +174,27 @@ class ApplicationTableModel(QAbstractTableModel):
 
     def set_icon_provider(self, provider: Callable[[str], QIcon | None]) -> None:
         self._icon_provider = provider
+
+    def is_loading(self) -> bool:
+        return bool(self._pending_apps)
+
+    def _consume_pending_apps(self) -> None:
+        if not self._pending_apps:
+            if self._insert_timer and self._insert_timer.isActive():
+                self._insert_timer.stop()
+            self.load_finished.emit()
+            return
+        chunk: list[MobileApp] = []
+        while self._pending_apps and len(chunk) < self._chunk_size:
+            chunk.append(self._pending_apps.popleft())
+        if not chunk:
+            return
+        start = len(self._apps)
+        end = start + len(chunk) - 1
+        self.beginInsertRows(QModelIndex(), start, end)
+        self._apps.extend(chunk)
+        self.endInsertRows()
+        self.batch_appended.emit(len(self._apps))
 
 
 class ApplicationFilterProxyModel(QSortFilterProxyModel):
@@ -194,9 +253,7 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
             ]
             tokens = [token for token in self._search_text.split() if token]
             blob = " ".join(
-                value.lower()
-                for value in haystack
-                if isinstance(value, str)
+                value.lower() for value in haystack if isinstance(value, str)
             )
             matched = False
             if tokens and all(token in blob for token in tokens):
@@ -206,7 +263,9 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
                 for value in haystack:
                     if not isinstance(value, str) or not value:
                         continue
-                    ratio = SequenceMatcher(None, self._search_text, value.lower()).ratio()
+                    ratio = SequenceMatcher(
+                        None, self._search_text, value.lower()
+                    ).ratio()
                     if ratio > best_ratio:
                         best_ratio = ratio
                         if best_ratio >= 0.95:

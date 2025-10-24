@@ -111,7 +111,9 @@ class GraphResponseValidator:
         if self._issue_callback is not None:
             try:
                 self._issue_callback(issue)
-            except Exception:  # pragma: no cover - callbacks should not break validation
+            except (
+                Exception
+            ):  # pragma: no cover - callbacks should not break validation
                 logger.exception("Validation issue callback raised an exception")
 
 

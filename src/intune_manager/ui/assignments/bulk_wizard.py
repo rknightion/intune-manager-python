@@ -23,7 +23,12 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
-from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp, MobileAppAssignment
+from intune_manager.data import (
+    AssignmentFilter,
+    DirectoryGroup,
+    MobileApp,
+    MobileAppAssignment,
+)
 from intune_manager.services.assignments import AssignmentDiff, AssignmentUpdate
 
 from .models import DiffDetail, DiffDetailModel, DiffSummary, DiffSummaryModel
@@ -58,7 +63,13 @@ class _ConflictDescriptor:
 
 
 class _ConflictRow(QWidget):
-    def __init__(self, descriptor: _ConflictDescriptor, *, default_apply: bool = True, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        descriptor: _ConflictDescriptor,
+        *,
+        default_apply: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.descriptor = descriptor
 
@@ -160,7 +171,9 @@ class BulkAssignmentWizard(QWizard):
     def selected_group_ids(self) -> Set[str]:
         return set(self._selected_group_ids)
 
-    def set_selected_group_ids(self, group_ids: Set[str], *, filter_active: bool) -> None:
+    def set_selected_group_ids(
+        self, group_ids: Set[str], *, filter_active: bool
+    ) -> None:
         self._selected_group_ids = group_ids
         self._group_filter_active = filter_active
         self._settings_page.invalidate_conflicts()
@@ -182,7 +195,9 @@ class BulkAssignmentWizard(QWizard):
         if retry_conflicts is not None:
             self._options.retry_conflicts = retry_conflicts
 
-    def set_conflict_choice(self, app_id: str, assignment_id: str | None, apply_change: bool) -> None:
+    def set_conflict_choice(
+        self, app_id: str, assignment_id: str | None, apply_change: bool
+    ) -> None:
         key = (app_id, assignment_id or "")
         self._conflict_choices[key] = apply_change
 
@@ -232,7 +247,9 @@ class BulkAssignmentWizard(QWizard):
 
         for app_id, diff in filtered.items():
             app_label = self.app_label(app_id)
-            diff_warnings = self._warning_provider(app_id, diff) if self._warning_provider else []
+            diff_warnings = (
+                self._warning_provider(app_id, diff) if self._warning_provider else []
+            )
             summaries.append(
                 DiffSummary(
                     app_id=app_id,
@@ -243,7 +260,8 @@ class BulkAssignmentWizard(QWizard):
                     warnings=diff_warnings,
                     has_filters=any(
                         getattr(item.target, "assignment_filter_id", None)
-                        for item in diff.to_create + [update.desired for update in diff.to_update]
+                        for item in diff.to_create
+                        + [update.desired for update in diff.to_update]
                     ),
                 ),
             )
@@ -306,7 +324,11 @@ class BulkAssignmentWizard(QWizard):
             return group_id is None or group_id in group_ids
 
         def include_update(update: AssignmentUpdate) -> bool:
-            choice = self.conflict_choice(app_id, update.current.id) if respect_conflicts else True
+            choice = (
+                self.conflict_choice(app_id, update.current.id)
+                if respect_conflicts
+                else True
+            )
             if not choice:
                 return False
             if not group_ids:
@@ -316,8 +338,16 @@ class BulkAssignmentWizard(QWizard):
                 return False
             return True
 
-        creates = [assignment for assignment in diff.to_create if include_assignment(assignment)]
-        updates = [AssignmentUpdate(current=upd.current, desired=upd.desired) for upd in diff.to_update if include_update(upd)]
+        creates = [
+            assignment
+            for assignment in diff.to_create
+            if include_assignment(assignment)
+        ]
+        updates = [
+            AssignmentUpdate(current=upd.current, desired=upd.desired)
+            for upd in diff.to_update
+            if include_update(upd)
+        ]
 
         deletes: List[MobileAppAssignment] = []
         for assignment in diff.to_delete:
@@ -368,7 +398,9 @@ class BulkAssignmentWizard(QWizard):
             diffs=diffs,
             options=self._options,
             selected_app_ids=self.selected_app_ids(),
-            selected_group_ids=self.selected_group_ids() if self._group_filter_active else set(),
+            selected_group_ids=self.selected_group_ids()
+            if self._group_filter_active
+            else set(),
             warnings=self.preview_warnings(),
         )
 
@@ -378,7 +410,9 @@ class _SelectAppsPage(QWizardPage):
         super().__init__(wizard)
         self._wizard = wizard
         self.setTitle("Step 1 — Select target applications")
-        self.setSubTitle("Choose which applications should receive the desired assignment changes.")
+        self.setSubTitle(
+            "Choose which applications should receive the desired assignment changes."
+        )
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -410,10 +444,14 @@ class _SelectAppsPage(QWizardPage):
         self._list.clear()
         for app_id, diff in self._wizard.available_diffs().items():
             label = self._wizard.app_label(app_id)
-            item = QListWidgetItem(f"{label} — {len(diff.to_create)} add / {len(diff.to_update)} update / {len(diff.to_delete)} remove")
+            item = QListWidgetItem(
+                f"{label} — {len(diff.to_create)} add / {len(diff.to_update)} update / {len(diff.to_delete)} remove"
+            )
             item.setData(Qt.ItemDataRole.UserRole, app_id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if app_id in selected else Qt.CheckState.Unchecked)
+            item.setCheckState(
+                Qt.CheckState.Checked if app_id in selected else Qt.CheckState.Unchecked
+            )
             self._list.addItem(item)
 
     def validatePage(self) -> bool:
@@ -443,7 +481,9 @@ class _SelectGroupsPage(QWizardPage):
         super().__init__(wizard)
         self._wizard = wizard
         self.setTitle("Step 2 — Select target groups")
-        self.setSubTitle("Limit the bulk operation to specific groups or filters if required.")
+        self.setSubTitle(
+            "Limit the bulk operation to specific groups or filters if required."
+        )
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -499,7 +539,9 @@ class _SelectGroupsPage(QWizardPage):
         selected = self._wizard.selected_group_ids()
         self._list.clear()
         if not desired:
-            placeholder = QListWidgetItem("Assignments target all users/platforms; no groups to filter.")
+            placeholder = QListWidgetItem(
+                "Assignments target all users/platforms; no groups to filter."
+            )
             placeholder.setFlags(Qt.ItemFlag.ItemIsEnabled)
             placeholder.setCheckState(Qt.CheckState.Checked)
             self._list.addItem(placeholder)
@@ -510,7 +552,11 @@ class _SelectGroupsPage(QWizardPage):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, group_id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            state = Qt.CheckState.Checked if not selected or group_id in selected else Qt.CheckState.Unchecked
+            state = (
+                Qt.CheckState.Checked
+                if not selected or group_id in selected
+                else Qt.CheckState.Unchecked
+            )
             item.setCheckState(state)
             self._list.addItem(item)
 
@@ -526,7 +572,11 @@ class _SelectGroupsPage(QWizardPage):
             item = self._list.item(index)
             if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
                 group_id = item.data(Qt.ItemDataRole.UserRole)
-                state = Qt.CheckState.Checked if group_id in staged_ids else Qt.CheckState.Unchecked
+                state = (
+                    Qt.CheckState.Checked
+                    if group_id in staged_ids
+                    else Qt.CheckState.Unchecked
+                )
                 item.setCheckState(state)
 
 
@@ -535,7 +585,9 @@ class _ConfigureSettingsPage(QWizardPage):
         super().__init__(wizard)
         self._wizard = wizard
         self.setTitle("Step 3 — Configure options & resolve conflicts")
-        self.setSubTitle("Adjust bulk apply settings and choose how to handle updates to existing assignments.")
+        self.setSubTitle(
+            "Adjust bulk apply settings and choose how to handle updates to existing assignments."
+        )
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -543,8 +595,12 @@ class _ConfigureSettingsPage(QWizardPage):
 
         options_group = QGroupBox("Apply options")
         options_layout = QFormLayout(options_group)
-        self._notify_checkbox = QCheckBox("Send notifications to end users (where supported)")
-        self._skip_warnings_checkbox = QCheckBox("Allow apply even if warnings are detected")
+        self._notify_checkbox = QCheckBox(
+            "Send notifications to end users (where supported)"
+        )
+        self._skip_warnings_checkbox = QCheckBox(
+            "Allow apply even if warnings are detected"
+        )
         self._retry_checkbox = QCheckBox("Automatically retry transient conflicts")
         options_layout.addRow(self._notify_checkbox)
         options_layout.addRow(self._skip_warnings_checkbox)
@@ -558,7 +614,9 @@ class _ConfigureSettingsPage(QWizardPage):
         self._conflict_container_layout.setContentsMargins(0, 0, 0, 0)
         self._conflict_container_layout.setSpacing(8)
         conflict_layout.addWidget(_ScrollContainer(self._conflict_container))
-        self._conflict_placeholder = QLabel("No conflicts detected. Desired assignments will be applied as-is.")
+        self._conflict_placeholder = QLabel(
+            "No conflicts detected. Desired assignments will be applied as-is."
+        )
         self._conflict_placeholder.setStyleSheet("color: palette(mid);")
         conflict_layout.addWidget(self._conflict_placeholder)
         layout.addWidget(conflict_group, stretch=1)

@@ -29,7 +29,9 @@ def _utc_now() -> datetime:
     return datetime.utcnow()
 
 
-def device_to_record(device: ManagedDevice, *, tenant_id: str | None = None) -> DeviceRecord:
+def device_to_record(
+    device: ManagedDevice, *, tenant_id: str | None = None
+) -> DeviceRecord:
     return DeviceRecord(
         id=device.id,
         tenant_id=tenant_id,
@@ -51,7 +53,9 @@ def record_to_device(record: DeviceRecord) -> ManagedDevice:
     return ManagedDevice.from_graph(payload)
 
 
-def mobile_app_to_record(app: MobileApp, *, tenant_id: str | None = None) -> MobileAppRecord:
+def mobile_app_to_record(
+    app: MobileApp, *, tenant_id: str | None = None
+) -> MobileAppRecord:
     return MobileAppRecord(
         id=app.id,
         tenant_id=tenant_id,
@@ -71,7 +75,9 @@ def record_to_mobile_app(record: MobileAppRecord) -> MobileApp:
     return MobileApp.from_graph(payload)
 
 
-def group_to_record(group: DirectoryGroup, *, tenant_id: str | None = None) -> GroupRecord:
+def group_to_record(
+    group: DirectoryGroup, *, tenant_id: str | None = None
+) -> GroupRecord:
     return GroupRecord(
         id=group.id,
         tenant_id=tenant_id,
@@ -115,7 +121,9 @@ def record_to_configuration(record: ConfigurationProfileRecord) -> Configuration
     return ConfigurationProfile.from_graph(payload)
 
 
-def audit_event_to_record(event: AuditEvent, *, tenant_id: str | None = None) -> AuditEventRecord:
+def audit_event_to_record(
+    event: AuditEvent, *, tenant_id: str | None = None
+) -> AuditEventRecord:
     return AuditEventRecord(
         id=event.id,
         tenant_id=tenant_id,
@@ -143,7 +151,9 @@ def assignment_filter_to_record(
         id=assignment_filter.id,
         tenant_id=tenant_id,
         display_name=assignment_filter.display_name,
-        platform=getattr(assignment_filter.platform, "value", assignment_filter.platform),
+        platform=getattr(
+            assignment_filter.platform, "value", assignment_filter.platform
+        ),
         updated_at=_utc_now(),
         payload=assignment_filter.to_graph(),
     )

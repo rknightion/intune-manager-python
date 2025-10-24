@@ -1,0 +1,154 @@
+name: CI Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64
+          - os: linux
+            arch: x64
+            runner: ubuntu-latest
+            artifact_name: IntuneManager.bin
+            output_path: src/intune_manager.dist/intune_manager.bin
+
+          # Linux ARM64
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            artifact_name: IntuneManager.bin
+            output_path: src/intune_manager.dist/intune_manager.bin
+
+          # Windows x64
+          - os: windows
+            arch: x64
+            runner: windows-latest
+            artifact_name: IntuneManager.exe
+            output_path: src/intune_manager.dist/intune_manager.exe
+
+          # Windows ARM64
+          - os: windows
+            arch: arm64
+            runner: windows-11-arm
+            artifact_name: IntuneManager.exe
+            output_path: src/intune_manager.dist/intune_manager.exe
+
+          # macOS Intel
+          - os: macos
+            arch: x64
+            runner: macos-13
+            artifact_name: IntuneManager.app
+            output_path: src/intune_manager.dist/IntuneManager.app
+
+          # macOS ARM64
+          - os: macos
+            arch: arm64
+            runner: macos-latest
+            artifact_name: IntuneManager.app
+            output_path: src/intune_manager.dist/IntuneManager.app
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.5"
+          enable-cache: true
+
+      # Install ccache on supported platforms
+      - name: Install ccache (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ccache
+
+      - name: Install ccache (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ccache
+
+      # Restore ccache
+      - name: Cache ccache
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ~/.cache/ccache
+          key: ccache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          restore-keys: |
+            ccache-${{ matrix.os }}-${{ matrix.arch }}-
+
+      # Cache Nuitka build directory
+      - name: Cache Nuitka build
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/intune_manager.build
+            src/intune_manager.dist
+            src/intune_manager.onefile-build
+          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          restore-keys: |
+            nuitka-${{ matrix.os }}-${{ matrix.arch }}-
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run tests
+        run: uv run pytest -v
+
+      - name: Get version from pyproject.toml
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep -m 1 'version = ' pyproject.toml | cut -d'"' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build with Nuitka
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: uv run nuitka src/intune_manager
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          echo "Checking for build output at: ${{ matrix.output_path }}"
+          if [ -e "${{ matrix.output_path }}" ]; then
+            echo "✓ Build artifact found"
+            ls -lh "${{ matrix.output_path }}"
+          else
+            echo "✗ Build artifact not found!"
+            echo "Contents of src directory:"
+            ls -la src/
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.output_path }}
+          retention-days: 90
+          compression-level: 9
+
+      - name: Save ccache statistics
+        if: runner.os != 'Windows' && always()
+        run: |
+          echo "ccache statistics:"
+          ccache -s || true

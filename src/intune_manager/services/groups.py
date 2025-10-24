@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
-from typing import Any, AsyncIterator
+from datetime import datetime, timedelta
+from typing import Any, AsyncIterator, Iterable
 
 from intune_manager.data import DirectoryGroup, GroupMember, GroupRepository
 from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph.client import GraphClientFactory
+from intune_manager.graph.requests import GraphRequest
 from intune_manager.services.base import (
     EventHook,
     MutationStatus,
@@ -112,6 +113,9 @@ class GroupService:
 
     def count_cached(self, tenant_id: str | None = None) -> int:
         return self._repository.cached_count(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        return self._repository.last_refresh(tenant_id=tenant_id)
 
     # ---------------------------------------------------------------- Actions
 
@@ -222,6 +226,71 @@ class GroupService:
         )
         logger.debug("Updated group", group_id=group_id)
 
+    async def fetch_member_of_map(
+        self,
+        group_ids: Iterable[str],
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> dict[str, list[str]]:
+        ids = [group_id for group_id in group_ids if group_id]
+        if not ids:
+            return {}
+
+        requests: list[GraphRequest] = []
+        for group_id in ids:
+            requests.append(
+                GraphRequest(
+                    method="GET",
+                    url=f"/groups/{group_id}/memberOf",
+                    params={
+                        "$select": "id,displayName",
+                        "$filter": "isof('microsoft.graph.group')",
+                    },
+                    headers={"ConsistencyLevel": "eventual"},
+                    request_id=group_id,
+                ),
+            )
+
+        results: dict[str, list[str]] = {group_id: [] for group_id in ids}
+        chunk_size = 20
+
+        for start in range(0, len(requests), chunk_size):
+            chunk = requests[start : start + chunk_size]
+            try:
+                response = await self._client_factory.execute_batch(
+                    chunk,
+                    cancellation_token=cancellation_token,
+                )
+            except CancellationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Failed to fetch memberOf relationships", exc_info=exc)
+                continue
+            for entry in response.get("responses", []):
+                group_id = entry.get("id")
+                if not group_id or group_id not in results:
+                    continue
+                status = entry.get("status", 500)
+                if status >= 400:
+                    logger.warning(
+                        "memberOf request returned failure",
+                        group_id=group_id,
+                        status=status,
+                    )
+                    continue
+                body = entry.get("body") or {}
+                value = body.get("value") or []
+                parents: list[str] = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    ident = item.get("id")
+                    if ident:
+                        parents.append(str(ident))
+                results[group_id] = parents
+
+        return results
+
     async def delete_group(
         self,
         group_id: str,
@@ -248,7 +317,9 @@ class GroupService:
             "@odata.id": f"https://graph.microsoft.com/v1.0/directoryObjects/{member_id}",
         }
 
-        def event_builder(status: MutationStatus, error: Exception | None = None) -> GroupMembershipEvent:
+        def event_builder(
+            status: MutationStatus, error: Exception | None = None
+        ) -> GroupMembershipEvent:
             return GroupMembershipEvent(
                 group_id=group_id,
                 member_id=member_id,
@@ -294,7 +365,9 @@ class GroupService:
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> None:
-        def event_builder(status: MutationStatus, error: Exception | None = None) -> GroupMembershipEvent:
+        def event_builder(
+            status: MutationStatus, error: Exception | None = None
+        ) -> GroupMembershipEvent:
             return GroupMembershipEvent(
                 group_id=group_id,
                 member_id=member_id,
@@ -414,7 +487,9 @@ class GroupService:
             payload["membershipRuleProcessingState"] = "On"
         else:
             payload["membershipRuleProcessingState"] = "Paused"
-        await self.update_group(group_id, payload, cancellation_token=cancellation_token)
+        await self.update_group(
+            group_id, payload, cancellation_token=cancellation_token
+        )
         logger.debug("Updated membership rule", group_id=group_id)
 
 

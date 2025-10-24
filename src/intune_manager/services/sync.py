@@ -92,17 +92,29 @@ class SyncService:
         cancellation_token: CancellationToken | None,
     ) -> None:
         if isinstance(service, DeviceService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         elif isinstance(service, ApplicationService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         elif isinstance(service, GroupService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         elif isinstance(service, AssignmentFilterService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         elif isinstance(service, ConfigurationService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         elif isinstance(service, AuditLogService):
-            await service.refresh(tenant_id=tenant_id, force=force, cancellation_token=cancellation_token)
+            await service.refresh(
+                tenant_id=tenant_id, force=force, cancellation_token=cancellation_token
+            )
         else:  # pragma: no cover - future extension
             raise TypeError(f"Unsupported service type: {service!r}")
 

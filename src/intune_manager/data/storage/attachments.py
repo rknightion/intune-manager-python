@@ -65,7 +65,9 @@ class AttachmentCache:
             category=category,
         )
 
-    def get(self, key: str, *, tenant_id: str | None = None) -> AttachmentMetadata | None:
+    def get(
+        self, key: str, *, tenant_id: str | None = None
+    ) -> AttachmentMetadata | None:
         path = self._path_for(key, tenant_id)
         if not path.exists():
             return None

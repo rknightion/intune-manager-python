@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import difflib
 import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QItemSelectionModel
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QTextBrowser,
 )
 
 from pydantic import ValidationError
@@ -41,11 +43,18 @@ from intune_manager.data import (
     MobileApp,
     MobileAppAssignment,
 )
-from intune_manager.data.models.assignment import FilteredGroupAssignmentTarget, GroupAssignmentTarget
+from intune_manager.data.models.assignment import (
+    FilteredGroupAssignmentTarget,
+    GroupAssignmentTarget,
+)
 from intune_manager.services.assignments import AssignmentAppliedEvent, AssignmentDiff
 from intune_manager.services.base import MutationStatus, ServiceErrorEvent
 from intune_manager.services import AssignmentImportError, ServiceRegistry
-from intune_manager.utils import CancellationError, CancellationTokenSource, ProgressUpdate
+from intune_manager.utils import (
+    CancellationError,
+    CancellationTokenSource,
+    ProgressUpdate,
+)
 from intune_manager.ui.components import (
     CommandAction,
     ProgressDialog,
@@ -67,11 +76,82 @@ from .models import AssignmentTableModel, DiffDetailModel, DiffSummary, DiffSumm
 logger = get_logger(__name__)
 
 
-def _clone_for_desired(assignments: Iterable[MobileAppAssignment]) -> list[MobileAppAssignment]:
+def _clone_for_desired(
+    assignments: Iterable[MobileAppAssignment],
+) -> list[MobileAppAssignment]:
     cloned: list[MobileAppAssignment] = []
     for assignment in assignments:
         cloned.append(assignment.model_copy(update={"id": None}))
     return cloned
+
+
+_DIFF_HTML_TEMPLATE = """
+<html>
+<head>
+<style>
+table.diff { border-collapse: collapse; font-family: 'Menlo', 'Consolas', 'Courier New', monospace; font-size: 12px; }
+table.diff th { padding: 4px 6px; border: 1px solid #d0d0d0; background-color: #f5f5f5; }
+table.diff td { padding: 2px 6px; border: 1px solid #e0e0e0; vertical-align: top; }
+table.diff .diff_header { background-color: #f0f0f0; }
+table.diff .diff_next { background-color: #fffdf2; }
+table.diff .diff_add { background-color: #e6ffed; }
+table.diff .diff_chg { background-color: #fff8c5; }
+table.diff .diff_sub { background-color: #ffeef0; }
+</style>
+</head>
+<body>{table}</body>
+</html>
+"""
+
+
+def _format_payload_lines(payload: dict[str, Any] | None) -> list[str]:
+    if payload is None:
+        return ["(no payload)"]
+    try:
+        text = json.dumps(payload, indent=2, sort_keys=True)
+    except TypeError:
+        text = str(payload)
+    return text.splitlines() or ["(empty)"]
+
+
+class PayloadDiffViewer(QTextBrowser):
+    """Render a side-by-side payload diff using HTML tables."""
+
+    def __init__(self, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setAcceptRichText(True)
+        self.setOpenExternalLinks(False)
+        self.setObjectName("PayloadDiffViewer")
+        self.setMinimumWidth(360)
+        self.setStyleSheet(
+            "QTextBrowser { font-family: 'Menlo', 'Consolas', 'Courier New', monospace; font-size: 12px; border: 1px solid palette(midlight); border-radius: 6px; }"
+        )
+        self._diff = difflib.HtmlDiff(tabsize=2, wrapcolumn=80)
+        self.set_payloads(None, None)
+
+    def set_payloads(
+        self,
+        current: dict[str, Any] | None,
+        desired: dict[str, Any] | None,
+    ) -> None:
+        current_lines = _format_payload_lines(current)
+        desired_lines = _format_payload_lines(desired)
+        if not current and not desired:
+            self.setHtml(
+                "<div style='color: grey; font-style: italic; padding: 8px;'>Select an assignment change to view payload differences.</div>"
+            )
+            return
+
+        table = self._diff.make_table(
+            current_lines,
+            desired_lines,
+            fromdesc="Current",
+            todesc="Desired",
+            context=True,
+            numlines=6,
+        )
+        self.setHtml(_DIFF_HTML_TEMPLATE.format(table=table))
 
 
 @dataclass(slots=True)
@@ -112,21 +192,27 @@ class _StagedGroupsDialog(QDialog):
 
         self._intent_combo = QComboBox()
         for intent in AssignmentIntent:
-            label = intent.value.replace("WithoutEnrollment", " without enrollment").replace("_", " ")
+            label = intent.value.replace(
+                "WithoutEnrollment", " without enrollment"
+            ).replace("_", " ")
             form_label = label.title()
             self._intent_combo.addItem(form_label, intent.value)
         form.addRow("Assignment intent", self._intent_combo)
 
         self._filter_combo = QComboBox()
         self._filter_combo.addItem("No filter", None)
-        for assignment_filter in sorted(filters, key=lambda item: (item.display_name or item.id or "").lower()):
+        for assignment_filter in sorted(
+            filters, key=lambda item: (item.display_name or item.id or "").lower()
+        ):
             if not assignment_filter.id:
                 continue
             display = assignment_filter.display_name or assignment_filter.id
             self._filter_combo.addItem(display, assignment_filter.id)
         form.addRow("Assignment filter", self._filter_combo)
 
-        self._overwrite_checkbox = QCheckBox("Update existing assignments for these groups", parent=self)
+        self._overwrite_checkbox = QCheckBox(
+            "Update existing assignments for these groups", parent=self
+        )
         form.addRow("Existing targets", self._overwrite_checkbox)
 
         layout.addLayout(form)
@@ -162,7 +248,9 @@ class _StagedGroupsDialog(QDialog):
     def _handle_accept(self) -> None:
         intent_value = self._intent_combo.currentData()
         if intent_value is None:
-            QMessageBox.warning(self, "Missing intent", "Select an assignment intent before continuing.")
+            QMessageBox.warning(
+                self, "Missing intent", "Select an assignment intent before continuing."
+            )
             return
         intent = AssignmentIntent(intent_value)
         filter_id = self._filter_combo.currentData()
@@ -174,7 +262,9 @@ class _StagedGroupsDialog(QDialog):
                 payload = json.loads(payload_text)
                 settings_obj = AssignmentSettings.model_validate(payload)
             except (json.JSONDecodeError, ValidationError) as exc:
-                QMessageBox.warning(self, "Invalid settings", f"Unable to parse settings JSON: {exc}")
+                QMessageBox.warning(
+                    self, "Invalid settings", f"Unable to parse settings JSON: {exc}"
+                )
                 return
 
         self._result = _StagedGroupOptions(
@@ -184,6 +274,7 @@ class _StagedGroupsDialog(QDialog):
             update_existing=self._overwrite_checkbox.isChecked(),
         )
         self.accept()
+
 
 class AssignmentsWidget(PageScaffold):
     """Assignment centre workspace for bulk comparison and apply flows."""
@@ -265,6 +356,7 @@ class AssignmentsWidget(PageScaffold):
         self._assignment_table = AssignmentTableModel()
         self._diff_summary_model = DiffSummaryModel()
         self._diff_detail_model = DiffDetailModel()
+        self._payload_diff: PayloadDiffViewer | None = None
         self._assignment_view: QTableView | None = None
         self._summary_view: QTableView | None = None
         self._detail_view: QTableView | None = None
@@ -358,12 +450,19 @@ class AssignmentsWidget(PageScaffold):
 
         info_box = QGroupBox("Using the assignment centre")
         info_layout = QFormLayout(info_box)
-        info_layout.addRow("1.",
-                           QLabel("Pick a source app. Its assignments become the desired state by default."))
-        info_layout.addRow("2.",
-                           QLabel("Select one or more target apps to preview differences."))
-        info_layout.addRow("3.",
-                           QLabel("Use dry-run preview to review changes, then apply when ready."))
+        info_layout.addRow(
+            "1.",
+            QLabel(
+                "Pick a source app. Its assignments become the desired state by default."
+            ),
+        )
+        info_layout.addRow(
+            "2.", QLabel("Select one or more target apps to preview differences.")
+        )
+        info_layout.addRow(
+            "3.",
+            QLabel("Use dry-run preview to review changes, then apply when ready."),
+        )
         layout.addWidget(info_box)
 
         return container
@@ -383,7 +482,9 @@ class AssignmentsWidget(PageScaffold):
 
         self._assignment_view = QTableView()
         self._assignment_view.setModel(self._assignment_table)
-        self._assignment_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self._assignment_view.setSelectionBehavior(
+            QTableView.SelectionBehavior.SelectRows
+        )
         self._assignment_view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self._assignment_view.setAlternatingRowColors(True)
         self._assignment_view.verticalHeader().setVisible(False)
@@ -403,6 +504,9 @@ class AssignmentsWidget(PageScaffold):
         self._summary_view.horizontalHeader().setStretchLastSection(True)
         diff_layout.addWidget(self._summary_view, stretch=1)
 
+        diff_splitter = QSplitter(Qt.Orientation.Horizontal)
+        diff_splitter.setChildrenCollapsible(False)
+
         self._detail_view = QTableView()
         self._detail_view.setModel(self._diff_detail_model)
         self._detail_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
@@ -410,7 +514,18 @@ class AssignmentsWidget(PageScaffold):
         self._detail_view.setAlternatingRowColors(True)
         self._detail_view.verticalHeader().setVisible(False)
         self._detail_view.horizontalHeader().setStretchLastSection(True)
-        diff_layout.addWidget(self._detail_view, stretch=1)
+        diff_splitter.addWidget(self._detail_view)
+
+        self._payload_diff = PayloadDiffViewer(parent=diff_group)
+        diff_splitter.addWidget(self._payload_diff)
+        diff_splitter.setStretchFactor(0, 3)
+        diff_splitter.setStretchFactor(1, 2)
+        diff_layout.addWidget(diff_splitter, stretch=2)
+
+        if selection_model := self._detail_view.selectionModel():
+            selection_model.selectionChanged.connect(
+                lambda *_: self._handle_detail_selection()
+            )
 
         staged_box = QGroupBox("Staged target groups")
         staged_layout = QVBoxLayout(staged_box)
@@ -448,7 +563,9 @@ class AssignmentsWidget(PageScaffold):
         if self._source_list is not None:
             self._source_list.currentItemChanged.connect(self._handle_source_changed)
         if self._target_list is not None:
-            self._target_list.itemChanged.connect(lambda *_: self._update_toolbar_state())
+            self._target_list.itemChanged.connect(
+                lambda *_: self._update_toolbar_state()
+            )
 
         self._preview_button.clicked.connect(self._handle_preview_clicked)
         self._apply_button.clicked.connect(self._handle_apply_clicked)
@@ -456,38 +573,70 @@ class AssignmentsWidget(PageScaffold):
         self._restore_button.clicked.connect(self._handle_restore_clicked)
         self._csv_import_button.clicked.connect(self._handle_csv_import_clicked)
         self._edit_button.clicked.connect(self._handle_edit_desired_clicked)
-        self._staged_apply_button.clicked.connect(self._handle_apply_staged_groups_clicked)
+        self._staged_apply_button.clicked.connect(
+            self._handle_apply_staged_groups_clicked
+        )
 
         if self._summary_view is not None:
             selection = self._summary_view.selectionModel()
             if selection is not None:
-                selection.selectionChanged.connect(lambda *_: self._handle_summary_selection())
+                selection.selectionChanged.connect(
+                    lambda *_: self._handle_summary_selection()
+                )
 
         if self._dry_run_checkbox is not None:
-            self._dry_run_checkbox.toggled.connect(lambda *_: self._update_toolbar_state())
+            self._dry_run_checkbox.toggled.connect(
+                lambda *_: self._update_toolbar_state()
+            )
 
-        self._command_unregisters.append(
-            self._context.command_registry.register(
-                CommandAction(
-                    id="assignments.preview",
-                    title="Assignments: Dry-run preview",
-                    callback=self._handle_preview_clicked,
-                    category="Assignments",
-                    shortcut="Ctrl+Shift+A",
-                ),
+        command_actions = [
+            CommandAction(
+                id="assignments.preview",
+                title="Assignments: Dry-run preview",
+                callback=self._handle_preview_clicked,
+                category="Assignments",
+                shortcut="Ctrl+Shift+A",
             ),
-        )
-        self._command_unregisters.append(
-            self._context.command_registry.register(
-                CommandAction(
-                    id="assignments.consume-staged-groups",
-                    title="Assignments: Use staged groups",
-                    callback=self._consume_staged_groups_command,
-                    category="Assignments",
-                    description="Import staged group targets from the Groups module.",
-                ),
+            CommandAction(
+                id="assignments.consume-staged-groups",
+                title="Assignments: Use staged groups",
+                callback=self._consume_staged_groups_command,
+                category="Assignments",
+                description="Import staged group targets from the Groups module.",
             ),
-        )
+            CommandAction(
+                id="assignments.apply",
+                title="Assignments: Apply changes",
+                callback=self._handle_apply_clicked,
+                category="Assignments",
+                description="Launch the bulk apply workflow for the current diff.",
+            ),
+            CommandAction(
+                id="assignments.export-desired",
+                title="Assignments: Export desired state",
+                callback=self._handle_backup_clicked,
+                category="Assignments",
+                description="Export desired assignments to JSON for backup or audits.",
+            ),
+            CommandAction(
+                id="assignments.import-json",
+                title="Assignments: Import desired from JSON",
+                callback=self._handle_restore_clicked,
+                category="Assignments",
+                description="Load desired assignments from a JSON backup file.",
+            ),
+            CommandAction(
+                id="assignments.import-csv",
+                title="Assignments: Import desired from CSV",
+                callback=self._handle_csv_import_clicked,
+                category="Assignments",
+                description="Import desired assignments from the CSV staging template.",
+            ),
+        ]
+        for action in command_actions:
+            self._command_unregisters.append(
+                self._context.command_registry.register(action)
+            )
 
         self._controller.register_callbacks(
             applied=self._handle_assignment_applied,
@@ -503,7 +652,10 @@ class AssignmentsWidget(PageScaffold):
     # ----------------------------------------------------------------- Data
 
     def _load_initial_data(self) -> None:
-        apps = sorted(self._controller.list_apps(), key=lambda app: (app.display_name or "").lower())
+        apps = sorted(
+            self._controller.list_apps(),
+            key=lambda app: (app.display_name or "").lower(),
+        )
         self._apps = apps
         self._app_index = {app.id: app for app in apps if app.id}
         self._populate_app_lists()
@@ -529,14 +681,18 @@ class AssignmentsWidget(PageScaffold):
 
         self._preview_button.setEnabled(bool(apps))
         if not apps:
-            self._assignment_status_label.setText("No applications cached. Refresh application data first.")
+            self._assignment_status_label.setText(
+                "No applications cached. Refresh application data first."
+            )
 
         self._refresh_staged_groups_summary()
 
     def _populate_app_lists(self) -> None:
         if self._source_list is None or self._target_list is None:
             return
-        search = (self._search_input.text() if self._search_input else "").strip().lower()
+        search = (
+            (self._search_input.text() if self._search_input else "").strip().lower()
+        )
         current_source = self._source_app_id
         checked_targets = {
             self._target_list.item(i).data(Qt.ItemDataRole.UserRole)
@@ -560,7 +716,11 @@ class AssignmentsWidget(PageScaffold):
             target_item = QListWidgetItem(label)
             target_item.setData(Qt.ItemDataRole.UserRole, app.id)
             target_item.setFlags(target_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            target_item.setCheckState(Qt.CheckState.Checked if app.id in checked_targets else Qt.CheckState.Unchecked)
+            target_item.setCheckState(
+                Qt.CheckState.Checked
+                if app.id in checked_targets
+                else Qt.CheckState.Unchecked
+            )
             self._target_list.addItem(target_item)
         self._source_list.blockSignals(False)
         self._target_list.blockSignals(False)
@@ -575,7 +735,9 @@ class AssignmentsWidget(PageScaffold):
     ) -> None:
         if current is None:
             self._source_app_id = None
-            self._assignment_status_label.setText("Select a source application to begin.")
+            self._assignment_status_label.setText(
+                "Select a source application to begin."
+            )
             self._assignment_table.set_assignments(
                 [],
                 group_lookup=self._group_lookup,
@@ -601,11 +763,17 @@ class AssignmentsWidget(PageScaffold):
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load assignments", app_id=app_id)
             self._context.clear_busy()
-            self._context.show_notification(f"Unable to load assignments: {exc}", level=ToastLevel.ERROR)
+            self._context.show_notification(
+                f"Unable to load assignments: {exc}", level=ToastLevel.ERROR
+            )
             return
 
         self._source_assignments = assignments
-        app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
+        app_name = (
+            self._app_index.get(app_id).display_name
+            if app_id in self._app_index
+            else app_id
+        )
         self._set_desired_assignments(
             assignments,
             origin="cache",
@@ -652,7 +820,9 @@ class AssignmentsWidget(PageScaffold):
             try:
                 current_assignments = await self._get_assignments(target_id)
             except Exception as exc:  # noqa: BLE001
-                logger.exception("Failed to load target assignments", target_id=target_id)
+                logger.exception(
+                    "Failed to load target assignments", target_id=target_id
+                )
                 self._context.show_notification(
                     f"Unable to load assignments for target {target_id}: {exc}",
                     level=ToastLevel.ERROR,
@@ -670,7 +840,11 @@ class AssignmentsWidget(PageScaffold):
                 )
                 break
 
-            app_name = self._app_index.get(target_id).display_name if target_id in self._app_index else target_id
+            app_name = (
+                self._app_index.get(target_id).display_name
+                if target_id in self._app_index
+                else target_id
+            )
             summary_warnings = self._collect_warnings(target_id, diff)
             summaries.append(
                 DiffSummary(
@@ -682,7 +856,8 @@ class AssignmentsWidget(PageScaffold):
                     warnings=summary_warnings,
                     has_filters=any(
                         getattr(item.target, "assignment_filter_id", None)
-                        for item in diff.to_create + [update.desired for update in diff.to_update]
+                        for item in diff.to_create
+                        + [update.desired for update in diff.to_update]
                     ),
                 ),
             )
@@ -695,6 +870,8 @@ class AssignmentsWidget(PageScaffold):
             self._select_first_summary_row()
         else:
             self._diff_detail_model.set_details([])
+            if self._payload_diff is not None:
+                self._payload_diff.set_payloads(None, None)
         self._populate_warnings(warnings)
         self._context.clear_busy()
         self._append_history(
@@ -717,7 +894,11 @@ class AssignmentsWidget(PageScaffold):
             )
             return
 
-        pending = {app_id: diff for app_id, diff in self._diff_cache.items() if not diff.is_noop}
+        pending = {
+            app_id: diff
+            for app_id, diff in self._diff_cache.items()
+            if not diff.is_noop
+        }
         if not pending:
             self._context.show_notification(
                 "No changes detected for selected targets.",
@@ -754,7 +935,9 @@ class AssignmentsWidget(PageScaffold):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if confirm != QMessageBox.StandardButton.Yes:
-                self._append_history("Bulk apply cancelled after warning review.", warning=True)
+                self._append_history(
+                    "Bulk apply cancelled after warning review.", warning=True
+                )
                 return
 
         self._start_bulk_apply(plan)
@@ -821,7 +1004,9 @@ class AssignmentsWidget(PageScaffold):
                 succeeded = False
                 last_exc: Exception | None = None
                 try:
-                    await self._controller.apply_diff(app_id, diff, cancellation_token=token)
+                    await self._controller.apply_diff(
+                        app_id, diff, cancellation_token=token
+                    )
                     succeeded = True
                 except CancellationError:
                     cancelled = True
@@ -830,14 +1015,18 @@ class AssignmentsWidget(PageScaffold):
                     last_exc = exc
                     if plan.options.retry_conflicts and not token.cancelled:
                         try:
-                            await self._controller.apply_diff(app_id, diff, cancellation_token=token)
+                            await self._controller.apply_diff(
+                                app_id, diff, cancellation_token=token
+                            )
                         except Exception as retry_exc:  # noqa: BLE001
                             last_exc = retry_exc
                         else:
                             succeeded = True
 
                     if not succeeded:
-                        logger.exception("Failed to apply assignment diff", app_id=app_id)
+                        logger.exception(
+                            "Failed to apply assignment diff", app_id=app_id
+                        )
                         detail = last_exc or "Unknown error"
                         self._append_history(
                             f"Failed to apply assignments to {app_name}: {detail}",
@@ -852,7 +1041,9 @@ class AssignmentsWidget(PageScaffold):
                     successes += 1
                     applied_ids.append(app_id)
                     try:
-                        assignments = await self._controller.fetch_assignments(app_id, cancellation_token=token)
+                        assignments = await self._controller.fetch_assignments(
+                            app_id, cancellation_token=token
+                        )
                     except CancellationError:
                         cancelled = True
                         break
@@ -908,7 +1099,11 @@ class AssignmentsWidget(PageScaffold):
         warnings: list[str] = []
 
         for app_id, diff in self._diff_cache.items():
-            app_name = self._app_index.get(app_id).display_name if app_id in self._app_index else app_id
+            app_name = (
+                self._app_index.get(app_id).display_name
+                if app_id in self._app_index
+                else app_id
+            )
             summary_warnings = self._collect_warnings(app_id, diff)
             summaries.append(
                 DiffSummary(
@@ -920,7 +1115,8 @@ class AssignmentsWidget(PageScaffold):
                     warnings=summary_warnings,
                     has_filters=any(
                         getattr(item.target, "assignment_filter_id", None)
-                        for item in diff.to_create + [update.desired for update in diff.to_update]
+                        for item in diff.to_create
+                        + [update.desired for update in diff.to_update]
                     ),
                 ),
             )
@@ -931,6 +1127,8 @@ class AssignmentsWidget(PageScaffold):
             self._select_first_summary_row()
         else:
             self._diff_detail_model.set_details([])
+            if self._payload_diff is not None:
+                self._payload_diff.set_payloads(None, None)
         self._populate_warnings(warnings)
 
     def _handle_backup_clicked(self) -> None:
@@ -1044,10 +1242,14 @@ class AssignmentsWidget(PageScaffold):
                 cancellation_token=token_source.token,
             )
         except CancellationError:
-            self._context.show_notification("CSV import cancelled.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "CSV import cancelled.", level=ToastLevel.INFO
+            )
             return
         except AssignmentImportError as exc:
-            self._context.show_notification(f"Import failed: {exc}", level=ToastLevel.ERROR)
+            self._context.show_notification(
+                f"Import failed: {exc}", level=ToastLevel.ERROR
+            )
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("CSV assignment import failed", path=source_path)
@@ -1062,7 +1264,9 @@ class AssignmentsWidget(PageScaffold):
             self._context.clear_busy()
 
         if token_source.token.cancelled:
-            self._context.show_notification("CSV import cancelled.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "CSV import cancelled.", level=ToastLevel.INFO
+            )
             return
         if not result.rows:
             self._context.show_notification(
@@ -1121,13 +1325,19 @@ class AssignmentsWidget(PageScaffold):
             return
         indexes = selection.selectedRows()
         if not indexes:
+            if self._payload_diff is not None:
+                self._payload_diff.set_payloads(None, None)
             return
         row = indexes[0].row()
         summary = self._diff_summary_model.summary_at(row)
         if summary is None:
+            if self._payload_diff is not None:
+                self._payload_diff.set_payloads(None, None)
             return
         diff = self._diff_cache.get(summary.app_id)
         if diff is None:
+            if self._payload_diff is not None:
+                self._payload_diff.set_payloads(None, None)
             return
         details = DiffDetailModel.from_diff(
             diff,
@@ -1135,6 +1345,40 @@ class AssignmentsWidget(PageScaffold):
             filters=self._filter_lookup,
         )
         self._diff_detail_model.set_details(details)
+        if self._detail_view is not None:
+            selection_model = self._detail_view.selectionModel()
+            if selection_model is not None:
+                selection_model.clearSelection()
+                if details:
+                    index = self._diff_detail_model.index(0, 0)
+                    selection_model.select(
+                        index,
+                        QItemSelectionModel.SelectionFlag.ClearAndSelect
+                        | QItemSelectionModel.SelectionFlag.Rows,
+                    )
+                    self._handle_detail_selection()
+                elif self._payload_diff is not None:
+                    self._payload_diff.set_payloads(None, None)
+
+    def _handle_detail_selection(self) -> None:
+        if self._detail_view is None or self._payload_diff is None:
+            return
+        selection = self._detail_view.selectionModel()
+        if selection is None:
+            return
+        indexes = selection.selectedRows()
+        if not indexes:
+            self._payload_diff.set_payloads(None, None)
+            return
+        row = indexes[0].row()
+        detail = self._diff_detail_model.detail_at(row)
+        if detail is None:
+            self._payload_diff.set_payloads(None, None)
+            return
+        self._payload_diff.set_payloads(
+            detail.current_payload,
+            detail.desired_payload,
+        )
 
     def _handle_assignment_applied(self, event: AssignmentAppliedEvent) -> None:
         app_name = (
@@ -1223,10 +1467,14 @@ class AssignmentsWidget(PageScaffold):
         if options is None:
             return
 
-        desired, created, updated, skipped = self._apply_staged_groups_to_desired(options)
+        desired, created, updated, skipped = self._apply_staged_groups_to_desired(
+            options
+        )
         if created == 0 and updated == 0:
             message = (
-                "All staged groups already covered by desired assignments." if skipped else "No changes applied."
+                "All staged groups already covered by desired assignments."
+                if skipped
+                else "No changes applied."
             )
             self._context.show_notification(message, level=ToastLevel.INFO)
             return
@@ -1269,7 +1517,9 @@ class AssignmentsWidget(PageScaffold):
         if not staged:
             self._staged_groups.clear()
             self._refresh_staged_groups_summary()
-            self._context.show_notification("Cleared staged groups.", level=ToastLevel.INFO)
+            self._context.show_notification(
+                "Cleared staged groups.", level=ToastLevel.INFO
+            )
             return
         self._staged_groups = staged
         self._refresh_staged_groups_summary()
@@ -1296,7 +1546,9 @@ class AssignmentsWidget(PageScaffold):
             status = "included" if covered else "missing"
             item = QListWidgetItem(f"{name} — {status}")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
-            item.setForeground(Qt.GlobalColor.darkGreen if covered else Qt.GlobalColor.darkYellow)
+            item.setForeground(
+                Qt.GlobalColor.darkGreen if covered else Qt.GlobalColor.darkYellow
+            )
             self._staged_groups_list.addItem(item)
 
     def _assignment_contains_group(self, group_id: str) -> bool:
@@ -1329,6 +1581,8 @@ class AssignmentsWidget(PageScaffold):
         self._diff_cache.clear()
         self._diff_summary_model.set_summaries([])
         self._diff_detail_model.set_details([])
+        if self._payload_diff is not None:
+            self._payload_diff.set_payloads(None, None)
         self._clear_warnings()
         self._update_toolbar_state()
 
@@ -1353,7 +1607,10 @@ class AssignmentsWidget(PageScaffold):
             )
             return False
 
-        filename = suggested_name or f"assignments-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        filename = (
+            suggested_name
+            or f"assignments-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        )
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export assignments",
@@ -1374,7 +1631,9 @@ class AssignmentsWidget(PageScaffold):
             return False
 
         self._append_history(f"Exported assignments to {path}")
-        self._context.show_notification("Assignments exported successfully.", level=ToastLevel.SUCCESS)
+        self._context.show_notification(
+            "Assignments exported successfully.", level=ToastLevel.SUCCESS
+        )
         return True
 
     def _apply_staged_groups_to_desired(
@@ -1396,11 +1655,15 @@ class AssignmentsWidget(PageScaffold):
             if not group_id:
                 continue
             target = (
-                FilteredGroupAssignmentTarget(group_id=group_id, assignment_filter_id=options.filter_id)
+                FilteredGroupAssignmentTarget(
+                    group_id=group_id, assignment_filter_id=options.filter_id
+                )
                 if options.filter_id
                 else GroupAssignmentTarget(group_id=group_id)
             )
-            settings = options.settings.model_copy(deep=True) if options.settings else None
+            settings = (
+                options.settings.model_copy(deep=True) if options.settings else None
+            )
 
             if group_id in group_index:
                 if not options.update_existing:
@@ -1433,7 +1696,9 @@ class AssignmentsWidget(PageScaffold):
     def _collect_warnings(self, target_id: str, diff: AssignmentDiff) -> list[str]:
         warnings: list[str] = []
         if target_id == self._source_app_id:
-            warnings.append("Target matches the source app; ensure this is intentional.")
+            warnings.append(
+                "Target matches the source app; ensure this is intentional."
+            )
 
         def inspect_assignment(assignment: MobileAppAssignment) -> None:
             group_id = getattr(assignment.target, "group_id", None)
@@ -1531,8 +1796,12 @@ class AssignmentsWidget(PageScaffold):
             and self._controller.is_assignment_service_available()
         )
         self._apply_button.setEnabled(apply_enabled)
-        self._backup_button.setEnabled(has_desired and self._controller.is_assignment_service_available())
-        self._edit_button.setEnabled(bool(self._groups) or has_desired or bool(self._source_assignments))
+        self._backup_button.setEnabled(
+            has_desired and self._controller.is_assignment_service_available()
+        )
+        self._edit_button.setEnabled(
+            bool(self._groups) or has_desired or bool(self._source_assignments)
+        )
         self._csv_import_button.setEnabled(bool(self._apps) and bool(self._groups))
 
     # ----------------------------------------------------------------- Cleanup

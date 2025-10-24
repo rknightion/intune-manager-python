@@ -65,8 +65,10 @@ class InlineStatusMessage(QFrame):
         self._message_label.setObjectName("InlineStatusMessageText")
         self._message_label.setWordWrap(True)
         self._message_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._message_label.setStyleSheet("background: transparent;")
         self._message_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse,
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse,
         )
         header.addWidget(self._message_label, stretch=1)
 
@@ -92,8 +94,10 @@ class InlineStatusMessage(QFrame):
         self._detail_label.setObjectName("InlineStatusMessageDetail")
         self._detail_label.setWordWrap(True)
         self._detail_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._detail_label.setStyleSheet("background: transparent;")
         self._detail_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse,
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse,
         )
         detail_font = self._detail_label.font()
         detail_font.setPointSizeF(max(detail_font.pointSizeF() - 1.0, 8.0))
@@ -121,9 +125,11 @@ class InlineStatusMessage(QFrame):
             "}"
             "QLabel#InlineStatusMessageText {"
             f"  color: {style['text']};"
+            "  background: transparent;"
             "}"
             "QLabel#InlineStatusMessageDetail {"
             f"  color: {style['detail']};"
+            "  background: transparent;"
             "  border-top: 1px solid rgba(15, 23, 42, 0.08);"
             "  margin-top: 6px;"
             "  padding-top: 6px;"

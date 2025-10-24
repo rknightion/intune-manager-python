@@ -35,8 +35,14 @@ class GroupTableModel(QAbstractTableModel):
             GroupColumn("display_name", "Group", lambda group: group.display_name),
             GroupColumn("description", "Description", lambda group: group.description),
             GroupColumn("type", "Type", _group_type_label),
-            GroupColumn("mail", "Mail", lambda group: group.mail or group.mail_nickname),
-            GroupColumn("security_enabled", "Security", lambda group: "Yes" if group.security_enabled else "No"),
+            GroupColumn(
+                "mail", "Mail", lambda group: group.mail or group.mail_nickname
+            ),
+            GroupColumn(
+                "security_enabled",
+                "Security",
+                lambda group: "Yes" if group.security_enabled else "No",
+            ),
         ]
         self._groups: list[DirectoryGroup] = list(groups or [])
 

@@ -3,4 +3,3 @@
 from .widgets import AssignmentsWidget
 
 __all__ = ["AssignmentsWidget"]
-

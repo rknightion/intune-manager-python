@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Iterable
 
 from intune_manager.data import AttachmentMetadata, MobileApp, MobileAppAssignment
@@ -45,9 +46,13 @@ class ApplicationController:
         if error is not None:
             self._subscriptions.append(self._app_service.errors.subscribe(error))
         if install_summary is not None:
-            self._subscriptions.append(self._app_service.install_summary.subscribe(install_summary))
+            self._subscriptions.append(
+                self._app_service.install_summary.subscribe(install_summary)
+            )
         if icon_cached is not None:
-            self._subscriptions.append(self._app_service.icon_cached.subscribe(icon_cached))
+            self._subscriptions.append(
+                self._app_service.icon_cached.subscribe(icon_cached)
+            )
 
         if self._assignment_service is not None and error is not None:
             self._subscriptions.append(self._assignment_service.errors.subscribe(error))
@@ -71,6 +76,11 @@ class ApplicationController:
         if self._app_service is None:
             return True
         return self._app_service.is_cache_stale(tenant_id=tenant_id)
+
+    def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
+        if self._app_service is None:
+            return None
+        return self._app_service.last_refresh(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 
@@ -99,7 +109,9 @@ class ApplicationController:
     ) -> list[MobileAppAssignment]:
         if self._app_service is None:
             raise RuntimeError("Application service not configured")
-        return await self._app_service.fetch_assignments(app_id, cancellation_token=cancellation_token)
+        return await self._app_service.fetch_assignments(
+            app_id, cancellation_token=cancellation_token
+        )
 
     async def cache_icon(
         self,
@@ -156,7 +168,9 @@ class ApplicationController:
     ) -> None:
         if self._assignment_service is None:
             raise RuntimeError("Assignment service not configured")
-        await self._assignment_service.apply_diff(app_id, diff, cancellation_token=cancellation_token)
+        await self._assignment_service.apply_diff(
+            app_id, diff, cancellation_token=cancellation_token
+        )
 
     def export_assignments(
         self,

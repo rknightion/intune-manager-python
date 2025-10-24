@@ -159,10 +159,14 @@ class BulkAssignmentDialog(QDialog):
             if intent == AssignmentIntent.UNKNOWN:
                 continue
             label = intent.value
-            layout_label = label.replace("availableWithoutEnrollment", "available (BYOD)")
+            layout_label = label.replace(
+                "availableWithoutEnrollment", "available (BYOD)"
+            )
             self._intent_combo.addItem(layout_label, intent.value)
         self._intent_combo.setCurrentIndex(0)
-        self._intent_combo.currentIndexChanged.connect(lambda *_: self._update_summary())
+        self._intent_combo.currentIndexChanged.connect(
+            lambda *_: self._update_summary()
+        )
         layout.addRow("Assignment intent", self._intent_combo)
 
         self._filter_combo = QComboBox(parent=box)
@@ -175,7 +179,9 @@ class BulkAssignmentDialog(QDialog):
         layout.addRow("Assignment filter", self._filter_combo)
 
         self._settings_edit = QPlainTextEdit(parent=box)
-        self._settings_edit.setPlaceholderText("Optional: paste assignment settings JSON payload.")
+        self._settings_edit.setPlaceholderText(
+            "Optional: paste assignment settings JSON payload."
+        )
         self._settings_edit.setMinimumHeight(120)
         layout.addRow("Advanced settings", self._settings_edit)
 
@@ -197,7 +203,11 @@ class BulkAssignmentDialog(QDialog):
         for app in self._apps:
             label = app.display_name or app.id
             item = QListWidgetItem(label, parent=self._app_list)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+            )
             item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, app)
             subtitle_parts = [app.owner or "", app.publisher or ""]
@@ -212,7 +222,11 @@ class BulkAssignmentDialog(QDialog):
         for group in self._groups:
             label = group.display_name or group.mail or group.mail_nickname or group.id
             item = QListWidgetItem(label, parent=self._group_list)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+            )
             item.setCheckState(Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, group)
             tooltip_parts = [
@@ -276,7 +290,9 @@ class BulkAssignmentDialog(QDialog):
         apps = len(self._selected_apps())
         groups = len(self._selected_groups())
         intent_label = self._intent_combo.currentText()
-        summary = f"{apps} application(s) → {groups} group(s) with intent {intent_label}"
+        summary = (
+            f"{apps} application(s) → {groups} group(s) with intent {intent_label}"
+        )
         self._summary_label.setText(summary)
 
     # ----------------------------------------------------------------- Dialog API
@@ -290,10 +306,16 @@ class BulkAssignmentDialog(QDialog):
         apps = self._selected_apps()
         groups = self._selected_groups()
         if not apps:
-            QMessageBox.warning(self, "No applications", "Select at least one application before continuing.")
+            QMessageBox.warning(
+                self,
+                "No applications",
+                "Select at least one application before continuing.",
+            )
             return
         if not groups:
-            QMessageBox.warning(self, "No groups", "Select at least one target group before continuing.")
+            QMessageBox.warning(
+                self, "No groups", "Select at least one target group before continuing."
+            )
             return
 
         intent_value = self._intent_combo.currentData()
@@ -306,7 +328,11 @@ class BulkAssignmentDialog(QDialog):
                 payload = json.loads(settings_text)
                 settings = AssignmentSettings.model_validate(payload)
             except (json.JSONDecodeError, ValidationError) as exc:
-                QMessageBox.warning(self, "Invalid settings", f"Unable to parse assignment settings: {exc}")
+                QMessageBox.warning(
+                    self,
+                    "Invalid settings",
+                    f"Unable to parse assignment settings: {exc}",
+                )
                 return
 
         self._plan = BulkAssignmentPlan(

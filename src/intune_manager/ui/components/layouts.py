@@ -104,7 +104,9 @@ class PageScaffold(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        self.header = SectionHeader(title, subtitle=subtitle, actions=actions, parent=self)
+        self.header = SectionHeader(
+            title, subtitle=subtitle, actions=actions, parent=self
+        )
         layout.addWidget(self.header)
 
         self.body = QWidget()

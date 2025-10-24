@@ -4,7 +4,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, TYPE_CHECKING
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -131,7 +139,9 @@ class ToastManager(QObject):
         self._theme = theme
         self._container = QWidget(parent)
         self._container.setObjectName("ToastContainer")
-        self._container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._container.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         self._container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._container.hide()
 
