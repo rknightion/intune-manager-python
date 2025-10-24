@@ -24,6 +24,7 @@
 # nuitka-project: --enable-plugin=pyside6
 # nuitka-project: --include-qt-plugins=sensible
 # nuitka-project: --lto=auto
+# nuitka-project: -o IntuneManager
 """
 Entry point for running intune_manager as a module.
 
