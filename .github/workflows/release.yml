@@ -131,6 +131,9 @@ jobs:
       - name: Run tests
         run: uv run pytest -v
 
+      - name: Generate platform-specific icons
+        run: uv run python scripts/generate_icons.py
+
       - name: Extract version from tag
         id: version
         shell: bash
