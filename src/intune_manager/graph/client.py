@@ -473,7 +473,7 @@ class GraphClientFactory:
         url = self._absolute_url(path, api_version=api_version)
         params_for_cli = dict(params) if params is not None else None
         try:
-            response = await self._await_with_cancellation(
+            response = await client._await_with_cancellation(  # type: ignore[attr-defined]
                 client.request(
                     method,
                     url,

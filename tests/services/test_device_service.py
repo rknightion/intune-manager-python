@@ -68,21 +68,21 @@ async def test_refresh_uses_cache_when_not_stale(
             make_managed_device(device_id="device-1", device_name="Surface"),
         ]
         payload = {"value": _device_payloads(devices)}
-    route = respx_mock.get(
-        "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices",
-    ).mock(return_value=httpx.Response(200, json=payload))
+        route = respx_mock.get(
+            "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices",
+        ).mock(return_value=httpx.Response(200, json=payload))
 
-    await service.refresh()
+        await service.refresh()
 
-    assert route.call_count == 1
-    events: list = []
-    service.refreshed.subscribe(events.append)
-    cached = await service.refresh()
+        assert route.call_count == 1
+        events: list = []
+        service.refreshed.subscribe(events.append)
+        cached = await service.refresh()
 
-    assert route.call_count == 1
-    assert events and events[0].from_cache is True
-    assert len(cached) == 1
-    assert cached[0].id == devices[0].id
+        assert route.call_count == 1
+        assert events and events[0].from_cache is True
+        assert len(cached) == 1
+        assert cached[0].id == devices[0].id
     finally:
         await factory.close()
 
