@@ -95,8 +95,8 @@ Make sure after each phase that 'uv run pytest -v' is passing and fix any broken
 - [x] P8.3.3: Dashboard refresh and metric updates — NOTE: Patched DashboardWidget snapshot handling tests in tests/ui/dashboard/test_dashboard_widget.py verifying metric cards, warnings list, and banner state.
 - [x] P8.3.4: Device list load and filter — NOTE: Added DeviceFilterProxyModel coverage in tests/ui/devices/test_device_filters.py exercising search text and platform filtering logic.
 - [ ] P8.4.1: Load test with 10K devices (table virtualization)
-- [ ] P8.4.2: Memory profiling with large cache (5K devices, 2K apps)
-- [ ] P8.4.3: Batch operation performance (1000 assignments)
+- [ ] P8.4.2: Memory profiling with large cache (10K devices, 5K apps)
+- [ ] P8.4.3: Batch operation performance (10000 assignments)
 - [ ] P8.4.4: Cache query performance (SQLite indexes)
 - [x] P8.3.5: Assignment wizard full workflow — NOTE: Extended tests/ui/assignments/test_bulk_workflow.py with end-to-end BulkAssignmentWizard flow exercising all pages and plan generation.
 - [x] P8.3.6: Toast dismissal and overlay focus blocking (shared components) — NOTE: Added tests/ui/components/test_notifications.py ensuring toasts auto-dismiss and BusyOverlay suppresses button interactions.
