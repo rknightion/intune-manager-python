@@ -1,6 +1,5 @@
 # nuitka-project-if: {OS} == "Darwin":
 #    nuitka-project: --macos-app-name=IntuneManager
-#    nuitka-project: --macos-app-version={VERSION}
 #    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/../../assets/icons/icon.icns
 #    nuitka-project: --include-module=keyring.backends.macOS
 # nuitka-project-if: {OS} == "Windows":
@@ -8,7 +7,6 @@
 #    nuitka-project: --include-module=keyring.backends.Windows
 #    nuitka-project: --windows-console-mode=disable
 #    nuitka-project: --product-name=IntuneManager
-#    nuitka-project: --product-version={VERSION}
 #    nuitka-project: --file-description="Microsoft Intune Manager"
 #    nuitka-project: --company-name="IntuneManager"
 #    nuitka-project: --windows-uac-admin

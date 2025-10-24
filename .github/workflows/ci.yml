@@ -48,14 +48,14 @@ jobs:
             arch: x64
             runner: macos-13
             artifact_name: IntuneManager.app
-            output_path: src/intune_manager.dist/IntuneManager.app
+            output_path: IntuneManager.app
 
           # macOS ARM64
           - os: macos
             arch: arm64
             runner: macos-latest
             artifact_name: IntuneManager.app
-            output_path: src/intune_manager.dist/IntuneManager.app
+            output_path: IntuneManager.app
 
     steps:
       - name: Checkout code
@@ -113,14 +113,16 @@ jobs:
         id: version
         shell: bash
         run: |
-          VERSION=$(grep -m 1 'version = ' pyproject.toml | cut -d'"' -f2)
+          # For main branch CI builds, use a fixed development version
+          VERSION="0.0.0.1"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          echo "Version: $VERSION (CI build)"
 
       - name: Build with Nuitka
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: uv run nuitka src/intune_manager
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          uv run nuitka --product-version="$VERSION" src/intune_manager
 
       - name: Verify build output
         shell: bash
