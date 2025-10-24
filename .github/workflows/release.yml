@@ -103,15 +103,26 @@ jobs:
             ${{ matrix.os }}-
           max-size: 2G
           verbose: 2
+          create-symlink: true  # Create compiler wrapper symlinks so gcc/clang use ccache
 
       - name: Configure ccache (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           echo "NUITKA_CCACHE_BINARY=$(which ccache)" >> $GITHUB_ENV
+          echo "::group::ccache configuration"
           ccache --version
           ccache --show-config
           ccache --zero-stats
           ccache --max-size=2G
+          echo "::endgroup::"
+          echo "::group::Compiler symlinks verification"
+          which gcc || true
+          which g++ || true
+          which clang || true
+          which clang++ || true
+          ls -la "$(which gcc)" || true
+          ls -la "$(which g++)" || true
+          echo "::endgroup::"
 
       # Windows compiler caching with clcache (built into Nuitka)
       - name: Configure clcache (Windows)
