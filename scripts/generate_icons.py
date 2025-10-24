@@ -175,7 +175,7 @@ def generate_linux_pngs(source: Path, output_dir: Path) -> bool:
         # Also copy the 1024px original for reference
         output_1024 = output_dir / "icon-1024.png"
         shutil.copy2(source, output_1024)
-        print(f"  ✓ icon-1024.png (original)")
+        print("  ✓ icon-1024.png (original)")
 
         print(f"\n✓ Created {success_count + 1} Linux PNG files")
         return True

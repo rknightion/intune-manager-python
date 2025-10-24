@@ -3,6 +3,7 @@
 #    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/../../assets/icons/icon.icns
 #    nuitka-project: --include-module=keyring.backends.macOS
 #    nuitka-project: --static-libpython=yes
+#    nuitka-project: --lto=auto
 # nuitka-project-if: {OS} == "Windows":
 #    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/../../assets/icons/icon.ico
 #    nuitka-project: --include-module=keyring.backends.Windows
@@ -11,11 +12,14 @@
 #    nuitka-project: --file-description="Microsoft Intune Manager"
 #    nuitka-project: --company-name="IntuneManager"
 #    nuitka-project: --windows-console-mode=attach
+#    nuitka-project: --lto=no
+#    nuitka-project: --msvc=latest
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
 #    nuitka-project: --include-module=keyring.backends.SecretService
 #    nuitka-project: --include-module=secretstorage
 #    nuitka-project: --static-libpython=yes
+#    nuitka-project: --lto=auto
 # nuitka-project: --mode=app
 # nuitka-project: --nofollow-import-to=*.tests
 # nuitka-project: --nofollow-import-to=pytest
@@ -23,8 +27,7 @@
 # nuitka-project: --nofollow-import-to=ruff
 # nuitka-project: --enable-plugin=pyside6
 # nuitka-project: --include-qt-plugins=sensible
-# nuitka-project: --lto=auto
-# nuitka-project: -o IntuneManager
+# nuitka-project: --output-filename=IntuneManager
 """
 Entry point for running intune_manager as a module.
 

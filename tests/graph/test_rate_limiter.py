@@ -4,13 +4,14 @@ import asyncio
 
 import pytest
 
-import intune_manager.graph.rate_limiter as rate_limiter_module
 from intune_manager.graph.errors import GraphAPIError, GraphErrorCategory
 from intune_manager.graph.rate_limiter import RateLimiter
 
 
 @pytest.mark.asyncio
-async def test_can_make_request_respects_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_can_make_request_respects_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     limiter = RateLimiter()
     limiter.max_total_requests_per_window = 2
     limiter.max_write_requests_per_window = 1
@@ -35,7 +36,9 @@ async def test_can_make_request_respects_limits(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_calculate_delay_and_rate_limit_tracking(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_calculate_delay_and_rate_limit_tracking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     limiter = RateLimiter()
     limiter.max_total_requests_per_window = 10
     base_time = 100.0
@@ -104,7 +107,9 @@ async def test_should_retry_conditions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_split_into_batches_respects_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_split_into_batches_respects_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     limiter = RateLimiter()
     limiter.max_total_requests_per_window = 5
     limiter.max_write_requests_per_window = 4

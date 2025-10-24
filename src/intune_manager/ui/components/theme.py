@@ -11,8 +11,8 @@ ThemeName = Literal["light"]
 
 
 # Spacing system for consistent layout throughout the application
-SPACING_XS = 4   # Tight spacing for closely related items
-SPACING_SM = 8   # Compact spacing for component internals
+SPACING_XS = 4  # Tight spacing for closely related items
+SPACING_SM = 8  # Compact spacing for component internals
 SPACING_MD = 12  # Default spacing between related elements
 SPACING_LG = 16  # Section spacing, breathing room
 SPACING_XL = 24  # Page margins and major section separators

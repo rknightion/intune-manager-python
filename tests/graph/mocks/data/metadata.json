@@ -1,0 +1,19 @@
+{
+  "source_repository": "https://github.com/waldekmastykarz/graph-mocks",
+  "ref": "main",
+  "generated_at": "2025-10-24T15:20:23.539953+00:00",
+  "files": {
+    "graph-beta-proxy-mocks.json": {
+      "description": "Official Graph beta mock responses",
+      "sha256": "da0e410b5e391bedbfb1ebf2d426e114d5c33918294e4da20473a8da80dc528a",
+      "uncompressed_size": 5547633,
+      "compressed_size": 826025
+    },
+    "graph-v1_0-proxy-mocks.json": {
+      "description": "Official Graph v1.0 mock responses",
+      "sha256": "c56aeeb21883847621806062cfaba188beb3d1d2fcc97aaa42d655807d844679",
+      "uncompressed_size": 4099261,
+      "compressed_size": 588147
+    }
+  }
+}

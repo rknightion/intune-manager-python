@@ -113,3 +113,5 @@ diagnostic-bundles/
 test-output/
 test-reports/
 .test-cache/
+
+IntuneManager

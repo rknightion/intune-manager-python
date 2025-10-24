@@ -106,7 +106,9 @@ class MetricCard(QFrame):
 
         if not metric.available:
             self.status_label.setText("Not configured")
-            self.status_label.setStyleSheet("color: palette(mid); background: transparent;")
+            self.status_label.setStyleSheet(
+                "color: palette(mid); background: transparent;"
+            )
             self.status_label.setToolTip("Service not configured for this tenant.")
             return
 
@@ -212,7 +214,9 @@ class StatusCard(QFrame):
         )
         self._title_label.setStyleSheet(f"color: {color}; background: transparent;")
         self._state_label.setStyleSheet(f"color: {color}; background: transparent;")
-        self._detail_label.setStyleSheet(f"color: {color}; opacity: 0.9; background: transparent;")
+        self._detail_label.setStyleSheet(
+            f"color: {color}; opacity: 0.9; background: transparent;"
+        )
 
 
 class ComplianceChartView(QChartView):
@@ -336,7 +340,9 @@ class DashboardWidget(PageScaffold):
 
         self._status_frame = QWidget()
         self._status_layout = QHBoxLayout(self._status_frame)
-        self._status_layout.setContentsMargins(SPACING_XS, SPACING_XS, SPACING_XS, SPACING_LG)
+        self._status_layout.setContentsMargins(
+            SPACING_XS, SPACING_XS, SPACING_XS, SPACING_LG
+        )
         self._status_layout.setSpacing(SPACING_LG)
 
         self._tenant_card = StatusCard(

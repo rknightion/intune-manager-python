@@ -660,7 +660,9 @@ class DevicesWidget(PageScaffold):
 
         self._ownership_combo = QComboBox()
         self._ownership_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._ownership_combo.currentIndexChanged.connect(self._handle_ownership_changed)
+        self._ownership_combo.currentIndexChanged.connect(
+            self._handle_ownership_changed
+        )
         layout.addWidget(self._ownership_combo)
 
         self._enrollment_combo = QComboBox()
@@ -1058,9 +1060,7 @@ class DevicesWidget(PageScaffold):
             )
             return
         try:
-            entries = await self._controller.load_timeline(
-                device_id, aliases=aliases
-            )
+            entries = await self._controller.load_timeline(device_id, aliases=aliases)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to load device timeline", device_id=device_id)
             if self._active_timeline_device_id == device_id:
@@ -1139,9 +1139,7 @@ class DevicesWidget(PageScaffold):
         management_states = sorted(
             {
                 (
-                    device.management_state.value
-                    if device.management_state
-                    else ""
+                    device.management_state.value if device.management_state else ""
                 ).strip()
                 for device in devices
                 if device.management_state
@@ -1179,15 +1177,11 @@ class DevicesWidget(PageScaffold):
         self._populate_combo(
             self._management_combo, "All management states", management_states
         )
-        self._populate_combo(
-            self._ownership_combo, "All ownership", ownership_states
-        )
+        self._populate_combo(self._ownership_combo, "All ownership", ownership_states)
         self._populate_combo(
             self._enrollment_combo, "All enrollment sources", enrollment_sources
         )
-        self._populate_combo(
-            self._threat_combo, "All threat states", threat_states
-        )
+        self._populate_combo(self._threat_combo, "All threat states", threat_states)
 
     def _format_filter_label(self, value: str | None) -> str:
         if not value:
@@ -1224,7 +1218,9 @@ class DevicesWidget(PageScaffold):
             self._selected_devices = []
             self._selected_device_ids = set()
             self._detail_pane.display_device(None)
-            self._detail_pane.set_timeline([], error="Select a device to view timeline.")
+            self._detail_pane.set_timeline(
+                [], error="Select a device to view timeline."
+            )
             self._active_timeline_device_id = None
             self._update_action_buttons()
             self._update_summary()

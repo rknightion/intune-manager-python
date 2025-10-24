@@ -86,6 +86,7 @@ class DeviceTimelineEntry:
             return "Unknown time"
         return self.timestamp.strftime("%Y-%m-%d %H:%M")
 
+
 @dataclass(slots=True)
 class DeviceColumn:
     key: str
@@ -422,9 +423,7 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
                 return False
 
         if self._ownership_filter:
-            ownership = (
-                device.ownership.value.lower() if device.ownership else ""
-            )
+            ownership = device.ownership.value.lower() if device.ownership else ""
             if ownership != self._ownership_filter:
                 return False
 

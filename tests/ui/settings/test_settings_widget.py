@@ -129,4 +129,3 @@ def test_settings_widget_updates_status_and_missing_scopes(qtbot):
     assert "Signed In User" in widget.status_label.text()
     assert widget.missing_scopes_list.count() == 2
     assert widget.copy_missing_scopes_button.isEnabled()
-

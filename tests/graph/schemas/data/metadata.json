@@ -1,0 +1,18 @@
+{
+  "source_repository": "https://github.com/microsoftgraph/msgraph-metadata",
+  "ref": "master",
+  "generated_at": "2025-10-24T15:47:41.935682+00:00",
+  "files": {
+    "v1.0": {
+      "sha256": "4329ae07b49cea4bc6464af6788f759e637d158daef9407a11c17c430300434c",
+      "uncompressed_size": 35506445,
+      "compressed_size": 1730006
+    },
+    "beta": {
+      "sha256": "3cc9e6b5022c2bc48f960bf2d7e48bacbc94cb951e4b4f03de388f1f9593cc56",
+      "uncompressed_size": 58136522,
+      "compressed_size": 3037218
+    }
+  },
+  "intune_index": "tests/graph/schemas/data/intune-index.json"
+}

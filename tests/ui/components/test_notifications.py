@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 from intune_manager.ui.components.notifications import ToastLevel, ToastManager

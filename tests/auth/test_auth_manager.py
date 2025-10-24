@@ -13,16 +13,18 @@ from tests.stubs import StubPublicClientApplication
 
 
 def _make_jwt(scopes: Iterable[str]) -> str:
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "none"}).encode("utf-8")).rstrip(
-        b"="
-    )
+    header = base64.urlsafe_b64encode(
+        json.dumps({"alg": "none"}).encode("utf-8")
+    ).rstrip(b"=")
     payload = base64.urlsafe_b64encode(
         json.dumps({"scp": " ".join(scopes)}).encode("utf-8")
     ).rstrip(b"=")
     return f"{header.decode('utf-8')}.{payload.decode('utf-8')}.signature"
 
 
-def test_configure_initialises_msal_client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_configure_initialises_msal_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     settings = make_settings()
     settings.token_cache_path = tmp_path / "cache.bin"
     stub = StubPublicClientApplication(
@@ -31,23 +33,31 @@ def test_configure_initialises_msal_client(monkeypatch: pytest.MonkeyPatch, tmp_
         accounts=[],
     )
 
-    manager = configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
 
     assert stub.client_id == settings.client_id
     assert stub.authority == settings.derive_authority()
     assert manager.current_user() is None
 
 
-def test_configure_requires_client_id(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_configure_requires_client_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     settings = make_settings(client_id=None)
     settings.token_cache_path = tmp_path / "cache.bin"
     stub = StubPublicClientApplication(client_id="", authority="", accounts=[])
     with pytest.raises(AuthenticationError):
-        configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+        configure_auth_manager(
+            settings=settings, stub_app=stub, monkeypatch=monkeypatch
+        )
 
 
 @pytest.mark.asyncio
-async def test_acquire_token_prefers_silent(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+async def test_acquire_token_prefers_silent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     settings = make_settings()
     settings.graph_scopes = ["scope.read", "scope.write"]
     settings.token_cache_path = tmp_path / "cache.bin"
@@ -79,7 +89,9 @@ async def test_acquire_token_prefers_silent(monkeypatch: pytest.MonkeyPatch, tmp
         interactive_results=[],
     )
 
-    manager = configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
     token = await manager.acquire_token(settings.graph_scopes)
 
     assert token.token == access_token
@@ -129,7 +141,9 @@ async def test_acquire_token_interactive_when_silent_missing(
         ],
     )
 
-    manager = configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
     token = await manager.acquire_token(settings.graph_scopes)
 
     assert token.token == access_token
@@ -155,14 +169,18 @@ def test_acquire_token_sync_requires_prior_interactive(
         silent_results=[],
         interactive_results=[],
     )
-    manager = configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
 
     with pytest.raises(AuthenticationError):
         manager.acquire_token_sync(settings.graph_scopes)
 
 
 @pytest.mark.asyncio
-async def test_sign_out_clears_cached_user(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+async def test_sign_out_clears_cached_user(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     settings = make_settings()
     settings.graph_scopes = ["scope.read"]
     settings.token_cache_path = tmp_path / "cache.bin"
@@ -193,7 +211,9 @@ async def test_sign_out_clears_cached_user(monkeypatch: pytest.MonkeyPatch, tmp_
         ],
     )
 
-    manager = configure_auth_manager(settings=settings, stub_app=stub, monkeypatch=monkeypatch)
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
     await manager.acquire_token(settings.graph_scopes)
     assert manager.current_user() is not None
     await manager.sign_out()

@@ -6,7 +6,9 @@ from intune_manager.services.sync import SyncProgressEvent, SyncService
 
 
 @pytest.mark.asyncio
-async def test_sync_service_emits_progress_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sync_service_emits_progress_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     phases = ["devices", "applications", "groups", "filters", "configurations", "audit"]
     sync = SyncService(
         devices="devices",
@@ -36,7 +38,9 @@ async def test_sync_service_emits_progress_in_order(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_sync_service_emits_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sync_service_emits_error_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sync = SyncService(
         devices="devices",
         applications="applications",

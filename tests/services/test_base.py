@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from intune_manager.services.base import EventHook, MutationStatus, run_optimistic_mutation
+from intune_manager.services.base import (
+    EventHook,
+    MutationStatus,
+    run_optimistic_mutation,
+)
 
 
-def _tuple_builder(status: MutationStatus, error: Exception | None) -> tuple[MutationStatus, Exception | None]:
+def _tuple_builder(
+    status: MutationStatus, error: Exception | None
+) -> tuple[MutationStatus, Exception | None]:
     return (status, error)
 
 

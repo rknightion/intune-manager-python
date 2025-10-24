@@ -28,9 +28,7 @@ from tests.stubs import FakeGraphClientFactory
 
 
 def _with_enum_intent(assignment: MobileAppAssignment) -> MobileAppAssignment:
-    return assignment.model_copy(
-        update={"intent": AssignmentIntent(assignment.intent)}
-    )
+    return assignment.model_copy(update={"intent": AssignmentIntent(assignment.intent)})
 
 
 @pytest.mark.asyncio
@@ -74,7 +72,9 @@ async def test_bulk_assignment_retry_and_success_flow() -> None:
     )
 
     assign_path = "/deviceAppManagement/mobileApps/app-1/assign"
-    factory.set_request_json_response("POST", assign_path, Exception("simulated failure"))
+    factory.set_request_json_response(
+        "POST", assign_path, Exception("simulated failure")
+    )
 
     with pytest.raises(Exception, match="simulated failure"):
         await controller.apply_diff("app-1", diff)

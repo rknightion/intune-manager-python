@@ -90,7 +90,9 @@ def patched_main_window(monkeypatch: pytest.MonkeyPatch, qtbot):
         token_cache_path=Path("/tmp/token.cache"),
         settings=Settings(),
     )
-    monkeypatch.setattr("intune_manager.ui.main.window.detect_first_run", lambda: status)
+    monkeypatch.setattr(
+        "intune_manager.ui.main.window.detect_first_run", lambda: status
+    )
 
     window = MainWindow(ServiceRegistry())
     qtbot.addWidget(window)
@@ -105,16 +107,27 @@ def test_main_window_navigation_switches_pages(patched_main_window, qtbot):
 
     # All navigation pages should have been constructed with a shared UI context.
     assert window.ui_context is not None
-    for key in ("dashboard", "devices", "applications", "groups", "assignments", "reports"):
+    for key in (
+        "dashboard",
+        "devices",
+        "applications",
+        "groups",
+        "assignments",
+        "reports",
+    ):
         assert key in created, f"Expected stub page for {key}"
         assert created[key].context is window.ui_context
         assert created[key].services is window._services  # noqa: SLF001 - test access
 
     for index, item in enumerate(window.NAV_ITEMS):
         window._nav_list.setCurrentRow(index)  # noqa: SLF001 - navigation wiring under test
-        qtbot.waitUntil(lambda: window._stack.currentWidget() is window._pages[item.key])  # noqa: SLF001
+        qtbot.waitUntil(
+            lambda: window._stack.currentWidget() is window._pages[item.key]
+        )  # noqa: SLF001
         expected_prefix = "Ready" if index == 0 else item.label
-        qtbot.waitUntil(lambda: window.statusBar().currentMessage().startswith(expected_prefix))
+        qtbot.waitUntil(
+            lambda: window.statusBar().currentMessage().startswith(expected_prefix)
+        )
 
 
 def test_open_onboarding_uses_settings_page(patched_main_window):

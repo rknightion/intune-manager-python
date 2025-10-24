@@ -25,8 +25,12 @@ class StubPublicClientApplication:
         self._accounts = list(accounts or [])
         self._silent_results = list(silent_results or [])
         self._interactive_results = list(interactive_results or [])
-        self.acquire_token_silent_calls: list[tuple[tuple[str, ...], dict[str, Any] | None]] = []
-        self.acquire_token_interactive_calls: list[tuple[tuple[str, ...], dict[str, Any] | None]] = []
+        self.acquire_token_silent_calls: list[
+            tuple[tuple[str, ...], dict[str, Any] | None]
+        ] = []
+        self.acquire_token_interactive_calls: list[
+            tuple[tuple[str, ...], dict[str, Any] | None]
+        ] = []
         self.remove_account_calls: list[dict[str, Any]] = []
 
     def get_accounts(self) -> list[dict[str, Any]]:
@@ -53,7 +57,9 @@ class StubPublicClientApplication:
             raise RuntimeError("No interactive result configured")
         result = self._interactive_results.pop(0)
         if isinstance(result, dict):
-            claims = result.get("id_token_claims", {}) if isinstance(result, dict) else {}
+            claims = (
+                result.get("id_token_claims", {}) if isinstance(result, dict) else {}
+            )
             account = {
                 "name": claims.get("name"),
                 "username": claims.get("preferred_username"),
@@ -163,7 +169,9 @@ class FakeGraphClientFactory:
             return FakeResponse(status_code=200, json_payload=configured)
         return FakeResponse(status_code=204)
 
-    async def request_json(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def request_json(
+        self, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
         response = await self.request(method, path, **kwargs)
         return response.json()
 

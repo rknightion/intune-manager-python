@@ -1423,9 +1423,7 @@ class GroupsWidget(PageScaffold):
 
     def _populate_hierarchy_tree(self, groups: Iterable[DirectoryGroup]) -> None:
         visible_lookup = {
-            group.id: group
-            for group in groups
-            if getattr(group, "id", None)
+            group.id: group for group in groups if getattr(group, "id", None)
         }
         visible_ids = set(visible_lookup.keys())
         if not visible_ids:

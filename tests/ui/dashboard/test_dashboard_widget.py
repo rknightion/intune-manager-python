@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pytest
 
 from intune_manager.services import ServiceRegistry
-from intune_manager.ui.components import CommandRegistry, ThemeManager, ToastLevel, UIContext
+from intune_manager.ui.components import (
+    CommandRegistry,
+    ThemeManager,
+    ToastLevel,
+    UIContext,
+)
 from intune_manager.ui.dashboard.controller import (
     AnalyticsSummary,
     DashboardController,
@@ -54,7 +59,9 @@ def _make_context():
 
 
 @pytest.mark.usefixtures("qt_app")
-def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPatch, qtbot):
+def test_dashboard_refresh_snapshot_updates_metrics(
+    monkeypatch: pytest.MonkeyPatch, qtbot
+):
     context, notifications, busy_events, banners = _make_context()
 
     first_snapshot = DashboardSnapshot(
@@ -125,14 +132,14 @@ def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPa
                 available=True,
                 last_refresh=datetime.now(UTC),
             ),
-                ResourceMetric(
-                    key="applications",
-                    label="Applications",
-                    count=42,
-                    stale=False,
-                    available=True,
-                    last_refresh=datetime.now(UTC),
-                ),
+            ResourceMetric(
+                key="applications",
+                label="Applications",
+                count=42,
+                stale=False,
+                available=True,
+                last_refresh=datetime.now(UTC),
+            ),
         ],
         warnings=[],
         analytics=AnalyticsSummary(
@@ -152,4 +159,6 @@ def test_dashboard_refresh_snapshot_updates_metrics(monkeypatch: pytest.MonkeyPa
     assert widget._warnings_list.isVisible() is False  # noqa: SLF001
     assert banners[-1] == ("clear", None)
     assert not notifications, "Passive refresh should not emit notifications"
-    assert busy_events == [], "Snapshot refresh without sync should not toggle busy state"
+    assert busy_events == [], (
+        "Snapshot refresh without sync should not toggle busy state"
+    )

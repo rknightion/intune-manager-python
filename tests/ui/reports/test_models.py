@@ -7,7 +7,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from intune_manager.data.models.audit import AuditActor, AuditEvent, AuditResource
-from intune_manager.ui.reports.models import AuditEventFilterProxyModel, AuditEventTableModel
+from intune_manager.ui.reports.models import (
+    AuditEventFilterProxyModel,
+    AuditEventTableModel,
+)
 
 
 @pytest.fixture(scope="module")
