@@ -1,0 +1,241 @@
+name: Cleanup Artifacts and Pre-releases
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (do not delete, only show what would be deleted)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+  actions: write
+
+jobs:
+  cleanup-artifacts:
+    name: Clean up old workflow artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRun = ${{ github.event.inputs.dry_run || false }};
+
+            // Get all artifacts
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const now = Date.now();
+            const retentionDays = 7;
+            const cutoffTime = now - (retentionDays * 24 * 60 * 60 * 1000);
+
+            let deletedCount = 0;
+            let totalSize = 0;
+
+            for (const artifact of artifacts.data.artifacts) {
+              const createdAt = new Date(artifact.created_at).getTime();
+
+              if (createdAt < cutoffTime) {
+                const sizeMB = (artifact.size_in_bytes / 1024 / 1024).toFixed(2);
+                totalSize += artifact.size_in_bytes;
+
+                if (dryRun) {
+                  console.log(`[DRY RUN] Would delete artifact: ${artifact.name} (${sizeMB} MB, created: ${artifact.created_at})`);
+                } else {
+                  console.log(`Deleting artifact: ${artifact.name} (${sizeMB} MB, created: ${artifact.created_at})`);
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id
+                  });
+                }
+                deletedCount++;
+              }
+            }
+
+            const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+            const action = dryRun ? '[DRY RUN] Would have deleted' : 'Deleted';
+            console.log(`${action} ${deletedCount} artifacts, freed ${totalSizeMB} MB`);
+
+  cleanup-pr-prereleases:
+    name: Clean up PR pre-releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale PR pre-releases
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRun = ${{ github.event.inputs.dry_run || false }};
+
+            // Get all releases
+            const releases = await github.rest.repos.listReleases({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const now = Date.now();
+            const retentionDays = 7;
+            const cutoffTime = now - (retentionDays * 24 * 60 * 60 * 1000);
+
+            let deletedCount = 0;
+            const prPattern = /^ci-pr-\d+-/;
+
+            for (const release of releases.data) {
+              // Only process PR pre-releases
+              if (!release.prerelease || !prPattern.test(release.tag_name)) {
+                continue;
+              }
+
+              const createdAt = new Date(release.created_at).getTime();
+
+              // Delete PR pre-releases older than 7 days
+              if (createdAt < cutoffTime) {
+                if (dryRun) {
+                  console.log(`[DRY RUN] Would delete PR pre-release: ${release.tag_name} (created: ${release.created_at})`);
+                } else {
+                  console.log(`Deleting PR pre-release: ${release.tag_name} (created: ${release.created_at})`);
+
+                  // Delete the release
+                  await github.rest.repos.deleteRelease({
+                    owner,
+                    repo,
+                    release_id: release.id
+                  });
+
+                  // Delete the tag
+                  try {
+                    await github.rest.git.deleteRef({
+                      owner,
+                      repo,
+                      ref: `tags/${release.tag_name}`
+                    });
+                  } catch (error) {
+                    console.log(`Could not delete tag ${release.tag_name}: ${error.message}`);
+                  }
+                }
+                deletedCount++;
+              }
+            }
+
+            const action = dryRun ? '[DRY RUN] Would have deleted' : 'Deleted';
+            console.log(`${action} ${deletedCount} PR pre-releases`);
+
+  cleanup-main-prereleases:
+    name: Clean up old main pre-releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep only latest 5 main pre-releases per platform
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRun = ${{ github.event.inputs.dry_run || false }};
+            const keepCount = 5;
+
+            // Get all releases
+            const releases = await github.rest.repos.listReleases({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const mainPattern = /^ci-main-(\w+)-(\w+)$/;
+
+            // Group main pre-releases by platform
+            const platformReleases = {};
+
+            for (const release of releases.data) {
+              if (!release.prerelease) {
+                continue;
+              }
+
+              const match = release.tag_name.match(mainPattern);
+              if (match) {
+                const [, os, arch] = match;
+                const platform = `${os}-${arch}`;
+
+                if (!platformReleases[platform]) {
+                  platformReleases[platform] = [];
+                }
+
+                platformReleases[platform].push({
+                  id: release.id,
+                  tag_name: release.tag_name,
+                  created_at: release.created_at
+                });
+              }
+            }
+
+            let deletedCount = 0;
+
+            // For each platform, keep only the latest N releases
+            for (const [platform, releases] of Object.entries(platformReleases)) {
+              // Sort by creation date (newest first)
+              releases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+              console.log(`Platform ${platform}: found ${releases.length} main pre-releases`);
+
+              // Delete old releases beyond keepCount
+              for (let i = keepCount; i < releases.length; i++) {
+                const release = releases[i];
+
+                if (dryRun) {
+                  console.log(`[DRY RUN] Would delete old main pre-release: ${release.tag_name} (created: ${release.created_at})`);
+                } else {
+                  console.log(`Deleting old main pre-release: ${release.tag_name} (created: ${release.created_at})`);
+
+                  // Delete the release
+                  await github.rest.repos.deleteRelease({
+                    owner,
+                    repo,
+                    release_id: release.id
+                  });
+
+                  // Delete the tag
+                  try {
+                    await github.rest.git.deleteRef({
+                      owner,
+                      repo,
+                      ref: `tags/${release.tag_name}`
+                    });
+                  } catch (error) {
+                    console.log(`Could not delete tag ${release.tag_name}: ${error.message}`);
+                  }
+                }
+                deletedCount++;
+              }
+            }
+
+            const action = dryRun ? '[DRY RUN] Would have deleted' : 'Deleted';
+            console.log(`${action} ${deletedCount} old main pre-releases`);
+
+  summary:
+    name: Cleanup Summary
+    needs: [cleanup-artifacts, cleanup-pr-prereleases, cleanup-main-prereleases]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "✅ Cleanup workflow completed"
+          echo ""
+          echo "Cleanup jobs:"
+          echo "- Workflow artifacts: ${{ needs.cleanup-artifacts.result }}"
+          echo "- PR pre-releases: ${{ needs.cleanup-pr-prereleases.result }}"
+          echo "- Main pre-releases: ${{ needs.cleanup-main-prereleases.result }}"

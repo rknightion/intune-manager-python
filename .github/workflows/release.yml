@@ -140,8 +140,6 @@ jobs:
           echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
           # Increase cache size for better hit rate
           echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
-          echo "CLCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
-          echo "CLCACHE_NODIRECT=1" >> $GITHUB_ENV  # More cache hits
           mkdir -p "${{ runner.temp }}/clcache"
       - name: Set Windows Compiler Optimizations
         if: runner.os == 'Windows'
@@ -272,12 +270,13 @@ jobs:
           files: ${{ matrix.asset_name }}
           fail_on_unmatched_files: true
 
-      - name: Upload to GitHub Packages
+      # Upload as workflow artifact for quick download during build (kept for 90 days)
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ matrix.asset_name }}
-          retention-days: 0  # Keep forever
+          retention-days: 90
 
       - name: Save compiler cache statistics
         if: always()
@@ -301,56 +300,3 @@ jobs:
             fi
             echo "::endgroup::"
           fi
-
-  create-package:
-    name: Publish to GitHub Packages
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display downloaded artifacts
-        run: |
-          echo "Downloaded artifacts:"
-          ls -lhR artifacts/
-
-      - name: Extract version
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing version: $VERSION"
-
-      - name: Create package metadata
-        run: |
-          cat > package.json << EOF
-          {
-            "name": "@${{ github.repository_owner }}/intune-manager",
-            "version": "${{ steps.version.outputs.version }}",
-            "description": "Microsoft Intune Manager - Cross-platform GUI for Intune management",
-            "repository": "${{ github.repository }}",
-            "license": "MIT",
-            "binaries": {
-              "linux-x64": "IntuneManager-linux-x64.bin",
-              "linux-arm64": "IntuneManager-linux-arm64.bin",
-              "windows-x64": "IntuneManager-windows-x64.exe",
-              "windows-arm64": "IntuneManager-windows-arm64.exe",
-              "macos-x64": "IntuneManager-macos-x64.app.zip",
-              "macos-arm64": "IntuneManager-macos-arm64.app.zip"
-            }
-          }
-          EOF
-          cat package.json
-
-      - name: Publish metadata to GitHub Packages
-        run: |
-          echo "Package published with version ${{ steps.version.outputs.version }}"
-          echo "Artifacts are available in GitHub Releases and as workflow artifacts"

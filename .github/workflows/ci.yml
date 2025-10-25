@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: write
+
 # Only allow one workflow run per branch at a time
 # New commits cancel in-progress runs for the same branch
 concurrency:
@@ -27,6 +31,8 @@ jobs:
             runner: ubuntu-latest
             artifact_name: IntuneManager.bin
             output_path: IntuneManager
+            asset_name: IntuneManager-linux-x64.bin
+            content_type: application/octet-stream
 
           # Linux ARM64
           - os: linux
@@ -34,6 +40,8 @@ jobs:
             runner: ubuntu-24.04-arm
             artifact_name: IntuneManager.bin
             output_path: IntuneManager
+            asset_name: IntuneManager-linux-arm64.bin
+            content_type: application/octet-stream
 
           # Windows x64
           - os: windows
@@ -41,6 +49,8 @@ jobs:
             runner: windows-latest
             artifact_name: IntuneManager.exe
             output_path: IntuneManager.exe
+            asset_name: IntuneManager-windows-x64.exe
+            content_type: application/vnd.microsoft.portable-executable
 
           # Windows ARM64
           - os: windows
@@ -48,20 +58,26 @@ jobs:
             runner: windows-11-arm
             artifact_name: IntuneManager.exe
             output_path: IntuneManager.exe
+            asset_name: IntuneManager-windows-arm64.exe
+            content_type: application/vnd.microsoft.portable-executable
 
           # macOS Intel
           - os: macos
             arch: x64
             runner: macos-13
-            artifact_name: IntuneManager
-            output_path: intune_manager.app
+            artifact_name: IntuneManager.app
+            output_path: IntuneManager.app
+            asset_name: IntuneManager-macos-x64.app.zip
+            content_type: application/zip
 
           # macOS ARM64
           - os: macos
             arch: arm64
             runner: macos-latest
-            artifact_name: IntuneManager
-            output_path: intune_manager.app
+            artifact_name: IntuneManager.app
+            output_path: IntuneManager.app
+            asset_name: IntuneManager-macos-arm64.app.zip
+            content_type: application/zip
 
     steps:
       - name: Checkout code
@@ -122,19 +138,7 @@ jobs:
           echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
           # Increase cache size for better hit rate
           echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
-          echo "CLCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
-          echo "CLCACHE_NODIRECT=1" >> $GITHUB_ENV  # More cache hits
           mkdir -p "${{ runner.temp }}/clcache"
-      - name: Set Windows Compiler Optimizations
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          # Optimize for speed over size
-          echo "_CL_=/O2 /GL /Gy /favor:INTEL64" >> $GITHUB_ENV
-          # Use all available cores for MSVC
-          echo "CL=/MP" >> $GITHUB_ENV
-          # Increase PCH memory
-          echo "_CL_=/Zm500" >> $GITHUB_ENV
 
       # Cache clcache for Windows
       - name: Cache clcache (Windows)
@@ -217,13 +221,69 @@ jobs:
             exit 1
           fi
 
-      - name: Upload artifact
+      # Zip macOS .app bundles for easier distribution
+      - name: Package macOS app bundle
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          zip -r "${{ matrix.asset_name }}" IntuneManager.app
+          echo "Created: ${{ matrix.asset_name }}"
+          ls -lh "${{ matrix.asset_name }}"
+
+      # For non-macOS, just copy the binary
+      - name: Prepare package asset
+        if: matrix.os != 'macos'
+        shell: bash
+        run: |
+          cp "${{ matrix.output_path }}" "${{ matrix.asset_name }}"
+          echo "Prepared: ${{ matrix.asset_name }}"
+          ls -lh "${{ matrix.asset_name }}"
+
+      # Upload as workflow artifact (7 day retention since we're publishing to packages)
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ matrix.output_path }}
-          retention-days: 90
+          path: ${{ matrix.asset_name }}
+          retention-days: 7
           compression-level: 9
+
+      # Publish to GitHub Packages as rolling pre-release
+      - name: Determine release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # For PRs, use pr-{number}-{os}-{arch} format
+            TAG="ci-pr-${{ github.event.pull_request.number }}-${{ matrix.os }}-${{ matrix.arch }}"
+          else
+            # For main branch, use main-{os}-{arch} format
+            TAG="ci-main-${{ matrix.os }}-${{ matrix.arch }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Release tag: $TAG"
+
+      - name: Publish to GitHub Packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: "CI Build: ${{ matrix.os }}-${{ matrix.arch }} (${{ github.ref_name }})"
+          files: ${{ matrix.asset_name }}
+          prerelease: true
+          draft: false
+          make_latest: false
+          body: |
+            **Automated CI Build**
+
+            - **Platform**: ${{ matrix.os }}-${{ matrix.arch }}
+            - **Branch**: ${{ github.ref_name }}
+            - **Commit**: ${{ github.sha }}
+            - **Build Date**: ${{ github.event.head_commit.timestamp }}
+
+            This is an automated build from the CI pipeline.
+            For stable releases, see the [Releases page](https://github.com/${{ github.repository }}/releases).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Save compiler cache statistics
         if: always()
