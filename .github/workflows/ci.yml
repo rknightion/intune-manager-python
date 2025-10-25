@@ -117,11 +117,24 @@ jobs:
         shell: bash
         run: |
           echo "NUITKA_CLCACHE_BINARY=clcache" >> $GITHUB_ENV
-          # Set clcache environment variables
           echo "CLCACHE_DIR=${{ runner.temp }}/clcache" >> $GITHUB_ENV
           echo "CLCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          # Increase cache size for better hit rate
+          echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
+          echo "CLCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "CLCACHE_NODIRECT=1" >> $GITHUB_ENV  # More cache hits
           mkdir -p "${{ runner.temp }}/clcache"
+      - name: Set Windows Compiler Optimizations
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Optimize for speed over size
+          echo "_CL_=/O2 /GL /Gy /favor:INTEL64" >> $GITHUB_ENV
+          # Use all available cores for MSVC
+          echo "CL=/MP" >> $GITHUB_ENV
+          # Increase PCH memory
+          echo "_CL_=/Zm500" >> $GITHUB_ENV
 
       # Cache clcache for Windows
       - name: Cache clcache (Windows)
