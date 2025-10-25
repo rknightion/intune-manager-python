@@ -218,6 +218,16 @@ jobs:
             exit 1
           fi
 
+      # Upload compilation report for debugging (short retention since it's for troubleshooting)
+      - name: Upload compilation report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: compilation-report-${{ matrix.os }}-${{ matrix.arch }}
+          path: compilation-report.xml
+          retention-days: 5
+          if-no-files-found: warn
+
       # Package macOS .app bundles using ditto (preserves app bundle structure)
       - name: Package macOS app bundle
         if: matrix.os == 'macos'

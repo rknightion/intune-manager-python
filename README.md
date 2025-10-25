@@ -36,6 +36,32 @@ src/intune_manager/
 ```
 Each subpackage contains an `AGENTS.md` file describing expectations for LLM-driven development within that area.
 
+## Troubleshooting
+
+### Keyring Backend Issues (Compiled Builds)
+
+When running compiled executables (built with Nuitka), you may encounter keyring backend failures on Windows:
+
+```
+InsecureKeyringError: Keyring backend keyring.backends.fail.Keyring does not provide encrypted storage.
+```
+
+**Cause**: The Windows Credential Manager backend requires `pywin32` dependencies that may not be automatically detected during compilation.
+
+**Solutions**:
+1. **Recommended**: The build configuration now includes explicit `win32timezone` and related modules. Rebuild with the latest configuration.
+2. **Temporary workaround**: Set the environment variable `INTUNE_MANAGER_ALLOW_INSECURE_KEYRING=1` to bypass the security check for development/testing. ⚠️ **Warning**: This disables secure credential storage and should only be used in non-production environments.
+
+### Nuitka Compilation Debugging
+
+The build process generates a `compilation-report.xml` file that details all included modules, DLL dependencies, and compilation decisions. This report is invaluable for troubleshooting missing dependencies in compiled builds.
+
+To review the report after building:
+```bash
+# The report is generated automatically during Nuitka builds
+cat compilation-report.xml | grep "module-name"  # Search for specific modules
+```
+
 ## Working Notes
 - All long-term planning and task tracking lives in `migration.txt`. Update it whenever scope changes or milestones complete.
 - Favor async-first patterns and update AGENT guides as architecture evolves.

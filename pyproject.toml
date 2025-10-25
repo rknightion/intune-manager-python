@@ -14,7 +14,6 @@ dependencies = [
     "msal>=1.34.0",
     "platformdirs>=4.5.0",
     "pydantic>=2.12.3",
-    "pyqt6-charts>=6.10.0",
     "pyside6>=6.10.0",
     "python-dotenv>=1.1.1",
     "qasync>=0.28.0",

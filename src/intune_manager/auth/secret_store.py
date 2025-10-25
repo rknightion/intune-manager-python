@@ -78,6 +78,14 @@ class SecretStore:
         self._backend = backend or keyring.get_keyring()
         self._enforce_backend_security(allow_insecure)
 
+        # Log backend info for diagnostics (especially useful in compiled builds)
+        logger.info(
+            "Keyring backend initialized",
+            backend=_describe_backend(self._backend),
+            service=service_name,
+            secure=_is_secure_backend(self._backend),
+        )
+
     def get_secret(self, key: str) -> str | None:
         return self._backend.get_password(self._service_name, key)
 
@@ -104,9 +112,18 @@ class SecretStore:
                 env=_ALLOW_INSECURE_ENV,
             )
             return
-        raise InsecureKeyringError(
-            f"Keyring backend {descriptor} does not provide encrypted storage.",
+
+        # Provide helpful error message for compiled environments
+        error_msg = (
+            f"Keyring backend {descriptor} does not provide encrypted storage."
         )
+        if "fail" in descriptor.lower():
+            error_msg += (
+                " This typically occurs in compiled executables when system keyring "
+                "dependencies are missing. On Windows, ensure pywin32 is properly installed. "
+                f"For development/testing, set {_ALLOW_INSECURE_ENV}=1 to bypass this check."
+            )
+        raise InsecureKeyringError(error_msg)
 
 
 __all__ = ["SecretStore", "InsecureKeyringError"]
