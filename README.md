@@ -46,10 +46,10 @@ When running compiled executables (built with Nuitka), you may encounter keyring
 InsecureKeyringError: Keyring backend keyring.backends.fail.Keyring does not provide encrypted storage.
 ```
 
-**Cause**: The Windows Credential Manager backend requires `pywin32` dependencies that may not be automatically detected during compilation.
+**Cause**: The Windows Credential Manager backend requires `pywin32-ctypes` (a pure-Python Windows credential library). This dependency is now included in the project with a Windows platform marker.
 
 **Solutions**:
-1. **Recommended**: The build configuration now includes explicit `win32timezone` and related modules. Rebuild with the latest configuration.
+1. **Recommended**: Ensure you have the latest dependencies installed with `uv sync`. The project now includes `pywin32-ctypes>=0.2.0` for Windows systems.
 2. **Temporary workaround**: Set the environment variable `INTUNE_MANAGER_ALLOW_INSECURE_KEYRING=1` to bypass the security check for development/testing. ⚠️ **Warning**: This disables secure credential storage and should only be used in non-production environments.
 
 ### Nuitka Compilation Debugging

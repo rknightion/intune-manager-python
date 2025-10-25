@@ -12,10 +12,6 @@
 #    nuitka-project: --low-memory
 #    nuitka-project: --jobs=4
 #    nuitka-project: --include-module=keyring.backends.Windows
-#    nuitka-project: --include-module=win32timezone
-#    nuitka-project: --include-module=pywintypes
-#    nuitka-project: --include-module=win32cred
-#    nuitka-project: --include-module=win32api
 #    nuitka-project: --include-module=PySide6.QtCharts
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png

@@ -120,7 +120,7 @@ class SecretStore:
         if "fail" in descriptor.lower():
             error_msg += (
                 " This typically occurs in compiled executables when system keyring "
-                "dependencies are missing. On Windows, ensure pywin32 is properly installed. "
+                "dependencies are missing. On Windows, ensure pywin32-ctypes>=0.2.0 is installed. "
                 f"For development/testing, set {_ALLOW_INSECURE_ENV}=1 to bypass this check."
             )
         raise InsecureKeyringError(error_msg)

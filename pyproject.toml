@@ -15,6 +15,7 @@ dependencies = [
     "platformdirs>=4.5.0",
     "pydantic>=2.12.3",
     "pyside6>=6.10.0",
+    "pywin32-ctypes>=0.2.0; platform_system == 'Windows'",
     "python-dotenv>=1.1.1",
     "qasync>=0.28.0",
     "sqlalchemy>=2.0.44",

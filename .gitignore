@@ -115,3 +115,5 @@ test-reports/
 .test-cache/
 
 IntuneManager
+
+compilation-report.xml
