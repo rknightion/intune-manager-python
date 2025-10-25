@@ -87,7 +87,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-          cache: 'pip'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -295,6 +294,35 @@ jobs:
             echo "Cache directory: $(ccache --get-config cache_dir)" || true
             echo "Cache size: $(du -sh $(ccache --get-config cache_dir) 2>/dev/null || echo 'N/A')"
             echo "::endgroup::"
+
+            # Add to job summary
+            echo "## 🔧 Compiler Cache Statistics (${{ matrix.os }}-${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ccache (Linux/macOS)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract key metrics from ccache stats
+            STATS=$(ccache --show-stats 2>/dev/null || echo "")
+            CACHE_DIR=$(ccache --get-config cache_dir 2>/dev/null || echo "N/A")
+            CACHE_SIZE=$(du -sh "$CACHE_DIR" 2>/dev/null | cut -f1 || echo "N/A")
+
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+
+            # Parse ccache stats for key metrics
+            if [ -n "$STATS" ]; then
+              CACHE_HIT=$(echo "$STATS" | grep -i "cache hit" | head -1 | awk '{print $NF}' || echo "N/A")
+              CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | head -1 | awk '{print $NF}' || echo "N/A")
+              HIT_RATE=$(echo "$STATS" | grep -i "hit rate" | head -1 | awk '{print $NF}' || echo "N/A")
+
+              echo "| Cache hits | ${CACHE_HIT} |" >> $GITHUB_STEP_SUMMARY
+              echo "| Cache misses | ${CACHE_MISS} |" >> $GITHUB_STEP_SUMMARY
+              echo "| Hit rate | ${HIT_RATE} |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "| Cache directory | \`${CACHE_DIR}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Cache size | ${CACHE_SIZE} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
           else
             echo "::group::clcache statistics"
             echo "CLCACHE_DIR: $CLCACHE_DIR"
@@ -305,4 +333,24 @@ jobs:
               echo "No clcache directory found"
             fi
             echo "::endgroup::"
+
+            # Add to job summary
+            echo "## 🔧 Compiler Cache Statistics (${{ matrix.os }}-${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### clcache (Windows)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+
+            if [ -d "$CLCACHE_DIR" ]; then
+              CACHE_SIZE=$(du -sh "$CLCACHE_DIR" 2>/dev/null | cut -f1 || echo "N/A")
+              NUM_FILES=$(find "$CLCACHE_DIR" -type f | wc -l)
+
+              echo "| Cache directory | \`${CLCACHE_DIR}\` |" >> $GITHUB_STEP_SUMMARY
+              echo "| Cache size | ${CACHE_SIZE} |" >> $GITHUB_STEP_SUMMARY
+              echo "| Cached files | ${NUM_FILES} |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Status | ❌ No cache directory found |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
           fi
