@@ -140,16 +140,15 @@ jobs:
           echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
           mkdir -p "${{ runner.temp }}/clcache"
 
-      # Cache clcache for Windows
+      # Cache clcache for Windows (stable key per platform, clcache handles source changes internally)
       - name: Cache clcache (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/clcache
-          key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('src/**/*.py', 'pyproject.toml') }}
+          key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             clcache-${{ matrix.os }}-${{ matrix.arch }}-
-            clcache-${{ matrix.os }}-
 
       # Configure Nuitka cache directories
       - name: Configure Nuitka environment
@@ -163,7 +162,7 @@ jobs:
           echo "NUITKA_CACHE_DIR_DLL_DEPENDENCIES=${{ runner.temp }}/nuitka-cache/dll-dependencies" >> $GITHUB_ENV
           mkdir -p "${{ runner.temp }}/nuitka-cache"
 
-      # Cache Nuitka build directory
+      # Cache Nuitka build directory (stable key per platform, invalidates only when dependencies/config change)
       - name: Cache Nuitka build
         uses: actions/cache@v4
         with:
@@ -172,10 +171,9 @@ jobs:
             intune_manager.dist
             intune_manager.onefile-build
             ${{ runner.temp }}/nuitka-cache
-          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
+          key: nuitka-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml', 'src/intune_manager/__main__.py') }}
           restore-keys: |
             nuitka-${{ matrix.os }}-${{ matrix.arch }}-
-            nuitka-${{ matrix.os }}-
 
       - name: Install dependencies
         run: uv sync --all-groups
