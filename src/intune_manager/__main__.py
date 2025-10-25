@@ -2,17 +2,6 @@
 #    nuitka-project: --macos-app-icon={MAIN_DIRECTORY}/../../assets/icons/icon.icns
 #    nuitka-project: --lto=auto
 #    nuitka-project: --include-module=keyring.backends.macOS
-# nuitka-project-if: {OS} == "Windows":
-#    nuitka-project: --windows-icon-from-ico={MAIN_DIRECTORY}/../../assets/icons/icon.ico
-#    nuitka-project: --product-name=IntuneManager
-#    nuitka-project: --file-description="Microsoft Intune Manager"
-#    nuitka-project: --company-name="IntuneManager"
-#    nuitka-project: --windows-console-mode=attach
-#    nuitka-project: --lto=no
-#    nuitka-project: --low-memory
-#    nuitka-project: --jobs=4
-#    nuitka-project: --include-module=keyring.backends.Windows
-#    nuitka-project: --include-module=PySide6.QtCharts
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
 #    nuitka-project: --static-libpython=yes

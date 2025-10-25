@@ -45,23 +45,23 @@ jobs:
             asset_name: IntuneManager-linux-arm64.bin
             content_type: application/octet-stream
 
-          # Windows x64
-          - os: windows
-            arch: x64
-            runner: windows-latest
-            artifact_name: IntuneManager.exe
-            output_path: IntuneManager.exe
-            asset_name: IntuneManager-windows-x64.exe
-            content_type: application/vnd.microsoft.portable-executable
+          # Windows x64 (disabled - compilation issues)
+          # - os: windows
+          #   arch: x64
+          #   runner: windows-latest
+          #   artifact_name: IntuneManager.exe
+          #   output_path: IntuneManager.exe
+          #   asset_name: IntuneManager-windows-x64.exe
+          #   content_type: application/vnd.microsoft.portable-executable
 
-          # Windows ARM64
-          - os: windows
-            arch: arm64
-            runner: windows-11-arm
-            artifact_name: IntuneManager.exe
-            output_path: IntuneManager.exe
-            asset_name: IntuneManager-windows-arm64.exe
-            content_type: application/vnd.microsoft.portable-executable
+          # Windows ARM64 (disabled - compilation issues)
+          # - os: windows
+          #   arch: arm64
+          #   runner: windows-11-arm
+          #   artifact_name: IntuneManager.exe
+          #   output_path: IntuneManager.exe
+          #   asset_name: IntuneManager-windows-arm64.exe
+          #   content_type: application/vnd.microsoft.portable-executable
 
           # macOS Intel
           - os: macos

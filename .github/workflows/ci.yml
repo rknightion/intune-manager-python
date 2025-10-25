@@ -44,22 +44,22 @@ jobs:
             content_type: application/octet-stream
 
           # Windows x64
-          - os: windows
-            arch: x64
-            runner: windows-latest
-            artifact_name: IntuneManager.exe
-            output_path: IntuneManager.exe
-            asset_name: IntuneManager-windows-x64.exe
-            content_type: application/vnd.microsoft.portable-executable
+          # - os: windows
+          #   arch: x64
+          #   runner: windows-latest
+          #   artifact_name: IntuneManager.exe
+          #   output_path: IntuneManager.exe
+          #   asset_name: IntuneManager-windows-x64.exe
+          #   content_type: application/vnd.microsoft.portable-executable
 
-          # Windows ARM64
-          - os: windows
-            arch: arm64
-            runner: windows-11-arm
-            artifact_name: IntuneManager.exe
-            output_path: IntuneManager.exe
-            asset_name: IntuneManager-windows-arm64.exe
-            content_type: application/vnd.microsoft.portable-executable
+          # # Windows ARM64
+          # - os: windows
+          #   arch: arm64
+          #   runner: windows-11-arm
+          #   artifact_name: IntuneManager.exe
+          #   output_path: IntuneManager.exe
+          #   asset_name: IntuneManager-windows-arm64.exe
+          #   content_type: application/vnd.microsoft.portable-executable
 
           # macOS Intel
           - os: macos
@@ -127,27 +127,27 @@ jobs:
           echo "::endgroup::"
 
       # Windows compiler caching with clcache (built into Nuitka)
-      - name: Configure clcache (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "NUITKA_CLCACHE_BINARY=clcache" >> $GITHUB_ENV
-          echo "CLCACHE_DIR=${{ runner.temp }}/clcache" >> $GITHUB_ENV
-          echo "CLCACHE_COMPRESS=1" >> $GITHUB_ENV
-          echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
-          # Increase cache size for better hit rate
-          echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
-          mkdir -p "${{ runner.temp }}/clcache"
+      # - name: Configure clcache (Windows)
+      #   if: runner.os == 'Windows'
+      #   shell: bash
+      #   run: |
+      #     echo "NUITKA_CLCACHE_BINARY=clcache" >> $GITHUB_ENV
+      #     echo "CLCACHE_DIR=${{ runner.temp }}/clcache" >> $GITHUB_ENV
+      #     echo "CLCACHE_COMPRESS=1" >> $GITHUB_ENV
+      #     echo "CLCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+      #     # Increase cache size for better hit rate
+      #     echo "CLCACHE_HARDLINK=1" >> $GITHUB_ENV  # Use hardlinks to save space
+      #     mkdir -p "${{ runner.temp }}/clcache"
 
       # Cache clcache for Windows (stable key per platform, clcache handles source changes internally)
-      - name: Cache clcache (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/clcache
-          key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            clcache-${{ matrix.os }}-${{ matrix.arch }}-
+      # - name: Cache clcache (Windows)
+      #   if: runner.os == 'Windows'
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: ${{ runner.temp }}/clcache
+      #     key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml') }}
+      #     restore-keys: |
+      #       clcache-${{ matrix.os }}-${{ matrix.arch }}-
 
       # Configure Nuitka cache directories
       - name: Configure Nuitka environment
