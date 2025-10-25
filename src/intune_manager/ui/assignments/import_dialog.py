@@ -285,16 +285,14 @@ class AssignmentImportDialog(QDialog):
         if self._result.warnings:
             lines.append("Warnings:")
             lines.extend(
-                f"  - {sanitize_log_message(item)}"
-                for item in self._result.warnings
+                f"  - {sanitize_log_message(item)}" for item in self._result.warnings
             )
         if self._result.errors:
             if lines:
                 lines.append("")
             lines.append("Errors:")
             lines.extend(
-                f"  - {sanitize_log_message(item)}"
-                for item in self._result.errors
+                f"  - {sanitize_log_message(item)}" for item in self._result.errors
             )
         return "\n".join(lines)
 

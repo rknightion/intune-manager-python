@@ -42,8 +42,6 @@ class SettingsWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self._controller = controller or SettingsController()
-        self._secret_present = False
-        self._clear_secret_requested = False
 
         self._build_ui()
         self._connect_signals()
@@ -58,8 +56,10 @@ class SettingsWidget(QWidget):
         self.help_label = QLabel(
             (
                 "Provide your Azure AD tenant ID and app registration details. "
-                "Configure a public client redirect URI (e.g. http://localhost:8400) "
-                "and grant the Intune-related Microsoft Graph **beta** scopes."
+                "Your app registration **must be configured as 'Mobile and desktop applications'** "
+                "(not 'Web application') since this is a desktop app that uses public client authentication. "
+                "Configure a redirect URI (e.g. http://localhost:8400) "
+                "and grant the Intune-related Microsoft Graph scopes."
             ),
         )
         self.help_label.setWordWrap(True)
@@ -96,24 +96,10 @@ class SettingsWidget(QWidget):
             "Optional override, defaults to https://login.microsoftonline.com/<tenant>"
         )
 
-        self.client_secret_input = QLineEdit()
-        self.client_secret_input.setEchoMode(QLineEdit.Password)
-
-        self.client_secret_hint = QLabel()
-        self.client_secret_hint.setWordWrap(True)
-        self.client_secret_hint.setObjectName("clientSecretHint")
-
-        self.clear_secret_button = QPushButton("Clear stored secret")
-        self.clear_secret_button.setEnabled(False)
-        self.clear_secret_button.clicked.connect(self._handle_clear_secret)
-
         form.addRow("Tenant ID", self.tenant_input)
         form.addRow("Client ID", self.client_input)
         form.addRow("Redirect URI", self.redirect_input)
         form.addRow("Authority", self.authority_input)
-        form.addRow("Client Secret", self.client_secret_input)
-        form.addRow("", self.client_secret_hint)
-        form.addRow("", self.clear_secret_button)
 
         return group
 
@@ -124,9 +110,10 @@ class SettingsWidget(QWidget):
         self.scopes_input = QPlainTextEdit()
         self.scopes_input.setPlaceholderText(_format_scopes(DEFAULT_GRAPH_SCOPES))
         self.scopes_input.setMinimumHeight(120)
+        self.scopes_input.setReadOnly(True)
 
         self.scope_hint = QLabel(
-            "One scope per line. Leave empty to fall back to the recommended defaults.",
+            "These are the required Microsoft Graph scopes. You can copy them but cannot modify the list.",
         )
         self.scope_hint.setWordWrap(True)
 
@@ -236,23 +223,8 @@ class SettingsWidget(QWidget):
         self.client_input.setText(settings.client_id or "")
         self.redirect_input.setText(settings.redirect_uri or "")
         self.authority_input.setText(settings.authority or "")
-        self.scopes_input.setPlainText(_format_scopes(settings.graph_scopes))
-
-        self.client_secret_input.clear()
-        self._secret_present = snapshot_obj.has_client_secret
-        self._clear_secret_requested = False
-
-        if self._secret_present:
-            self.client_secret_input.setPlaceholderText(
-                "Secret stored securely. Enter a new value to replace."
-            )
-            self.client_secret_hint.setText("Secret is stored in the OS keyring.")
-        else:
-            self.client_secret_input.setPlaceholderText("Optional client secret")
-            self.client_secret_hint.setText(
-                "Store confidential values in the OS keyring. Leave blank if not required."
-            )
-        self.clear_secret_button.setEnabled(self._secret_present)
+        # Always display default scopes (read-only)
+        self.scopes_input.setPlainText(_format_scopes(DEFAULT_GRAPH_SCOPES))
 
     def _update_status(self, status_obj: object) -> None:
         if not isinstance(status_obj, AuthStatus):
@@ -286,19 +258,13 @@ class SettingsWidget(QWidget):
         settings = self._collect_settings()
         if settings is None:
             return
-        secret, clear = self._gather_secret_inputs()
-        self._controller.save_settings(
-            settings, client_secret=secret, clear_secret=clear
-        )
+        self._controller.save_settings(settings, client_secret=None, clear_secret=False)
 
     def _handle_sign_in_clicked(self) -> None:
         settings = self._collect_settings(require_identifiers=True)
         if settings is None:
             return
-        secret, clear = self._gather_secret_inputs()
-        self._controller.save_settings(
-            settings, client_secret=secret, clear_secret=clear
-        )
+        self._controller.save_settings(settings, client_secret=None, clear_secret=False)
         self._controller.test_sign_in(settings)
 
     def _handle_permissions_clicked(self) -> None:
@@ -311,42 +277,18 @@ class SettingsWidget(QWidget):
         settings = self._collect_settings(require_identifiers=True)
         if settings is None:
             return
-        secret, clear = self._gather_secret_inputs()
-        self._controller.save_settings(
-            settings, client_secret=secret, clear_secret=clear
-        )
+        self._controller.save_settings(settings, client_secret=None, clear_secret=False)
         self._controller.test_graph_connection(settings)
 
     def _handle_reset_clicked(self) -> None:
         reply = QMessageBox.question(
             self,
             "Reset configuration",
-            (
-                "This will clear saved tenant settings, cached tokens, and stored secrets.\n"
-                "Do you want to continue?"
-            ),
+            "This will clear saved tenant settings and cached tokens.\nDo you want to continue?",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             self._controller.reset_configuration()
-
-    def _handle_clear_secret(self) -> None:
-        if not self._secret_present:
-            return
-        reply = QMessageBox.question(
-            self,
-            "Clear stored secret",
-            "Remove the stored secret from the system keyring?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            self._clear_secret_requested = True
-            self.client_secret_input.clear()
-            self.client_secret_input.setPlaceholderText(
-                "Secret cleared. Enter to set again."
-            )
-            self.client_secret_hint.setText("Secret will be removed when you save.")
-            self.clear_secret_button.setEnabled(False)
 
     def _handle_error(self, message: str) -> None:
         self._set_feedback(message, error=True)
@@ -369,9 +311,8 @@ class SettingsWidget(QWidget):
     # ---------------------------------------------------------------- Utilities
 
     def _copy_configured_scopes(self) -> None:
-        scopes = self._parse_scopes(self.scopes_input.toPlainText())
-        if not scopes:
-            scopes = list(DEFAULT_GRAPH_SCOPES)
+        # Scopes are always the defaults (read-only)
+        scopes = list(DEFAULT_GRAPH_SCOPES)
         QGuiApplication.clipboard().setText("\n".join(scopes))
         self._set_feedback(f"Copied {len(scopes)} scope(s) to clipboard.", error=False)
 
@@ -391,9 +332,8 @@ class SettingsWidget(QWidget):
         client_id = self.client_input.text().strip() or None
         redirect_uri = self.redirect_input.text().strip() or None
         authority = self.authority_input.text().strip() or None
-        scopes_text = self.scopes_input.toPlainText().strip()
-
-        scopes = self._parse_scopes(scopes_text)
+        # Scopes are read-only, always use defaults
+        scopes = list(DEFAULT_GRAPH_SCOPES)
 
         settings = Settings(
             tenant_id=tenant_id,
@@ -409,35 +349,12 @@ class SettingsWidget(QWidget):
 
         return settings
 
-    def _gather_secret_inputs(self) -> tuple[str | None, bool]:
-        text = self.client_secret_input.text()
-        if text:
-            self._secret_present = True
-            self._clear_secret_requested = False
-            return text, False
-        if self._clear_secret_requested:
-            self._secret_present = False
-            clear = True
-        else:
-            clear = False
-        return None, clear
-
     def _handle_test_connection_result(self, success: bool, message: str) -> None:
         self._set_feedback(message, error=not success)
 
     def launch_setup_wizard(self) -> None:
         wizard = SetupWizard(self._controller, parent=self)
         wizard.exec()
-
-    def _parse_scopes(self, text: str) -> list[str]:
-        if not text:
-            return list(DEFAULT_GRAPH_SCOPES)
-        scopes: list[str] = []
-        for line in text.replace(";", "\n").splitlines():
-            scope = line.strip()
-            if scope and scope not in scopes:
-                scopes.append(scope)
-        return scopes
 
     def _set_feedback(self, message: str, *, error: bool) -> None:
         if not message:

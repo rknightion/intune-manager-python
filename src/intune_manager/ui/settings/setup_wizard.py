@@ -28,8 +28,6 @@ from .controller import AuthStatus, SettingsController, SettingsSnapshot
 @dataclass(slots=True)
 class WizardContext:
     settings: Settings
-    client_secret: str | None = None
-    clear_secret: bool = False
     permissions_granted: bool = False
     test_passed: bool = False
 
@@ -102,14 +100,17 @@ class _WelcomePage(_WizardPage):
 
         intro = QLabel(
             (
-                "<p>You'll need an Azure AD app registration with the required Microsoft Graph scopes. "
-                "We'll guide you through:</p>"
+                "<p>You'll need an Azure AD app registration configured as <strong>'Mobile and desktop applications'</strong> "
+                "(public client) with the required Microsoft Graph scopes. We'll guide you through:</p>"
                 "<ol>"
                 "<li>Creating or locating your app registration</li>"
-                "<li>Configuring redirect URI and client credentials</li>"
+                "<li>Configuring it as a mobile/desktop app (not web app)</li>"
+                "<li>Setting up the redirect URI</li>"
                 "<li>Granting admin consent for Intune permissions</li>"
                 "<li>Verifying connectivity to Microsoft Graph</li>"
                 "</ol>"
+                "<p><strong>Important:</strong> This application uses public client authentication and does NOT require "
+                "a client secret. If your app is registered as a 'Web application', authentication will fail.</p>"
                 "<p>Open the <a href='https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps'>"  # noqa: E501
                 "Azure portal – App registrations</a> in your browser so you can copy details as we go.</p>"
             ),
@@ -138,9 +139,6 @@ class _ConfigurationPage(_WizardPage):
         self.redirect_input.setFixedWidth(550)  # Fixed width - does not resize
         self.authority_input = QLineEdit()
         self.authority_input.setFixedWidth(550)  # Fixed width - does not resize
-        self.secret_input = QLineEdit()
-        self.secret_input.setFixedWidth(550)  # Fixed width - does not resize
-        self.secret_input.setEchoMode(QLineEdit.Password)
 
         self.registerField("tenant_id*", self.tenant_input)
         self.registerField("client_id*", self.client_input)
@@ -151,7 +149,6 @@ class _ConfigurationPage(_WizardPage):
         form_layout.addRow("Client ID", self.client_input)
         form_layout.addRow("Redirect URI", self.redirect_input)
         form_layout.addRow("Authority (optional)", self.authority_input)
-        form_layout.addRow("Client secret (optional)", self.secret_input)
 
         tool_row = QHBoxLayout()
         self.copy_redirect_button = QPushButton("Copy redirect URI")
@@ -173,14 +170,11 @@ class _ConfigurationPage(_WizardPage):
         snapshot = self.controller.load_settings()
         settings = snapshot.settings
         self.context.settings = settings
-        self.context.client_secret = None
-        self.context.clear_secret = False
 
         self.tenant_input.setText(settings.tenant_id or "")
         self.client_input.setText(settings.client_id or "")
         self.redirect_input.setText(settings.redirect_uri or "http://localhost:8400")
         self.authority_input.setText(settings.authority or "")
-        self.secret_input.clear()
 
     def validatePage(self) -> bool:
         tenant = self.tenant_input.text().strip()
@@ -204,16 +198,9 @@ class _ConfigurationPage(_WizardPage):
             graph_scopes=scopes,
         )
 
-        secret_text = self.secret_input.text().strip() or None
         self.context.settings = settings
-        self.context.client_secret = secret_text
-        self.context.clear_secret = False
 
-        self.controller.save_settings(
-            settings,
-            client_secret=secret_text,
-            clear_secret=False,
-        )
+        self.controller.save_settings(settings, client_secret=None, clear_secret=False)
         self.set_feedback("Settings saved.", error=False)
         return True
 

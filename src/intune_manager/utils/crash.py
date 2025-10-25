@@ -109,9 +109,7 @@ class CrashReporter:
     ) -> None:
         exception = context.get("exception")
         report_context = {
-            key: value
-            for key, value in context.items()
-            if key != "exception"
+            key: value for key, value in context.items() if key != "exception"
         }
         if exception is None:
             message = context.get("message") or "Unknown asyncio error"
@@ -194,9 +192,13 @@ class CrashReporter:
     def _write_marker(self, payload: dict[str, Any]) -> None:
         try:
             self._marker_path.parent.mkdir(parents=True, exist_ok=True)
-            self._marker_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._marker_path.write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
         except OSError:  # pragma: no cover - best effort
-            self._logger.warning("Failed to persist crash marker", path=str(self._marker_path))
+            self._logger.warning(
+                "Failed to persist crash marker", path=str(self._marker_path)
+            )
 
 
 __all__ = ["CrashReporter"]

@@ -24,13 +24,16 @@ from intune_manager.utils.asyncio import AsyncBridge, ensure_qt_event_loop
 
 logger = get_logger(__name__)
 
-CLIENT_SECRET_KEY = "client_secret"
-
 
 @dataclass(slots=True)
 class SettingsSnapshot:
+    """Snapshot of current settings configuration.
+
+    Note: Client secrets are no longer supported. This application uses
+    public client authentication which does not require secrets.
+    """
+
     settings: Settings
-    has_client_secret: bool
 
 
 @dataclass(slots=True)
@@ -78,11 +81,15 @@ class SettingsController(QObject):
     # ------------------------------------------------------------------ Public
 
     def load_settings(self) -> SettingsSnapshot:
+        """Load settings from persistent storage.
+
+        Note: Client secrets are no longer used. This application uses
+        public client authentication.
+        """
         settings = self._settings_manager.load()
         self._token_cache_manager = TokenCacheManager(settings.token_cache_path)
-        has_secret = self._secret_store.get_secret(CLIENT_SECRET_KEY) is not None
         self._current_settings = settings
-        snapshot = SettingsSnapshot(settings=settings, has_client_secret=has_secret)
+        snapshot = SettingsSnapshot(settings=settings)
         self.settingsLoaded.emit(snapshot)
         logger.debug("Loaded tenant settings", tenant=settings.tenant_id)
         return snapshot
@@ -91,19 +98,24 @@ class SettingsController(QObject):
         self,
         settings: Settings,
         *,
-        client_secret: str | None,
-        clear_secret: bool,
+        client_secret: str | None = None,
+        clear_secret: bool = False,
     ) -> None:
+        """Save settings to persistent storage and configure authentication.
+
+        Args:
+            settings: Settings to save
+            client_secret: Ignored (kept for backward compatibility)
+            clear_secret: Ignored (kept for backward compatibility)
+
+        Note:
+            Client secrets are no longer used. This application uses public client
+            authentication which does not require secrets.
+        """
         settings.graph_scopes = list(settings.configured_scopes())
         self._settings_manager.save(settings)
         self._current_settings = settings
         self._token_cache_manager = TokenCacheManager(settings.token_cache_path)
-        if clear_secret:
-            self._secret_store.delete_secret(CLIENT_SECRET_KEY)
-        elif client_secret:
-            self._secret_store.set_secret(CLIENT_SECRET_KEY, client_secret)
-
-        has_secret = self._secret_store.get_secret(CLIENT_SECRET_KEY) is not None
 
         if settings.is_configured:
             try:
@@ -119,7 +131,7 @@ class SettingsController(QObject):
         else:
             logger.warning("Settings saved without mandatory identifiers")
 
-        snapshot = SettingsSnapshot(settings=settings, has_client_secret=has_secret)
+        snapshot = SettingsSnapshot(settings=settings)
         self.settingsSaved.emit(snapshot)
         self.infoMessage.emit("Settings saved")
 
@@ -163,17 +175,15 @@ class SettingsController(QObject):
         return self._build_status(self._last_token)
 
     def reset_configuration(self) -> None:
-        """Clear persisted settings, secrets, and cached tokens."""
+        """Clear persisted settings and cached tokens.
 
+        Note: Client secrets are no longer used (public client authentication).
+        """
         try:
             empty = Settings()
             self._settings_manager.save(empty)
             self._current_settings = empty
             self._last_token = None
-            try:
-                self._secret_store.delete_secret(CLIENT_SECRET_KEY)
-            except Exception:  # pragma: no cover - keyring best-effort
-                logger.exception("Failed to delete stored client secret")
 
             try:
                 self._token_cache_manager.clear()
@@ -183,7 +193,7 @@ class SettingsController(QObject):
                     path=str(self._token_cache_manager.path),
                 )
             self._token_cache_manager = TokenCacheManager(empty.token_cache_path)
-            snapshot = SettingsSnapshot(settings=empty, has_client_secret=False)
+            snapshot = SettingsSnapshot(settings=empty)
             self.settingsLoaded.emit(snapshot)
             self.infoMessage.emit(
                 "Configuration reset. Relaunch the setup wizard to configure Intune Manager.",
@@ -341,4 +351,4 @@ class SettingsController(QObject):
         return list(self._permission_checker.missing_scopes(token.token))
 
 
-__all__ = ["SettingsController", "SettingsSnapshot", "AuthStatus", "CLIENT_SECRET_KEY"]
+__all__ = ["SettingsController", "SettingsSnapshot", "AuthStatus"]

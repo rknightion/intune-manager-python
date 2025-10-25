@@ -85,7 +85,9 @@ class ToastWidget(QFrame):
 
         self.label = QLabel(message.text)
         self.label.setWordWrap(True)
-        self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         layout.addWidget(self.label)
 
         self.dismiss_button = QPushButton("Dismiss")

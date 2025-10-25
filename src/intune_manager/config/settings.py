@@ -15,7 +15,6 @@ TOKEN_CACHE_NAME = "token_cache.bin"
 BROKER_DB_NAME = "tasks.db"
 
 DEFAULT_GRAPH_SCOPES: tuple[str, ...] = (
-    "https://graph.microsoft.com/.default",
     "https://graph.microsoft.com/User.Read",
     "https://graph.microsoft.com/DeviceManagementManagedDevices.Read.All",
     "https://graph.microsoft.com/DeviceManagementManagedDevices.ReadWrite.All",
@@ -27,7 +26,6 @@ DEFAULT_GRAPH_SCOPES: tuple[str, ...] = (
     "https://graph.microsoft.com/Group.Read.All",
     "https://graph.microsoft.com/GroupMember.Read.All",
     "https://graph.microsoft.com/AuditLog.Read.All",
-    "offline_access",
 )
 
 
@@ -71,7 +69,12 @@ def _env_file_path(explicit: Path | None) -> Path:
 
 @dataclass(slots=True)
 class Settings:
-    """Container for tenant/app registration data required by MSAL and Graph."""
+    """Container for tenant/app registration data required by MSAL and Graph.
+
+    This application uses MSAL Public Client authentication, which does NOT require
+    a client secret. Your Azure AD app registration should be configured as
+    "Mobile and desktop applications" (not "Web application").
+    """
 
     tenant_id: str | None = None
     client_id: str | None = None

@@ -72,10 +72,16 @@ def _palette_from_tokens(tokens: ThemeTokens) -> QPalette:
     palette.setColor(QPalette.ColorRole.BrightText, QColor(tokens["accent_contrast"]))
     palette.setColor(QPalette.ColorRole.Link, QColor(tokens["accent"]))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(tokens["accent"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(tokens["accent_contrast"]))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, text_muted)
+    palette.setColor(
+        QPalette.ColorRole.HighlightedText, QColor(tokens["accent_contrast"])
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, text_muted
+    )
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, text_muted)
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, text_muted)
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, text_muted
+    )
     return palette
 
 

@@ -352,9 +352,7 @@ class ReportsWidget(PageScaffold):
 
         self._diag_export_button = QToolButton()
         self._diag_export_button.setText("Diagnostic bundle…")
-        self._diag_export_button.clicked.connect(
-            self._handle_create_diagnostic_bundle
-        )
+        self._diag_export_button.clicked.connect(self._handle_create_diagnostic_bundle)
         controls.addWidget(self._diag_export_button)
 
         self._diag_report_button = QToolButton()
@@ -564,9 +562,7 @@ class ReportsWidget(PageScaffold):
         service = self._services.diagnostics
         if service is None:
             return
-        suggested_name = (
-            f"intune-manager-diagnostics-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.tar.xz"
-        )
+        suggested_name = f"intune-manager-diagnostics-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.tar.xz"
         path_str, _ = QFileDialog.getSaveFileName(
             self,
             "Create diagnostic bundle",

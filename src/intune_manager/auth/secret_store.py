@@ -114,9 +114,7 @@ class SecretStore:
             return
 
         # Provide helpful error message for compiled environments
-        error_msg = (
-            f"Keyring backend {descriptor} does not provide encrypted storage."
-        )
+        error_msg = f"Keyring backend {descriptor} does not provide encrypted storage."
         if "fail" in descriptor.lower():
             error_msg += (
                 " This typically occurs in compiled executables when system keyring "

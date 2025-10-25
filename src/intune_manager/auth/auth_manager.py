@@ -21,6 +21,9 @@ from .token_cache import TokenCacheManager
 
 logger = get_logger(__name__)
 
+# MSAL reserved scopes that cannot be explicitly requested with fully qualified URIs
+_MSAL_RESERVED_SCOPES = frozenset({"profile", "openid", "offline_access"})
+
 
 @dataclass(slots=True)
 class AuthenticatedUser:
@@ -31,7 +34,12 @@ class AuthenticatedUser:
 
 
 class AuthManager:
-    """Centralized MSAL Public Client manager."""
+    """Centralized MSAL Public Client authentication manager.
+
+    This manager uses MSAL PublicClientApplication for desktop/mobile app authentication.
+    No client secret is required - authentication uses interactive browser-based flows.
+    Your Azure AD app registration must be configured as "Mobile and desktop applications".
+    """
 
     def __init__(self) -> None:
         self._cache_manager = TokenCacheManager()
@@ -43,6 +51,18 @@ class AuthManager:
         self._missing_scopes: list[str] = []
 
     def configure(self, settings: Settings) -> None:
+        """Configure MSAL Public Client authentication.
+
+        Args:
+            settings: Application settings with tenant/client configuration
+
+        Raises:
+            AuthenticationError: If configuration fails or required parameters are missing
+
+        Note:
+            This uses PublicClientApplication which does not require a client secret.
+            Your Azure AD app must be registered as "Mobile and desktop applications".
+        """
         if not settings.client_id:
             raise AuthenticationError(
                 "Client ID must be provided before initializing authentication"
@@ -57,7 +77,9 @@ class AuthManager:
                 token_cache=self._cache_manager.cache,
             )
         except ValueError as exc:
-            logger.error("Invalid MSAL configuration", authority=authority, error=str(exc))
+            logger.error(
+                "Invalid MSAL configuration", authority=authority, error=str(exc)
+            )
             raise AuthenticationError(
                 f"Invalid authority or redirect URI: {exc}",
             ) from exc
@@ -109,6 +131,29 @@ class AuthManager:
 
     # Internal --------------------------------------------------------
 
+    def _filter_scopes(self, scopes: Sequence[str]) -> list[str]:
+        """
+        Filter out MSAL reserved scopes and .default when mixed with specific scopes.
+
+        MSAL automatically handles offline_access, profile, and openid.
+        The .default scope should not be mixed with specific scopes.
+        """
+        filtered = [
+            s
+            for s in scopes
+            if s not in _MSAL_RESERVED_SCOPES and not s.endswith("/.default")
+        ]
+
+        if len(filtered) != len(scopes):
+            removed = set(scopes) - set(filtered)
+            logger.debug(
+                "Filtered reserved/incompatible scopes",
+                removed=list(removed),
+                remaining=filtered,
+            )
+
+        return filtered
+
     def _acquire_token_with_refresh(
         self,
         scopes: Sequence[str],
@@ -127,7 +172,8 @@ class AuthManager:
         account = self._get_account(app)
         if account is None:
             return None
-        result = app.acquire_token_silent(list(scopes), account=account)
+        filtered_scopes = self._filter_scopes(scopes)
+        result = app.acquire_token_silent(filtered_scopes, account=account)
         if not result:
             return None
         token = self._process_result(result)
@@ -136,8 +182,9 @@ class AuthManager:
 
     def _acquire_token_interactive(self, scopes: Sequence[str]) -> AccessToken:
         app = self._ensure_app()
+        filtered_scopes = self._filter_scopes(scopes)
         result = app.acquire_token_interactive(
-            scopes=list(scopes),
+            scopes=filtered_scopes,
             prompt="select_account",
         )
         token = self._process_result(result)
@@ -157,8 +204,31 @@ class AuthManager:
 
     def _process_result(self, result: dict[str, object]) -> AccessToken:
         if "error" in result:
+            error_code = result.get("error")
+            error_desc = result.get("error_description", error_code)
+
+            # Check for common Azure AD app registration misconfiguration
+            if (
+                error_code == "AADSTS7000218"
+                or "client_assertion" in str(error_desc).lower()
+            ):
+                raise AuthenticationError(
+                    message=(
+                        "Azure AD app registration type mismatch detected.\n\n"
+                        "Your app is registered as a 'Web application' (confidential client), "
+                        "but this desktop application uses public client authentication.\n\n"
+                        "To fix this:\n"
+                        "1. Go to Azure Portal > App registrations\n"
+                        "2. Select your app registration\n"
+                        "3. Under 'Authentication', configure as 'Mobile and desktop applications'\n"
+                        "4. Add redirect URI: http://localhost:8400 (or your configured redirect URI)\n"
+                        "5. Remove any 'Web' platform configurations\n\n"
+                        f"Original error: {error_desc}"
+                    ),
+                )
+
             raise AuthenticationError(
-                message=f"MSAL error: {result.get('error_description', result['error'])}",
+                message=f"MSAL error: {error_desc}",
             )
 
         access_token = result.get("access_token")
