@@ -11,7 +11,6 @@
 #    nuitka-project: --lto=no
 #    nuitka-project: --low-memory
 #    nuitka-project: --jobs=4
-#    nuitka-project: --msvc=latest
 #    nuitka-project: --include-module=keyring.backends.Windows
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
