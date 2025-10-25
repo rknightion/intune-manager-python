@@ -249,7 +249,7 @@ jobs:
         shell: bash
         run: |
           # Use ditto with --keepParent to ensure .app bundle structure is preserved on extraction
-          ditto -c -k --sequesterRsrc --keepParent IntuneManager.app "${{ matrix.asset_name }}"
+          ditto -c -k --sequesterRsrc --keepParent "${{ matrix.output_path }}" "${{ matrix.asset_name }}"
           echo "Created: ${{ matrix.asset_name }}"
           ls -lh "${{ matrix.asset_name }}"
 
