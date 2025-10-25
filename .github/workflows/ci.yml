@@ -241,7 +241,7 @@ jobs:
 
       # Upload as workflow artifact (7 day retention since we're publishing to packages)
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ matrix.asset_name }}
