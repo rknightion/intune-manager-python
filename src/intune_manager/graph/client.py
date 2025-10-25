@@ -59,6 +59,7 @@ DEFAULT_VERSION_OVERRIDES: dict[str, str] = {
     "/deviceManagement/configurationPolicies": GraphAPIVersion.BETA.value,
     "/deviceManagement/assignmentFilters": GraphAPIVersion.BETA.value,
     "/deviceManagement/auditEvents": GraphAPIVersion.BETA.value,
+    "/deviceManagement/managedDevices": GraphAPIVersion.BETA.value,
 }
 
 

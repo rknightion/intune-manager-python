@@ -137,17 +137,13 @@ class SettingsWidget(QWidget):
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.save_button = QPushButton("Save configuration")
-        self.sign_in_button = QPushButton("Interactive sign-in")
-        self.permission_button = QPushButton("Check permissions")
-        self.connection_button = QPushButton("Test connection")
+        self.save_button = QPushButton("Save & test configuration")
+        self.permission_button = QPushButton("Validate & check permissions")
         self.setup_button = QPushButton("Setup wizard")
         self.reset_button = QPushButton("Reset configuration")
 
         layout.addWidget(self.save_button)
-        layout.addWidget(self.sign_in_button)
         layout.addWidget(self.permission_button)
-        layout.addWidget(self.connection_button)
         layout.addStretch()
         layout.addWidget(self.setup_button)
         layout.addWidget(self.reset_button)
@@ -196,9 +192,7 @@ class SettingsWidget(QWidget):
 
     def _connect_signals(self) -> None:
         self.save_button.clicked.connect(self._handle_save_clicked)
-        self.sign_in_button.clicked.connect(self._handle_sign_in_clicked)
         self.permission_button.clicked.connect(self._handle_permissions_clicked)
-        self.connection_button.clicked.connect(self._handle_connection_clicked)
         self.setup_button.clicked.connect(self.launch_setup_wizard)
         self.reset_button.clicked.connect(self._handle_reset_clicked)
 
@@ -255,30 +249,31 @@ class SettingsWidget(QWidget):
         self.copy_missing_scopes_button.setEnabled(has_missing)
 
     def _handle_save_clicked(self) -> None:
-        settings = self._collect_settings()
-        if settings is None:
-            return
-        self._controller.save_settings(settings, client_secret=None, clear_secret=False)
-
-    def _handle_sign_in_clicked(self) -> None:
+        """Save configuration and automatically test connection."""
         settings = self._collect_settings(require_identifiers=True)
         if settings is None:
             return
         self._controller.save_settings(settings, client_secret=None, clear_secret=False)
-        self._controller.test_sign_in(settings)
+        # Automatically test connection after saving
+        self._controller.test_graph_connection(settings)
 
     def _handle_permissions_clicked(self) -> None:
+        """Validate credentials and check permissions (triggers login if needed)."""
         settings = self._collect_settings(require_identifiers=True)
         if settings is None:
             return
-        self._controller.check_permissions(settings)
 
-    def _handle_connection_clicked(self) -> None:
-        settings = self._collect_settings(require_identifiers=True)
-        if settings is None:
-            return
-        self._controller.save_settings(settings, client_secret=None, clear_secret=False)
-        self._controller.test_graph_connection(settings)
+        # Check if user is authenticated
+        status = self._controller.current_status()
+        if not status.username:
+            # Not authenticated, trigger interactive sign-in first
+            self._controller.save_settings(
+                settings, client_secret=None, clear_secret=False
+            )
+            self._controller.test_sign_in(settings)
+        else:
+            # Already authenticated, just check permissions
+            self._controller.check_permissions(settings)
 
     def _handle_reset_clicked(self) -> None:
         reply = QMessageBox.question(
@@ -299,9 +294,7 @@ class SettingsWidget(QWidget):
     def _handle_busy_state(self, busy: bool, message: str) -> None:
         for button in (
             self.save_button,
-            self.sign_in_button,
             self.permission_button,
-            self.connection_button,
             self.setup_button,
             self.reset_button,
         ):

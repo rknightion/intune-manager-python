@@ -359,12 +359,14 @@ class _CompletionPage(_WizardPage):
         super().__init__(
             wizard,
             title="Setup complete",
-            subtitle="Intune Manager is ready to use.",
+            subtitle="Intune Manager is initialized and syncing data.",
         )
         summary = QLabel(
             (
-                "You're signed in and Microsoft Graph access is verified."
-                " Use the assignments, devices, and applications modules to begin managing your tenant."
+                "You're signed in and Microsoft Graph access is verified. "
+                "Services are now initializing and syncing your tenant data in the background.\n\n"
+                "Use the Dashboard, Devices, Applications, and other modules to begin managing your tenant. "
+                "Data will populate automatically as the sync completes."
             ),
         )
         summary.setWordWrap(True)

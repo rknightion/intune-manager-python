@@ -130,7 +130,7 @@ class ManagedDevice(GraphResource):
 
     # Relationships
     installed_apps: list[InstalledApp] | None = Field(
-        default=None, alias="installedApps"
+        default=None, alias="detectedApps"
     )
     enrolled_managed_by: (
         Literal["companyPortal", "appleConfigurator", "unknown"] | None

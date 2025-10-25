@@ -29,7 +29,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from intune_manager.config import FirstRunStatus, detect_first_run
+from intune_manager.auth import auth_manager
+from intune_manager.bootstrap import initialize_domain_services
+from intune_manager.config import FirstRunStatus, detect_first_run, SettingsManager
 from intune_manager.services import (
     ServiceErrorEvent,
     ServiceRegistry,
@@ -135,6 +137,7 @@ class MainWindow(QMainWindow):
         self._evaluate_onboarding_state()
         self._display_safe_mode_banner()
         self._display_previous_crash_notice()
+        self._auto_initialize_services_if_configured()
 
     # ------------------------------------------------------------------ Setup
 
@@ -369,6 +372,10 @@ class MainWindow(QMainWindow):
             page.add_body_widget(settings_page, stretch=1)
             page.body_layout.addStretch()
             self._settings_page = settings_page
+            # Connect to settings controller signal for service initialization
+            settings_page.controller.servicesReadyToInitialize.connect(
+                self._initialize_domain_services
+            )
             return page
         return self._create_placeholder_page(item)
 
@@ -441,6 +448,49 @@ class MainWindow(QMainWindow):
                 self._services.sync.errors.subscribe(self._handle_sync_error),
             )
 
+    def _initialize_domain_services(self) -> None:
+        """Initialize domain services after successful authentication configuration.
+
+        This is triggered by the settings controller after a successful test connection.
+        It creates all domain services, reconnects to the sync service, and triggers
+        an initial sync to populate data.
+        """
+        try:
+            logger.info("Initializing domain services after successful authentication")
+
+            # Load current settings
+            settings_manager = SettingsManager()
+            settings = settings_manager.load()
+
+            # Initialize all domain services with authenticated client
+            self._services = initialize_domain_services(auth_manager, settings)
+
+            # Disconnect old subscriptions and connect to new sync service
+            self._disconnect_services()
+            self._connect_services()
+
+            # Update banner to show initialization
+            self.show_banner(
+                "Services initialized successfully. Starting initial data sync...",
+                level=ToastLevel.INFO,
+            )
+
+            # Trigger initial sync
+            logger.info("Triggering initial tenant data sync")
+            self._start_global_sync()
+
+        except Exception as exc:  # noqa: BLE001 - ensure UI feedback
+            logger.exception("Failed to initialize domain services")
+            self.show_banner(
+                f"Failed to initialize services: {exc}",
+                level=ToastLevel.ERROR,
+            )
+            self.show_notification(
+                "Service initialization failed. Check authentication configuration.",
+                level=ToastLevel.ERROR,
+                duration_ms=8000,
+            )
+
     def _evaluate_onboarding_state(self) -> None:
         try:
             status = detect_first_run()
@@ -469,6 +519,67 @@ class MainWindow(QMainWindow):
             level=ToastLevel.WARNING,
             action_label="Start setup",
         )
+
+    def _auto_initialize_services_if_configured(self) -> None:
+        """Automatically initialize services on startup if auth is already configured.
+
+        This runs after the window is initialized and checks if:
+        1. Settings have tenant_id and client_id configured
+        2. Token cache exists (user has authenticated before)
+        3. Services are not already initialized
+
+        If all conditions are met, initializes services and triggers initial sync.
+        """
+        # Skip if services already initialized
+        if self._services.sync is not None:
+            logger.debug("Services already initialized, skipping auto-init")
+            return
+
+        # Skip if safe mode is enabled
+        if safe_mode_enabled():
+            logger.info("Safe mode enabled, skipping auto service initialization")
+            return
+
+        # Check if onboarding is needed
+        if self._first_run_status and self._first_run_status.is_first_run:
+            logger.debug("First run detected, skipping auto service initialization")
+            return
+
+        try:
+            # Load current settings
+            settings_manager = SettingsManager()
+            settings = settings_manager.load()
+
+            # Check if settings are configured
+            if not settings.is_configured:
+                logger.debug(
+                    "Settings not configured, skipping auto service initialization"
+                )
+                return
+
+            # Check if token cache exists
+            if not settings.token_cache_path.exists():
+                logger.debug(
+                    "No token cache found, skipping auto service initialization",
+                    path=str(settings.token_cache_path),
+                )
+                return
+
+            logger.info(
+                "Auth configured and token cache exists, auto-initializing services",
+                tenant_id=settings.tenant_id,
+            )
+
+            # Configure auth manager with settings first
+            auth_manager.configure(settings)
+
+            # Initialize services (this will trigger sync)
+            self._initialize_domain_services()
+
+        except Exception as exc:  # noqa: BLE001 - ensure startup continues
+            logger.exception("Failed to auto-initialize services on startup")
+            # Don't show error banner on startup - user hasn't requested anything yet
+            # They can manually trigger via Settings if needed
 
     def _display_safe_mode_banner(self) -> None:
         if not safe_mode_enabled():

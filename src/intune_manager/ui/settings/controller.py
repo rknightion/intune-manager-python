@@ -56,6 +56,7 @@ class SettingsController(QObject):
     busyStateChanged = Signal(bool, str)
     infoMessage = Signal(str)
     testConnectionCompleted = Signal(bool, str)
+    servicesReadyToInitialize = Signal()  # Emitted after successful save+test
 
     def __init__(
         self,
@@ -294,6 +295,8 @@ class SettingsController(QObject):
             success, detail = bool(result[0]), str(result[1])
             if success:
                 self.infoMessage.emit(detail)
+                # Emit signal to trigger service initialization
+                self.servicesReadyToInitialize.emit()
             else:
                 self.errorOccurred.emit(detail)
             self.testConnectionCompleted.emit(success, detail)

@@ -107,6 +107,11 @@ class SettingsPage(QWidget):
     def launch_setup_wizard(self) -> None:
         self._settings_tab.launch_setup_wizard()
 
+    @property
+    def controller(self) -> object:
+        """Expose settings controller for signal connections."""
+        return self._settings_tab._controller
+
 
 class CacheManagementWidget(QWidget):
     """Provide cache inspection, repair, and attachment management controls."""
