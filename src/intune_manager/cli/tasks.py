@@ -32,3 +32,8 @@ def typecheck() -> None:
 
 def tests() -> None:
     _run([sys.executable, "-m", "pytest"])
+
+
+def license_check() -> None:
+    """Check license compliance of all dependencies."""
+    _run([sys.executable, "-m", "licensecheck"])

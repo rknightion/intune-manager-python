@@ -3,6 +3,7 @@ name = "intune-manager"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Rob Knight", email = "12484127+rknightion@users.noreply.github.com" }
 ]
@@ -30,6 +31,7 @@ intune-manager-lint = "intune_manager.cli.tasks:lint"
 intune-manager-fmt = "intune_manager.cli.tasks:fmt"
 intune-manager-typecheck = "intune_manager.cli.tasks:typecheck"
 intune-manager-tests = "intune_manager.cli.tasks:tests"
+intune-manager-license-check = "intune_manager.cli.tasks:license_check"
 
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]
@@ -37,6 +39,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "licensecheck>=2025.1.0",
     "mypy>=1.18.2",
     "nuitka>=2.8.4",
     "pytest>=8.4.2",
@@ -59,3 +62,19 @@ disallow_untyped_defs = false  # Enable later for stricter type coverage
 [[tool.mypy.overrides]]
 module = "PySide6.*"
 ignore_missing_imports = false
+
+[tool.licensecheck]
+# Specify project license (must match [project.license])
+license = "MIT"
+# Output format: simple (human-readable), json, markdown, html, csv, ansi
+format = "simple"
+# Return non-zero exit code if incompatible licenses found (for CI/CD)
+zero = false
+# Show only packages with failing/incompatible licenses
+show_only_failing = false
+# Optionally ignore specific packages (e.g., dev-only tools)
+ignore_packages = []
+# Fail on specific license types (uncomment if needed)
+# fail_licenses = ["GPL-3.0", "AGPL-3.0"]  # Uncomment to fail on copyleft
+# Only allow specific licenses (whitelist approach - use if stricter control needed)
+# only_licenses = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Python-2.0"]
