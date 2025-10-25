@@ -229,26 +229,62 @@ jobs:
           MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
           MACOS_CI_KEYCHAIN_PWD: ${{ secrets.MACOS_CI_KEYCHAIN_PWD }}
         run: |
+          echo "::group::Decode and verify certificate"
           # Decode certificate from base64
           echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
 
+          # Verify the .p12 file is valid
+          if ! openssl pkcs12 -info -in certificate.p12 -passin pass:"$MACOS_CERTIFICATE_PWD" -noout 2>/dev/null; then
+            echo "❌ Error: Invalid .p12 certificate file or incorrect password"
+            exit 1
+          fi
+          echo "✓ Certificate file decoded and validated successfully"
+          echo "::endgroup::"
+
+          echo "::group::Create and configure keychain"
           # Create temporary keychain
           security create-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          echo "✓ Keychain created and unlocked"
+          echo "::endgroup::"
 
+          echo "::group::Import certificate"
           # Import certificate to keychain
-          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          echo "✓ Certificate imported to keychain"
+          echo "::endgroup::"
 
+          echo "::group::Verify signing identity"
+          # List available identities to verify import succeeded
+          echo "Available code signing identities:"
+          security find-identity -v -p codesigning build.keychain
+
+          # Verify the specific identity we need exists
+          if ! security find-identity -v -p codesigning build.keychain | grep -q "$MACOS_CERTIFICATE_NAME"; then
+            echo "❌ Error: Required signing identity not found: $MACOS_CERTIFICATE_NAME"
+            echo "Available identities:"
+            security find-identity -v -p codesigning build.keychain
+            exit 1
+          fi
+          echo "✓ Signing identity verified: $MACOS_CERTIFICATE_NAME"
+          echo "::endgroup::"
+
+          echo "::group::Sign app bundle"
           # Sign the app bundle (deep sign all nested code)
           /usr/bin/codesign --force --deep --sign "$MACOS_CERTIFICATE_NAME" \
             --options runtime \
             --timestamp \
             "${{ matrix.output_path }}" -v
+          echo "✓ App bundle signed successfully"
+          echo "::endgroup::"
 
+          echo "::group::Verify signature"
           # Verify the signature
           /usr/bin/codesign --verify --deep --strict --verbose=2 "${{ matrix.output_path }}"
+          echo "✓ Signature verification passed"
+          echo "::endgroup::"
 
           # Clean up certificate file
           rm certificate.p12
