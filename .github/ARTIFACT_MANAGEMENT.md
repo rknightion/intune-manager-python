@@ -72,6 +72,20 @@ Run the cleanup workflow manually with dry-run mode:
 # Enable "Dry run" to preview what would be deleted
 ```
 
+## Platform-Specific Notes
+
+### macOS .app Bundles
+macOS builds are packaged using Apple's `ditto` command instead of standard `zip`:
+```bash
+ditto -c -k --sequesterRsrc --keepParent IntuneManager.app IntuneManager-macos-x64.app.zip
+```
+
+This ensures that when you extract the `.app.zip` file, you get the complete `IntuneManager.app` bundle, not just the `Contents/` folder. The `--keepParent` flag preserves the .app bundle structure.
+
+**To extract:**
+- **macOS**: Double-click the .zip file (Archive Utility handles it automatically)
+- **Linux/Windows**: Use standard unzip tools - the .app bundle will extract correctly
+
 ## Accessing Artifacts
 
 ### Latest CI Builds (Main Branch)

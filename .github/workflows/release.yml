@@ -245,12 +245,13 @@ jobs:
             exit 1
           fi
 
-      # Zip macOS .app bundles for easier distribution
+      # Package macOS .app bundles using ditto (preserves app bundle structure)
       - name: Package macOS app bundle
         if: matrix.os == 'macos'
         shell: bash
         run: |
-          zip -r "${{ matrix.asset_name }}" IntuneManager.app
+          # Use ditto with --keepParent to ensure .app bundle structure is preserved on extraction
+          ditto -c -k --sequesterRsrc --keepParent IntuneManager.app "${{ matrix.asset_name }}"
           echo "Created: ${{ matrix.asset_name }}"
           ls -lh "${{ matrix.asset_name }}"
 
@@ -276,7 +277,8 @@ jobs:
         with:
           name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ matrix.asset_name }}
-          retention-days: 90
+          retention-days: 7
+          compression-level: 9
 
       - name: Save compiler cache statistics
         if: always()

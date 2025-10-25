@@ -65,8 +65,8 @@ jobs:
           - os: macos
             arch: x64
             runner: macos-13
-            artifact_name: IntuneManager.app
-            output_path: IntuneManager.app
+            artifact_name: IntuneManager
+            output_path: intune_manager.app
             asset_name: IntuneManager-macos-x64.app.zip
             content_type: application/zip
 
@@ -74,8 +74,8 @@ jobs:
           - os: macos
             arch: arm64
             runner: macos-latest
-            artifact_name: IntuneManager.app
-            output_path: IntuneManager.app
+            artifact_name: IntuneManager
+            output_path: intune_manager.app
             asset_name: IntuneManager-macos-arm64.app.zip
             content_type: application/zip
 
@@ -221,12 +221,13 @@ jobs:
             exit 1
           fi
 
-      # Zip macOS .app bundles for easier distribution
+      # Package macOS .app bundles using ditto (preserves app bundle structure)
       - name: Package macOS app bundle
         if: matrix.os == 'macos'
         shell: bash
         run: |
-          zip -r "${{ matrix.asset_name }}" IntuneManager.app
+          # Use ditto with --keepParent to ensure .app bundle structure is preserved on extraction
+          ditto -c -k --sequesterRsrc --keepParent IntuneManager.app "${{ matrix.asset_name }}"
           echo "Created: ${{ matrix.asset_name }}"
           ls -lh "${{ matrix.asset_name }}"
 
