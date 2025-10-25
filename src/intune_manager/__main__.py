@@ -8,7 +8,8 @@
 #    nuitka-project: --company-name="IntuneManager"
 #    nuitka-project: --windows-console-mode=attach
 #    nuitka-project: --lto=no
-#    nuitka-project: --jobs=1
+#    nuitka-project: --low-memory
+#    nuitka-project: --jobs=4
 #    nuitka-project: --msvc=latest
 # nuitka-project-if: {OS} == "Linux":
 #    nuitka-project: --linux-icon={MAIN_DIRECTORY}/../../assets/icons/icon-256.png
