@@ -242,6 +242,88 @@ jobs:
             exit 1
           fi
 
+      # ============================================
+      # Code Sign macOS App Bundle
+      # ============================================
+      - name: Code sign macOS app bundle
+        if: matrix.os == 'macos'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          MACOS_CI_KEYCHAIN_PWD: ${{ secrets.MACOS_CI_KEYCHAIN_PWD }}
+        run: |
+          # Decode certificate from base64
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          security create-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+
+          # Import certificate to keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+
+          # Sign the app bundle (deep sign all nested code)
+          /usr/bin/codesign --force --deep --sign "$MACOS_CERTIFICATE_NAME" \
+            --options runtime \
+            --timestamp \
+            "${{ matrix.output_path }}" -v
+
+          # Verify the signature
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "${{ matrix.output_path }}"
+
+          # Clean up certificate file
+          rm certificate.p12
+
+      # ============================================
+      # Notarize macOS App Bundle
+      # ============================================
+      - name: Notarize macOS app bundle
+        if: matrix.os == 'macos'
+        env:
+          MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+          MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
+          MACOS_NOTARIZATION_PWD: ${{ secrets.MACOS_NOTARIZATION_PWD }}
+        run: |
+          # Store notarization credentials
+          xcrun notarytool store-credentials "notarytool-profile" \
+            --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+            --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+            --password "$MACOS_NOTARIZATION_PWD"
+
+          # Create a zip for notarization (required format)
+          ditto -c -k --keepParent "${{ matrix.output_path }}" notarization.zip
+
+          # Submit for notarization and wait for result
+          echo "Submitting app for notarization..."
+          xcrun notarytool submit notarization.zip \
+            --keychain-profile "notarytool-profile" \
+            --wait
+
+          # Check if notarization succeeded
+          NOTARIZATION_STATUS=$?
+          if [ $NOTARIZATION_STATUS -ne 0 ]; then
+            echo "❌ Notarization failed! Fetching logs..."
+            # Get the latest submission ID for logs
+            SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "notarytool-profile" | head -2 | tail -1 | awk '{print $5}')
+            xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "notarytool-profile"
+            exit 1
+          fi
+
+          # Staple the notarization ticket to the app
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "${{ matrix.output_path }}"
+
+          # Verify stapling
+          xcrun stapler validate "${{ matrix.output_path }}"
+
+          # Clean up
+          rm notarization.zip
+
+          echo "✅ Code signing and notarization complete!"
+
       # Upload compilation report for debugging (short retention since it's for troubleshooting)
       - name: Upload compilation report
         if: always()
@@ -286,6 +368,14 @@ jobs:
           path: ${{ matrix.asset_name }}
           retention-days: 7
           compression-level: 9
+
+      # ============================================
+      # Cleanup Keychain (always runs, even on failure)
+      # ============================================
+      - name: Clean up keychain
+        if: always() && matrix.os == 'macos'
+        run: |
+          security delete-keychain build.keychain || true
 
       - name: Save compiler cache statistics
         if: always()
