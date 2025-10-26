@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
-from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem, QStyledItemDelegate
 
 from intune_manager.data import ComplianceState, ManagedDevice
 
@@ -76,7 +76,7 @@ class DeviceSummaryDelegate(QStyledItemDelegate):
 
         rect = option.rect.adjusted(12, 6, -12, -8)
         palette = option.palette
-        selected = bool(option.state & QStyleOptionViewItem.StateFlag.State_Selected)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
         name_color = (
             palette.color(palette.ColorRole.HighlightedText)
             if selected
@@ -154,7 +154,7 @@ class ComplianceBadgeDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         palette = option.palette
-        selected = bool(option.state & QStyleOptionViewItem.StateFlag.State_Selected)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
 
         bg_color = QColor(definition.color)
         if selected:

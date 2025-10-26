@@ -1,6 +1,5 @@
 """Reusable UI components for the Intune Manager PySide6 application."""
 
-from .alerts import AlertBanner
 from .assignment_bridge import clear_groups, consume_groups, stage_groups
 from .badges import TenantBadge
 from .command_palette import CommandPalette
@@ -31,7 +30,6 @@ from .theme import (
 from .time import format_relative_timestamp
 
 __all__ = [
-    "AlertBanner",
     "TenantBadge",
     "stage_groups",
     "consume_groups",

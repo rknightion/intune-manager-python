@@ -4,7 +4,7 @@ import inspect
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable, Dict
+from typing import Awaitable, Callable, Dict, TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, QSettings, QUrl
 from PySide6.QtGui import (
@@ -38,7 +38,6 @@ from intune_manager.services import (
     SyncProgressEvent,
 )
 from intune_manager.ui.components import (
-    AlertBanner,
     BusyOverlay,
     CommandAction,
     CommandPalette,
@@ -52,6 +51,7 @@ from intune_manager.ui.components import (
     ToastManager,
     UIContext,
 )
+from intune_manager.ui.components.badges import TenantIdentity
 from intune_manager.ui.assignments import AssignmentsWidget
 from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
@@ -61,6 +61,10 @@ from intune_manager.ui.reports import ReportsWidget
 from intune_manager.ui.settings import SettingsPage
 from intune_manager.utils import get_logger, safe_mode_enabled, safe_mode_reason
 from intune_manager.utils.asyncio import AsyncBridge
+
+
+if TYPE_CHECKING:
+    from intune_manager.ui.components.notifications import ToastWidget
 
 
 logger = get_logger(__name__)
@@ -100,10 +104,10 @@ class MainWindow(QMainWindow):
         self._nav_list = QListWidget()
         self._pages: Dict[str, QWidget] = {}
         self._content_container: QWidget | None = None
-        self._alert_banner: AlertBanner | None = None
         self._settings_store = QSettings("IntuneManager", "IntuneManagerApp")
         self._theme_manager = ThemeManager()
         self._toast_manager: ToastManager | None = None
+        self._banner_toast: "ToastWidget" | None = None
         self._tray_icon: QSystemTrayIcon | None = None
         self._busy_overlay: BusyOverlay | None = None
         self._busy_overlay_blocking = False
@@ -120,15 +124,14 @@ class MainWindow(QMainWindow):
         self._sync_in_progress = False
         self._dashboard_widget: DashboardWidget | None = None
         self._settings_page: SettingsPage | None = None
-        self._banner_action: Callable[[], None] | None = None
         self._first_run_status: FirstRunStatus | None = None
         self._startup_crash_info = startup_crash_info
         self._crash_report_path: Path | None = None
         self._sync_had_errors = False
+        self._active_tenant_id: str | None = None
 
         self._configure_window()
         self._build_layout()
-        self._connect_banner_events()
         self._initialize_components()
         self._populate_navigation()
         self._register_shortcuts()
@@ -160,10 +163,6 @@ class MainWindow(QMainWindow):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        self._alert_banner = AlertBanner(parent=central)
-        self._alert_banner.hide()
-        outer_layout.addWidget(self._alert_banner)
-
         content = QWidget()
         self._content_container = content
         content_layout = QHBoxLayout(content)
@@ -192,12 +191,6 @@ class MainWindow(QMainWindow):
 
         outer_layout.addWidget(content, stretch=1)
         self.setCentralWidget(central)
-
-    def _connect_banner_events(self) -> None:
-        if self._alert_banner is None:
-            return
-        self._alert_banner.actionTriggered.connect(self._handle_banner_action_triggered)
-        self._alert_banner.dismissed.connect(self._handle_banner_dismissed)
 
     def _initialize_components(self) -> None:
         central = self.centralWidget()
@@ -476,6 +469,8 @@ class MainWindow(QMainWindow):
             # Load current settings
             settings_manager = SettingsManager()
             settings = settings_manager.load()
+            self._active_tenant_id = settings.tenant_id
+            self._update_tenant_badge(settings.tenant_id)
 
             # Disconnect old subscriptions and connect to new sync service
             self._disconnect_services()
@@ -483,12 +478,6 @@ class MainWindow(QMainWindow):
             self._services = initialize_domain_services(auth_manager, settings)
             self._connect_services()
             self._reload_feature_pages()
-
-            # Update banner to show initialization
-            self.show_banner(
-                "Services initialized successfully. Starting initial data sync...",
-                level=ToastLevel.INFO,
-            )
 
             # Trigger initial sync
             logger.info("Triggering initial tenant data sync")
@@ -525,7 +514,6 @@ class MainWindow(QMainWindow):
         if not status.is_first_run:
             return
 
-        self._set_banner_action(self._open_onboarding_setup)
         self.show_banner(
             (
                 "Welcome to Intune Manager. Complete the tenant configuration and sign in to "
@@ -533,6 +521,7 @@ class MainWindow(QMainWindow):
             ),
             level=ToastLevel.WARNING,
             action_label="Start setup",
+            on_action=self._open_onboarding_setup,
         )
 
     def _auto_initialize_services_if_configured(self) -> None:
@@ -606,13 +595,13 @@ class MainWindow(QMainWindow):
         )
         if reason:
             message = f"{message}\nReason: {reason}"
-        action_label = None
-        if self._services.diagnostics is not None:
-            action_label = "Clear caches"
-            self._set_banner_action(self._purge_caches_from_safe_mode)
-        else:
-            self._set_banner_action(None)
-        self.show_banner(message, level=ToastLevel.WARNING, action_label=action_label)
+        action_label = "Clear caches" if self._services.diagnostics is not None else None
+        self.show_banner(
+            message,
+            level=ToastLevel.WARNING,
+            action_label=action_label,
+            on_action=self._purge_caches_from_safe_mode if action_label else None,
+        )
 
     def _display_previous_crash_notice(self) -> None:
         info = self._startup_crash_info
@@ -647,20 +636,16 @@ class MainWindow(QMainWindow):
         report_path = info.get("report_path")
         self._crash_report_path = Path(report_path) if report_path else None
 
-        if self._alert_banner and not self._alert_banner.isVisible():
-            banner_message = (
-                f"Previous session crashed at {readable}. Review the log for details."
-            )
-            action_label = "Open crash log" if self._crash_report_path else None
-            if action_label:
-                self._set_banner_action(self._open_crash_report)
-            else:
-                self._set_banner_action(None)
-            self.show_banner(
-                banner_message,
-                level=ToastLevel.ERROR,
-                action_label=action_label,
-            )
+        banner_message = (
+            f"Previous session crashed at {readable}. Review the log for details."
+        )
+        action_label = "Open crash log" if self._crash_report_path else None
+        self.show_banner(
+            banner_message,
+            level=ToastLevel.ERROR,
+            action_label=action_label,
+            on_action=self._open_crash_report if action_label else None,
+        )
 
         self._startup_crash_info = None
 
@@ -731,7 +716,7 @@ class MainWindow(QMainWindow):
         message: str,
         *,
         level: ToastLevel = ToastLevel.INFO,
-        duration_ms: int = 4500,
+        duration_ms: int | None = None,
     ) -> None:
         if self._toast_manager:
             self._toast_manager.show_toast(
@@ -748,8 +733,11 @@ class MainWindow(QMainWindow):
                     icon = QSystemTrayIcon.MessageIcon.Critical
                 elif level is ToastLevel.SUCCESS:
                     icon = QSystemTrayIcon.MessageIcon.Information
+                tray_duration = duration_ms if isinstance(duration_ms, int) else 10000
+                if tray_duration is None or tray_duration <= 0:
+                    tray_duration = 10000
                 self._tray_icon.showMessage(
-                    "Intune Manager", message, icon, duration_ms
+                    "Intune Manager", message, icon, tray_duration
                 )
 
     def show_banner(
@@ -758,32 +746,39 @@ class MainWindow(QMainWindow):
         level: ToastLevel = ToastLevel.INFO,
         *,
         action_label: str | None = None,
+        on_action: Callable[[], None] | None = None,
     ) -> None:
-        if self._alert_banner:
-            self._alert_banner.display(message, level=level, action_label=action_label)
+        text = message.strip()
+        if not text:
+            return
+        if self._toast_manager is None:
+            self.statusBar().showMessage(text, 5000)
+            return
+        self.clear_banner()
+        toast = self._toast_manager.show_toast(
+            text,
+            level=level,
+            duration_ms=None,
+            action_label=action_label,
+            on_action=on_action,
+            sticky=True,
+        )
+        if toast is not None:
+            toast.closed.connect(self._handle_banner_closed)
+        self._banner_toast = toast
 
     def clear_banner(self) -> None:
-        if self._alert_banner:
-            self._alert_banner.clear()
-
-    def _set_banner_action(self, action: Callable[[], None] | None) -> None:
-        self._banner_action = action
-
-    def _handle_banner_action_triggered(self) -> None:
-        if self._banner_action is None:
+        banner = self._banner_toast
+        if banner is None:
             return
+        self._banner_toast = None
         try:
-            self._banner_action()
-        except Exception:  # noqa: BLE001 - UI action safety
-            logger.exception("Banner action failed")
-            self.show_notification(
-                "Setup action failed to launch.",
-                level=ToastLevel.ERROR,
-                duration_ms=6000,
-            )
+            banner.close()
+        except RuntimeError:  # pragma: no cover - widget already deleted
+            pass
 
-    def _handle_banner_dismissed(self) -> None:
-        self._banner_action = None
+    def _handle_banner_closed(self) -> None:
+        self._banner_toast = None
 
     def _purge_caches_from_safe_mode(self) -> None:
         diagnostics = self._services.diagnostics if self._services else None
@@ -810,6 +805,24 @@ class MainWindow(QMainWindow):
             )
         finally:
             self.clear_busy()
+
+    def _update_tenant_badge(self, tenant_id: str | None) -> None:
+        """Reflect the active tenant and signed-in user in the status badge."""
+
+        user = auth_manager.current_user()
+        display_name = user.display_name if user else None
+        if not display_name and user and user.username:
+            display_name = user.username
+        resolved_tenant = tenant_id or (user.tenant_id if user else None)
+        if not display_name and resolved_tenant:
+            display_name = resolved_tenant
+
+        identity = (
+            TenantIdentity(display_name=display_name, tenant_id=resolved_tenant)
+            if display_name or resolved_tenant
+            else None
+        )
+        self._tenant_badge.set_tenant(identity)
 
     def _open_crash_report(self) -> None:
         if not self._crash_report_path:
@@ -905,7 +918,12 @@ class MainWindow(QMainWindow):
         self._sync_in_progress = True
         self._sync_had_errors = False
         self.set_busy("Refreshing tenant data…", blocking=False)
-        self._bridge.run_coroutine(self._services.sync.refresh_all(force=True))
+        self._bridge.run_coroutine(
+            self._services.sync.refresh_all(
+                tenant_id=self._active_tenant_id,
+                force=True,
+            )
+        )
 
     def _focus_active_search(self) -> None:
         page = self._current_page()

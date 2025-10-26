@@ -39,7 +39,6 @@ from intune_manager.ui.components import (
     SPACING_XS,
     CommandAction,
     PageScaffold,
-    ProgressDialog,
     ToastLevel,
     UIContext,
     format_relative_timestamp,
@@ -53,7 +52,6 @@ from intune_manager.ui.dashboard.controller import (
 from intune_manager.utils import (
     CancellationError,
     CancellationTokenSource,
-    ProgressUpdate,
     get_logger,
 )
 from intune_manager.utils.asyncio import AsyncBridge
@@ -310,6 +308,7 @@ class DashboardWidget(PageScaffold):
     ) -> None:
         self._refresh_button = QPushButton("Refresh tenant data")
         self._refresh_button.setObjectName("DashboardRefreshButton")
+        self._refresh_label_default = self._refresh_button.text()
 
         super().__init__(
             "Dashboard",
@@ -330,7 +329,6 @@ class DashboardWidget(PageScaffold):
         self._latest_snapshot: DashboardSnapshot | None = None
         self._command_unregister: Callable[[], None] | None = None
         self._sync_token_source: CancellationTokenSource | None = None
-        self._sync_dialog: ProgressDialog | None = None
         self._sync_subscriptions: list[Callable[[], None]] = []
         if self._services.sync is not None:
             self._sync_subscriptions.append(
@@ -553,6 +551,9 @@ class DashboardWidget(PageScaffold):
     # ----------------------------------------------------------------- Actions
 
     def _handle_refresh_clicked(self) -> None:
+        if self._sync_token_source is not None:
+            self._cancel_refresh()
+            return
         self._start_refresh()
 
     def _handle_async_result(self, result: object, error: object) -> None:
@@ -581,23 +582,9 @@ class DashboardWidget(PageScaffold):
         phase = event.phase.replace("_", " ").title()
         if event.total > 0:
             message = f"Refreshing {phase} ({event.completed}/{event.total})"
-            total_value = event.total
         else:
             message = f"Refreshing {phase} ({event.completed})"
-            total_value = None
-        self._context.set_busy(message)
-        dialog = self._sync_dialog
-        if dialog is not None:
-            dialog.update_progress(
-                ProgressUpdate(
-                    total=total_value,
-                    completed=event.completed,
-                    failed=0,
-                    current=message,
-                ),
-            )
-            if total_value is not None and event.completed >= total_value:
-                dialog.mark_finished()
+        self._context.set_busy(message, blocking=False)
 
     def _handle_sync_error_event(self, event: ServiceErrorEvent) -> None:
         self._finish_sync(mark_finished=False, action="sync")
@@ -606,22 +593,16 @@ class DashboardWidget(PageScaffold):
     def _finish_sync(self, *, mark_finished: bool, action: str | None = None) -> None:
         if action is not None and self._pending_action != action:
             return
-        if (
-            self._sync_token_source is None
-            and self._sync_dialog is None
-            and (action is None or self._pending_action != action)
-        ):
+        if self._sync_token_source is None and self._pending_action != action:
             return
-        dialog = self._sync_dialog
-        if dialog is not None:
-            if mark_finished:
-                dialog.mark_finished()
-            dialog.close()
-            self._sync_dialog = None
         if self._sync_token_source is not None:
             self._sync_token_source.dispose()
             self._sync_token_source = None
-        self._context.clear_busy()
+        try:
+            self._context.clear_busy()
+        except RuntimeError:
+            logger.debug("Skipping busy clear; host window destroyed.")
+        self._refresh_button.setText(self._refresh_label_default)
         self._refresh_button.setEnabled(True)
         if action is None or self._pending_action == action:
             self._pending_action = None
@@ -640,6 +621,13 @@ class DashboardWidget(PageScaffold):
     def _notify(self, message: str, level: ToastLevel) -> None:
         self._context.show_notification(message, level=level)
 
+    def _cancel_refresh(self) -> None:
+        token_source = self._sync_token_source
+        if token_source is None:
+            return
+        if token_source.cancel(reason="User cancelled tenant refresh"):
+            self._notify("Cancelling tenant refresh…", ToastLevel.INFO)
+
     def _start_refresh(self) -> None:
         if self._services.sync is None:
             self._notify(
@@ -651,19 +639,11 @@ class DashboardWidget(PageScaffold):
             return
 
         token_source = CancellationTokenSource()
-        dialog = ProgressDialog(
-            title="Refreshing tenant data",
-            parent=self,
-            message="Preparing tenant sync…",
-            token_source=token_source,
-        )
-        dialog.show()
         self._sync_token_source = token_source
-        self._sync_dialog = dialog
         self._pending_action = "sync"
-        self._refresh_button.setEnabled(False)
-        self._context.set_busy("Starting tenant sync…")
-        dialog.set_message("Refreshing tenant data…")
+        self._refresh_button.setText("Cancel refresh")
+        self._refresh_button.setEnabled(True)
+        self._context.set_busy("Starting tenant sync…", blocking=False)
         self._notify("Refreshing tenant data…", ToastLevel.INFO)
         self._bridge.run_coroutine(
             self._controller.refresh_all(

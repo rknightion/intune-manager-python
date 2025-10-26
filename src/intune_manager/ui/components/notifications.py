@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -21,12 +21,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 if TYPE_CHECKING:
     from .theme import ThemeManager
+
+from intune_manager.utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class ToastLevel(str, Enum):
@@ -40,60 +46,98 @@ class ToastLevel(str, Enum):
 class ToastMessage:
     text: str
     level: ToastLevel = ToastLevel.INFO
-    duration_ms: int = 4500
+    duration_ms: int | None = None
+    action_label: str | None = None
+    sticky: bool = False
 
 
 _LEVEL_COLORS = {
-    ToastLevel.INFO: ("#2563eb", "#f8fafc"),
-    ToastLevel.SUCCESS: ("#22c55e", "#042f14"),
-    ToastLevel.WARNING: ("#f97316", "#0f172a"),
-    ToastLevel.ERROR: ("#ef4444", "#fdf2f8"),
+    ToastLevel.INFO: ("#2563eb", "#f8fafc", "#1d4ed8"),
+    ToastLevel.SUCCESS: ("#22c55e", "#042f14", "#15803d"),
+    ToastLevel.WARNING: ("#f97316", "#0f172a", "#b45309"),
+    ToastLevel.ERROR: ("#ef4444", "#fef2f2", "#b91c1c"),
 }
 
 
 class ToastWidget(QFrame):
     closed = Signal()
 
-    def __init__(self, message: ToastMessage, *, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        message: ToastMessage,
+        *,
+        parent: QWidget | None = None,
+        action_callback: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._message = message
-        bg, fg = _LEVEL_COLORS.get(message.level, _LEVEL_COLORS[ToastLevel.INFO])
+        self._action_callback = action_callback
+        bg, fg, accent = _LEVEL_COLORS.get(
+            message.level, _LEVEL_COLORS[ToastLevel.INFO]
+        )
 
         self.setObjectName("ToastWidget")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setMinimumWidth(320)
         self.setStyleSheet(
             "QFrame#ToastWidget {"
             f"  background-color: {bg};"
             "  border-radius: 12px;"
             "  padding: 12px 16px;"
-            "  color: white;"
-            "}"
-            "QPushButton#ToastDismiss {"
-            "  background: transparent;"
             f"  color: {fg};"
-            "  border: none;"
+            "}"
+            "QLabel#ToastLabel {"
+            f"  color: {fg};"
+            "}"
+            "QPushButton#ToastAction {"
+            "  background: rgba(255, 255, 255, 0.15);"
+            f"  color: {fg};"
+            "  border: 1px solid rgba(255, 255, 255, 0.4);"
+            "  border-radius: 8px;"
+            "  padding: 4px 10px;"
             "  font-weight: 600;"
             "}"
-            "QPushButton#ToastDismiss:hover {"
+            "QPushButton#ToastAction:hover {"
+            f"  background: {accent};"
+            "  color: white;"
+            "  border-color: transparent;"
+            "}"
+            "QToolButton#ToastClose {"
+            f"  color: {fg};"
+            "  border: none;"
+            "  font-weight: bold;"
+            "  padding: 2px 4px;"
+            "  background: transparent;"
+            "}"
+            "QToolButton#ToastClose:hover {"
             "  color: white;"
             "}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(12)
 
         self.label = QLabel(message.text)
+        self.label.setObjectName("ToastLabel")
         self.label.setWordWrap(True)
         self.label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
-        layout.addWidget(self.label)
+        layout.addWidget(self.label, stretch=1)
 
-        self.dismiss_button = QPushButton("Dismiss")
-        self.dismiss_button.setObjectName("ToastDismiss")
-        self.dismiss_button.clicked.connect(self.close)
-        layout.addWidget(self.dismiss_button)
+        self._action_button: QPushButton | None = None
+        if message.action_label:
+            self._action_button = QPushButton(message.action_label)
+            self._action_button.setObjectName("ToastAction")
+            self._action_button.clicked.connect(self._handle_action_clicked)
+            layout.addWidget(self._action_button)
+
+        self._close_button = QToolButton()
+        self._close_button.setObjectName("ToastClose")
+        self._close_button.setText("✕")
+        self._close_button.clicked.connect(self.fade_out_and_close)
+        layout.addWidget(self._close_button)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(30)
@@ -130,6 +174,14 @@ class ToastWidget(QFrame):
         if self._should_close:
             self.close()
 
+    def _handle_action_clicked(self) -> None:
+        if self._action_callback is None:
+            return
+        try:
+            self._action_callback()
+        except Exception:
+            logger.exception("Toast action failed")
+
 
 class ToastManager(QObject):
     """Manage transient toast notifications anchored to a parent widget."""
@@ -164,10 +216,36 @@ class ToastManager(QObject):
         text: str,
         *,
         level: ToastLevel = ToastLevel.INFO,
-        duration_ms: int = 4500,
-    ) -> None:
-        message = ToastMessage(text=text, level=level, duration_ms=duration_ms)
-        toast = ToastWidget(message, parent=self._container)
+        duration_ms: int | None = None,
+        action_label: str | None = None,
+        on_action: Callable[[], None] | None = None,
+        sticky: bool | None = None,
+    ) -> ToastWidget | None:
+        normalized = text.strip()
+        if not normalized:
+            logger.debug("Skipping empty toast message", level=level.value)
+            return None
+
+        resolved_sticky = sticky
+        if resolved_sticky is None:
+            resolved_sticky = level in {ToastLevel.ERROR, ToastLevel.WARNING}
+
+        resolved_duration = duration_ms
+        if resolved_duration is None and not resolved_sticky:
+            resolved_duration = 10_000
+
+        message = ToastMessage(
+            text=normalized,
+            level=level,
+            duration_ms=resolved_duration,
+            action_label=action_label,
+            sticky=resolved_sticky,
+        )
+        toast = ToastWidget(
+            message,
+            parent=self._container,
+            action_callback=on_action,
+        )
         toast.closed.connect(lambda: self._remove_toast(toast))
 
         container_layout: QVBoxLayout = self._container.layout()  # type: ignore[assignment]
@@ -176,11 +254,13 @@ class ToastManager(QObject):
         self._relocate()
 
         toast.fade_in()
-        timer = QTimer(toast)
-        timer.setSingleShot(True)
-        timer.setInterval(duration_ms)
-        timer.timeout.connect(toast.fade_out_and_close)
-        timer.start()
+        if resolved_duration is not None and resolved_duration > 0:
+            timer = QTimer(toast)
+            timer.setSingleShot(True)
+            timer.setInterval(resolved_duration)
+            timer.timeout.connect(toast.fade_out_and_close)
+            timer.start()
+        return toast
 
     # ----------------------------------------------------------------- Qt events
 

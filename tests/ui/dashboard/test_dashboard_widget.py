@@ -27,11 +27,14 @@ def _make_context():
     banners: list[tuple[str, ToastLevel | None]] = []
     async_calls: list[object] = []
 
-    def show_notification(message: str, level: ToastLevel, duration_ms: int) -> None:
+    def show_notification(
+        message: str, level: ToastLevel, duration_ms: int | None
+    ) -> None:
         notifications.append((message, level, duration_ms))
 
-    def set_busy(message: str | None) -> None:
-        busy_events.append(("set", message))
+    def set_busy(message: str | None, *, blocking: bool = True) -> None:
+        tag = f"{message} (non-blocking)" if not blocking else message
+        busy_events.append(("set", tag))
 
     def clear_busy() -> None:
         busy_events.append(("clear", None))
@@ -39,7 +42,7 @@ def _make_context():
     def run_async(coro) -> None:
         async_calls.append(coro)
 
-    def show_banner(message: str, level: ToastLevel) -> None:
+    def show_banner(message: str, level: ToastLevel, **_: object) -> None:
         banners.append((message, level))
 
     def clear_banner() -> None:

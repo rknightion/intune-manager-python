@@ -244,9 +244,7 @@ class GroupService:
                     url=f"/groups/{group_id}/memberOf",
                     params={
                         "$select": "id,displayName",
-                        "$filter": "isof('microsoft.graph.group')",
                     },
-                    headers={"ConsistencyLevel": "eventual"},
                     request_id=group_id,
                 ),
             )
@@ -283,6 +281,10 @@ class GroupService:
                 parents: list[str] = []
                 for item in value:
                     if not isinstance(item, dict):
+                        continue
+                    # Filter to only include groups (not administrativeUnits or directoryRoles)
+                    odata_type = item.get("@odata.type", "")
+                    if odata_type != "#microsoft.graph.group":
                         continue
                     ident = item.get("id")
                     if ident:

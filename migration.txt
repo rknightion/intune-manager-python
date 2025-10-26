@@ -71,4 +71,9 @@ You are permitted to consume migration-done.txt to see what previous work has be
 ---
 
 ## Current Migration Tasks
+### Session 2025-10-26
+- [x] UX.1: Remove legacy alert banner + blocking progress dialog — NOTE: `src/intune_manager/ui/components/alerts.py` deleted, `src/intune_manager/ui/main/window.py` now routes banner calls to sticky toasts and dashboard refresh uses inline status instead of `ProgressDialog`.
+- [x] Data.1: Keep cache + status metrics scoped to the active tenant — NOTE: `src/intune_manager/ui/main/window.py` now passes `tenant_id` into `SyncService.refresh_all`, dashboard controller normalises string enum values, and compliance/assignment metrics no longer misreport stale caches.
+- [x] Graph.1: Fixed Microsoft Graph `memberOf` 400 errors — NOTE: `src/intune_manager/services/groups.py:239-292` removed unsupported `$filter=isof('microsoft.graph.group')` parameter and `ConsistencyLevel: eventual` header; now filters client-side by checking `@odata.type == "#microsoft.graph.group"` in response.
+- [x] UI.1: Fixed PySide6 `StateFlag` AttributeError in device delegates — NOTE: `src/intune_manager/ui/devices/delegates.py` updated to import `QStyle` and use `QStyle.StateFlag.State_Selected` instead of deprecated `QStyleOptionViewItem.StateFlag.State_Selected` (lines 79, 157).
 **Start at the top and work your way down**

@@ -15,13 +15,24 @@ class ShowNotificationCallable(Protocol):
     """Protocol for showing toast notifications with keyword-only parameters."""
 
     def __call__(
-        self, text: str, /, *, level: ToastLevel = ..., duration_ms: int = ...
+        self, text: str, /, *, level: ToastLevel = ..., duration_ms: int | None = ...
     ) -> None: ...
 
 
 class SetBusyCallable(Protocol):
     def __call__(self, message: str | None = ..., *, blocking: bool = ...) -> None: ...
-ShowBannerCallable = Callable[[str, ToastLevel], None]
+
+
+class ShowBannerCallable(Protocol):
+    def __call__(
+        self,
+        message: str,
+        level: ToastLevel = ...,
+        *,
+        action_label: str | None = ...,
+        on_action: Callable[[], None] | None = ...,
+    ) -> None:
+        ...
 
 
 @dataclass(slots=True)

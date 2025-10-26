@@ -162,6 +162,8 @@ class DashboardController:
     ) -> None:
         if not self._services.sync:
             raise RuntimeError("Sync service not configured")
+        if tenant_id is None:
+            tenant_id = self._settings_manager.load().tenant_id
         await self._services.sync.refresh_all(
             tenant_id=tenant_id,
             force=force,
@@ -223,7 +225,12 @@ class DashboardController:
         counter: Counter[str] = Counter()
         for device in devices:
             state = getattr(device, "compliance_state", None)
-            label = state.value if state else "unknown"
+            if hasattr(state, "value"):
+                label = state.value  # Enum-like objects
+            elif isinstance(state, str) and state:
+                label = state
+            else:
+                label = "unknown"
             counter[label] += 1
         return dict(counter)
 
@@ -238,8 +245,14 @@ class DashboardController:
         counter: Counter[str] = Counter()
         for app in apps:
             for assignment in app.assignments or []:
-                intent = assignment.intent.value if assignment.intent else "unknown"
-                counter[intent] += 1
+                intent = assignment.intent
+                if hasattr(intent, "value"):
+                    label = intent.value
+                elif isinstance(intent, str) and intent:
+                    label = intent
+                else:
+                    label = "unknown"
+                counter[label] += 1
         return dict(counter)
 
 
