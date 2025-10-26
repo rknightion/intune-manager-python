@@ -72,16 +72,16 @@ class SyncService:
                     force=force,
                     cancellation_token=cancellation_token,
                 )
-                completed += 1
-                self.progress.emit(
-                    SyncProgressEvent(phase=name, completed=completed, total=total),
-                )
             except CancellationError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Sync phase failed", phase=name)
                 self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
-                raise
+            finally:
+                completed += 1
+                self.progress.emit(
+                    SyncProgressEvent(phase=name, completed=completed, total=total),
+                )
 
     async def _refresh_single(
         self,

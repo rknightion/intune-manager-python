@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self._toast_manager: ToastManager | None = None
         self._tray_icon: QSystemTrayIcon | None = None
         self._busy_overlay: BusyOverlay | None = None
+        self._busy_overlay_blocking = False
         self._command_registry = CommandRegistry()
         self._command_palette: CommandPalette | None = None
         self._ui_context: UIContext | None = None
@@ -686,18 +687,27 @@ class MainWindow(QMainWindow):
     def run_async(self, coro: Awaitable[object]) -> None:
         self._bridge.run_coroutine(coro)
 
-    def set_busy(self, message: str | None = None) -> None:
+    def set_busy(self, message: str | None = None, *, blocking: bool = True) -> None:
         display = message or self._busy_default_message
+        self._busy_overlay_blocking = blocking
         if self._busy_overlay:
-            self._busy_overlay.show_overlay(display)
+            if blocking:
+                self._busy_overlay.show_overlay(display)
+            else:
+                self._busy_overlay.hide_overlay()
         self.statusBar().showMessage(display)
 
     def set_busy_message(self, message: str) -> None:
-        if self._busy_overlay and self._busy_overlay.isVisible():
+        if (
+            self._busy_overlay
+            and self._busy_overlay_blocking
+            and self._busy_overlay.isVisible()
+        ):
             self._busy_overlay.set_message(message)
         self.statusBar().showMessage(message)
 
     def clear_busy(self) -> None:
+        self._busy_overlay_blocking = False
         if self._busy_overlay:
             self._busy_overlay.hide_overlay()
         self.statusBar().showMessage(self._status_default_message)
@@ -879,7 +889,7 @@ class MainWindow(QMainWindow):
             )
             return
         self._sync_in_progress = True
-        self.set_busy("Refreshing tenant data…")
+        self.set_busy("Refreshing tenant data…", blocking=False)
         self._bridge.run_coroutine(self._services.sync.refresh_all(force=True))
 
     def _focus_active_search(self) -> None:
@@ -933,18 +943,16 @@ class MainWindow(QMainWindow):
         phase = event.phase.replace("_", " ").title()
         total = max(event.total, 1)
         message = f"Refreshing {phase} ({event.completed}/{total})"
-        self.set_busy(message)
+        self.set_busy_message(message)
         if event.completed >= total:
             self._sync_in_progress = False
             self.clear_busy()
             self.show_notification("Tenant data refreshed", level=ToastLevel.SUCCESS)
 
     def _handle_sync_error(self, event: ServiceErrorEvent) -> None:
-        self.clear_busy()
         detail = str(event.error)
-        self._sync_in_progress = False
         self.show_notification(
-            f"Sync failed: {detail}",
+            f"Sync issue: {detail}",
             level=ToastLevel.ERROR,
             duration_ms=8000,
         )

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from .common import GraphResource
 
@@ -42,7 +42,11 @@ class Ownership(StrEnum):
 
 
 class InstalledApp(GraphResource):
-    display_name: str | None = Field(default=None, alias="displayName")
+    display_name: str | None = Field(
+        default=None,
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     version: str | None = None
     publisher: str | None = None
     size_in_bytes: int | None = Field(default=None, alias="sizeInBytes")

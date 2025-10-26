@@ -1,6 +1,6 @@
 """Domain models representing Microsoft Graph Intune resources."""
 
-from .application import MobileApp
+from .application import MobileApp, MobileAppPlatform
 from .assignment import (
     AllDevicesAssignmentTarget,
     AssignmentIntent,
@@ -12,7 +12,12 @@ from .assignment import (
 )
 from .audit import AuditEvent
 from .common import GraphBaseModel, GraphResource, TimestampedResource
-from .configuration import ConfigurationProfile, ConfigurationSetting, SettingTemplate
+from .configuration import (
+    ConfigurationPlatform,
+    ConfigurationProfile,
+    ConfigurationSetting,
+    SettingTemplate,
+)
 from .device import (
     ComplianceState,
     InstalledApp,
@@ -20,7 +25,7 @@ from .device import (
     ManagementState,
     Ownership,
 )
-from .filters import AssignmentFilter
+from .filters import AssignmentFilter, AssignmentFilterPlatform
 from .group import DirectoryGroup, GroupMember
 
 __all__ = [
@@ -33,6 +38,7 @@ __all__ = [
     "ManagementState",
     "Ownership",
     "MobileApp",
+    "MobileAppPlatform",
     "AssignmentTarget",
     "GroupAssignmentTarget",
     "AllDevicesAssignmentTarget",
@@ -43,7 +49,9 @@ __all__ = [
     "DirectoryGroup",
     "GroupMember",
     "AssignmentFilter",
+    "AssignmentFilterPlatform",
     "ConfigurationProfile",
+    "ConfigurationPlatform",
     "ConfigurationSetting",
     "SettingTemplate",
     "AuditEvent",

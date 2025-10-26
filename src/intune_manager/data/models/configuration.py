@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from .assignment import AssignmentTarget
 from .common import GraphResource, TimestampedResource
@@ -10,11 +10,20 @@ from .common import GraphResource, TimestampedResource
 
 class ConfigurationPlatform(StrEnum):
     ANDROID = "android"
-    IOS = "ios"
+    IOS = "iOS"
     MACOS = "macOS"
     WINDOWS10 = "windows10"
     ANDROID_ENTERPRISE = "androidEnterprise"
     ANDROID_WORK_PROFILE = "androidWorkProfile"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalised = value.lower()
+            for member in cls:
+                if member.value.lower() == normalised:
+                    return member
+        return None
 
 
 class ConfigurationProfileType(StrEnum):
@@ -68,11 +77,16 @@ class SettingTemplate(GraphResource):
 
 
 class ConfigurationProfile(TimestampedResource):
-    display_name: str = Field(alias="displayName")
+    display_name: str = Field(
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     description: str | None = Field(default=None, alias="description")
     version: int | None = None
     platform_type: ConfigurationPlatform | None = Field(
-        default=None, alias="platformType"
+        default=None,
+        alias="platformType",
+        validation_alias=AliasChoices("platformType", "platforms"),
     )
     profile_type: ConfigurationProfileType | None = Field(
         default=None, alias="profileType"

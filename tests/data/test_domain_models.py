@@ -6,11 +6,19 @@ import pytest
 from pydantic import ValidationError
 
 from intune_manager.data import (
+    AuditEvent,
     AllDevicesAssignmentTarget,
+    AssignmentFilter,
+    AssignmentFilterPlatform,
     AssignmentIntent,
     AssignmentSettings,
+    ConfigurationPlatform,
+    ConfigurationProfile,
+    DirectoryGroup,
     ManagedDevice,
+    MobileApp,
     MobileAppAssignment,
+    MobileAppPlatform,
 )
 from intune_manager.data.validation import GraphResponseValidator
 
@@ -79,3 +87,59 @@ def test_graph_response_validator_collects_issues() -> None:
     issues = validator.issues()
     assert len(issues) == 1
     assert "deviceName" in issues[0].fields[0]
+
+
+def test_assignment_filter_platform_accepts_graph_casing() -> None:
+    payload = {
+        "id": "filter-1",
+        "displayName": "iOS filter",
+        "platform": "iOS",
+    }
+    assignment_filter = AssignmentFilter.from_graph(payload)
+
+    assert assignment_filter.platform == AssignmentFilterPlatform.IOS
+
+
+def test_configuration_profile_accepts_name_and_platforms_aliases() -> None:
+    payload = {
+        "id": "config-1",
+        "name": "Policy Name",
+        "platforms": "iOS",
+        "technologies": "mdm",
+    }
+    profile = ConfigurationProfile.from_graph(payload)
+
+    assert profile.display_name == "Policy Name"
+    assert profile.platform_type == ConfigurationPlatform.IOS
+
+
+def test_mobile_app_platform_accepts_graph_casing() -> None:
+    payload = {
+        "id": "app-1",
+        "name": "App",
+        "platformType": "iOS",
+    }
+    app = MobileApp.from_graph(payload)
+
+    assert app.display_name == "App"
+    assert app.platform_type == MobileAppPlatform.IOS
+
+
+def test_directory_group_accepts_name_alias() -> None:
+    payload = {
+        "id": "group-1",
+        "name": "Ops",
+    }
+    group = DirectoryGroup.from_graph(payload)
+
+    assert group.display_name == "Ops"
+
+
+def test_audit_event_accepts_name_alias() -> None:
+    payload = {
+        "id": "audit-1",
+        "name": "Operation",
+    }
+    event = AuditEvent.from_graph(payload)
+
+    assert event.display_name == "Operation"

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from .assignment import MobileAppAssignment
 from .common import TimestampedResource
@@ -18,14 +18,29 @@ class MobileAppPlatform(StrEnum):
     ANDROID = "android"
     IOS_VPP = "iosVpp"
 
+    @classmethod
+    def _missing_(cls, value: object):
+        if isinstance(value, str):
+            normalised = value.lower()
+            for member in cls:
+                if member.value.lower() == normalised:
+                    return member
+        return None
+
 
 class MobileAppCategory(TimestampedResource):
-    display_name: str = Field(alias="displayName")
+    display_name: str = Field(
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     description: str | None = None
 
 
 class MobileApp(TimestampedResource):
-    display_name: str = Field(alias="displayName")
+    display_name: str = Field(
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     description: str | None = None
     publisher: str | None = None
     owner: str | None = None

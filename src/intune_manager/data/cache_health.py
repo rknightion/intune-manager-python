@@ -199,7 +199,8 @@ class CacheIntegrityChecker:
     def _load_cache_entries(
         self, session: Session
     ) -> Dict[tuple[str, str], CacheEntry]:
-        entries = session.exec(select(CacheEntry)).all()
+        result = session.exec(select(CacheEntry))
+        entries = result.scalars().all()
         return {(entry.resource, entry.scope): entry for entry in entries}
 
     def _collect_scopes(
@@ -210,10 +211,10 @@ class CacheIntegrityChecker:
     ) -> Iterable[str | None]:
         tenants: set[str | None] = set()
         if descriptor.has_tenant_column:
-            rows = session.exec(
+            result = session.exec(
                 select(descriptor.record_model.tenant_id).distinct(),
-            ).all()
-            tenants.update(row for row in rows)
+            )
+            tenants.update(result.scalars().all())
         else:
             tenants.add(None)
 
@@ -342,7 +343,8 @@ class CacheIntegrityChecker:
         stmt = select(descriptor.record_model)
         if descriptor.has_tenant_column:
             stmt = stmt.where(descriptor.record_model.tenant_id == tenant_id)
-        return session.exec(stmt).all()
+        result = session.exec(stmt)
+        return result.scalars().all()
 
     def _scope_key(self, tenant_id: str | None) -> str:
         return tenant_id or DEFAULT_SCOPE

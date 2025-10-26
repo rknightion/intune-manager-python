@@ -19,7 +19,8 @@ class ShowNotificationCallable(Protocol):
     ) -> None: ...
 
 
-SetBusyCallable = Callable[[str | None], None]
+class SetBusyCallable(Protocol):
+    def __call__(self, message: str | None = ..., *, blocking: bool = ...) -> None: ...
 ShowBannerCallable = Callable[[str, ToastLevel], None]
 
 

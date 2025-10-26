@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from .common import GraphBaseModel, GraphResource
 
@@ -24,14 +24,22 @@ class AuditActor(GraphBaseModel):
 
 
 class AuditResource(GraphBaseModel):
-    display_name: str | None = Field(default=None, alias="displayName")
+    display_name: str | None = Field(
+        default=None,
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     type: str | None = None
     audit_resource_type: str | None = Field(default=None, alias="auditResourceType")
     resource_id: str | None = Field(default=None, alias="resourceId")
 
 
 class AuditEvent(GraphResource):
-    display_name: str | None = Field(default=None, alias="displayName")
+    display_name: str | None = Field(
+        default=None,
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     component_name: str | None = Field(default=None, alias="componentName")
     activity: str | None = None
     activity_date_time: datetime | None = Field(default=None, alias="activityDateTime")

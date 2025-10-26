@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from .common import GraphResource, TimestampedResource
 
@@ -14,7 +14,10 @@ class GroupType(StrEnum):
 
 
 class DirectoryGroup(TimestampedResource):
-    display_name: str = Field(alias="displayName")
+    display_name: str = Field(
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     description: str | None = None
     mail: str | None = None
     mail_nickname: str | None = Field(default=None, alias="mailNickname")
@@ -29,7 +32,11 @@ class DirectoryGroup(TimestampedResource):
 
 
 class GroupMember(GraphResource):
-    display_name: str | None = Field(default=None, alias="displayName")
+    display_name: str | None = Field(
+        default=None,
+        alias="displayName",
+        validation_alias=AliasChoices("displayName", "name"),
+    )
     user_principal_name: str | None = Field(default=None, alias="userPrincipalName")
     mail: str | None = Field(default=None, alias="mail")
     odata_type: str | None = Field(default=None, alias="@odata.type")
