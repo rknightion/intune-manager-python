@@ -59,6 +59,7 @@ from intune_manager.utils.errors import ErrorSeverity, describe_exception
 from .controller import DeviceController
 from .delegates import ComplianceBadgeDelegate, DeviceSummaryDelegate
 from .models import DeviceFilterProxyModel, DeviceTableModel, DeviceTimelineEntry
+from intune_manager.utils.enums import enum_text
 
 
 def _format_value(value: object | None) -> str:
@@ -359,13 +360,9 @@ class DeviceDetailPane(QWidget):
             self._overview_fields,
             {
                 "user": device.user_display_name or device.user_principal_name,
-                "ownership": device.ownership.value if device.ownership else None,
-                "compliance": device.compliance_state.value
-                if device.compliance_state
-                else None,
-                "management": device.management_state.value
-                if device.management_state
-                else None,
+                "ownership": enum_text(device.ownership),
+                "compliance": enum_text(device.compliance_state),
+                "management": enum_text(device.management_state),
                 "enrollment": device.enrolled_managed_by,
                 "registration": device.device_registration_state,
                 "category": device.device_category_display_name,
@@ -1128,9 +1125,7 @@ class DevicesWidget(PageScaffold):
         )
         compliance_states = sorted(
             {
-                (
-                    device.compliance_state.value if device.compliance_state else ""
-                ).strip()
+                (enum_text(device.compliance_state) or "").strip()
                 for device in devices
                 if device.compliance_state
             },
@@ -1138,9 +1133,7 @@ class DevicesWidget(PageScaffold):
         )
         management_states = sorted(
             {
-                (
-                    device.management_state.value if device.management_state else ""
-                ).strip()
+                (enum_text(device.management_state) or "").strip()
                 for device in devices
                 if device.management_state
             },
@@ -1148,7 +1141,7 @@ class DevicesWidget(PageScaffold):
         )
         ownership_states = sorted(
             {
-                (device.ownership.value if device.ownership else "").strip()
+                (enum_text(device.ownership) or "").strip()
                 for device in devices
                 if device.ownership
             },
@@ -1439,13 +1432,9 @@ class DevicesWidget(PageScaffold):
                     "osVersion": device.os_version,
                     "primaryUser": device.user_display_name
                     or device.user_principal_name,
-                    "complianceState": device.compliance_state.value
-                    if device.compliance_state
-                    else None,
-                    "managementState": device.management_state.value
-                    if device.management_state
-                    else None,
-                    "ownership": device.ownership.value if device.ownership else None,
+                    "complianceState": enum_text(device.compliance_state),
+                    "managementState": enum_text(device.management_state),
+                    "ownership": enum_text(device.ownership),
                     "serialNumber": device.serial_number,
                     "enrollmentType": device.enrolled_managed_by,
                     "lastSync": (
@@ -1472,13 +1461,9 @@ class DevicesWidget(PageScaffold):
             or "",
             "Operating System": device.operating_system,
             "OS Version": device.os_version or "",
-            "Compliance": device.compliance_state.value
-            if device.compliance_state
-            else "",
-            "Management": device.management_state.value
-            if device.management_state
-            else "",
-            "Ownership": device.ownership.value if device.ownership else "",
+            "Compliance": enum_text(device.compliance_state) or "",
+            "Management": enum_text(device.management_state) or "",
+            "Ownership": enum_text(device.ownership) or "",
             "Enrollment": device.enrolled_managed_by or "",
             "Last Sync": DeviceDetailPane._format_datetime(device.last_sync_date_time),
             "Azure AD Device ID": device.azure_ad_device_id or "",

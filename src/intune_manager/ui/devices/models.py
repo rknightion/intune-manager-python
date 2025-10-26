@@ -15,6 +15,7 @@ from PySide6.QtCore import (
 )
 
 from intune_manager.data import ManagedDevice
+from intune_manager.utils.enums import enum_text
 from intune_manager.utils.sanitize import sanitize_search_text
 
 if TYPE_CHECKING:
@@ -102,6 +103,15 @@ def _format_datetime(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def enum_text(value: object | None) -> str | None:
+    """Return enum values as strings while tolerating plain values."""
+
+    if value is None:
+        return None
+    raw = getattr(value, "value", value)
+    return str(raw)
+
+
 class DeviceTableModel(QAbstractTableModel):
     """Table model projecting managed devices for the grid view."""
 
@@ -134,21 +144,17 @@ class DeviceTableModel(QAbstractTableModel):
             DeviceColumn(
                 "compliance_state",
                 "Compliance",
-                lambda device: (
-                    device.compliance_state.value if device.compliance_state else None
-                ),
+                lambda device: enum_text(device.compliance_state),
             ),
             DeviceColumn(
                 "management_state",
                 "Management",
-                lambda device: (
-                    device.management_state.value if device.management_state else None
-                ),
+                lambda device: enum_text(device.management_state),
             ),
             DeviceColumn(
                 "ownership",
                 "Ownership",
-                lambda device: (device.ownership.value if device.ownership else None),
+                lambda device: enum_text(device.ownership),
             ),
             DeviceColumn(
                 "enrolled_managed_by",
@@ -410,21 +416,20 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
                 return False
 
         if self._compliance_filter:
-            compliance = (
-                device.compliance_state.value.lower() if device.compliance_state else ""
-            )
+            compliance_value = enum_text(device.compliance_state)
+            compliance = compliance_value.lower() if compliance_value else ""
             if compliance != self._compliance_filter:
                 return False
 
         if self._management_filter:
-            management = (
-                device.management_state.value.lower() if device.management_state else ""
-            )
+            management_value = enum_text(device.management_state)
+            management = management_value.lower() if management_value else ""
             if management != self._management_filter:
                 return False
 
         if self._ownership_filter:
-            ownership = device.ownership.value.lower() if device.ownership else ""
+            ownership_value = enum_text(device.ownership)
+            ownership = ownership_value.lower() if ownership_value else ""
             if ownership != self._ownership_filter:
                 return False
 
@@ -441,4 +446,8 @@ class DeviceFilterProxyModel(QSortFilterProxyModel):
         return True
 
 
-__all__ = ["DeviceTimelineEntry", "DeviceTableModel", "DeviceFilterProxyModel"]
+__all__ = [
+    "DeviceTimelineEntry",
+    "DeviceTableModel",
+    "DeviceFilterProxyModel",
+]

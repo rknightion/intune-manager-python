@@ -79,7 +79,13 @@ class MobileAppRepository(BaseCacheRepository[MobileApp, MobileAppRecord]):
                 app = self._from_record(record)
                 assignments = assignments_map.get(record.id)
                 if assignments:
-                    app.assignments = [record_to_assignment(row) for row in assignments]
+                    app = app.model_copy(
+                        update={
+                            "assignments": [
+                                record_to_assignment(row) for row in assignments
+                            ]
+                        }
+                    )
                 apps.append(app)
             return apps
 

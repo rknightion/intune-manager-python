@@ -248,3 +248,125 @@ async def test_sign_out_clears_cached_user(
     assert manager.current_user() is None
     assert manager.missing_scopes() == []
     assert not settings.token_cache_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_token_expiry_with_expires_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Test that expires_in (relative seconds) is correctly converted to absolute timestamp."""
+    import time
+
+    settings = make_settings()
+    access_token = _make_jwt(settings.graph_scopes)
+    stub = StubPublicClientApplication(
+        client_id="",
+        authority="",
+        accounts=[
+            {
+                "name": "Test User",
+                "username": "user@contoso.com",
+                "home_account_id": "obj-id.tenant-id",
+            }
+        ],
+        silent_results=[
+            {
+                "access_token": access_token,
+                "expires_in": 3600,  # Relative: 1 hour from now
+                "id_token_claims": {
+                    "name": "Test User",
+                    "preferred_username": "user@contoso.com",
+                    "oid": "obj-id",
+                    "tid": "tenant-id",
+                },
+            }
+        ],
+        interactive_results=[],
+    )
+
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
+    token = await manager.acquire_token(settings.graph_scopes)
+
+    # expires_in: 3600 should result in expiry ~3600 seconds from now
+    current_time = int(time.time())
+    assert token.expires_on > current_time, "Token should expire in the future"
+    assert (
+        token.expires_on <= current_time + 3700
+    ), "Token should expire within ~1 hour"
+    # Should not be the year 1970
+    assert token.expires_on > 1000000000, "Token expiry should be a valid Unix timestamp"
+
+
+@pytest.mark.asyncio
+async def test_token_expiry_with_expires_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Test that expires_on (absolute timestamp) is used directly."""
+    settings = make_settings()
+    access_token = _make_jwt(settings.graph_scopes)
+    absolute_expiry = 1700000000  # Nov 14, 2023
+    stub = StubPublicClientApplication(
+        client_id="",
+        authority="",
+        accounts=[
+            {
+                "name": "Test User",
+                "username": "user@contoso.com",
+                "home_account_id": "obj-id.tenant-id",
+            }
+        ],
+        silent_results=[
+            {
+                "access_token": access_token,
+                "expires_on": absolute_expiry,  # Absolute timestamp
+                "id_token_claims": {
+                    "name": "Test User",
+                    "preferred_username": "user@contoso.com",
+                    "oid": "obj-id",
+                    "tid": "tenant-id",
+                },
+            }
+        ],
+        interactive_results=[],
+    )
+
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
+    token = await manager.acquire_token(settings.graph_scopes)
+
+    # expires_on should be used as-is
+    assert token.expires_on == absolute_expiry
+
+
+@pytest.mark.asyncio
+async def test_current_user_lazy_loads_from_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Test that current_user() loads user from cached account if not already set."""
+    settings = make_settings()
+    stub = StubPublicClientApplication(
+        client_id="",
+        authority="",
+        accounts=[
+            {
+                "name": "Cached User",
+                "username": "cached@contoso.com",
+                "home_account_id": "cached-obj.cached-tenant",
+            }
+        ],
+        silent_results=[],
+        interactive_results=[],
+    )
+
+    manager = configure_auth_manager(
+        settings=settings, stub_app=stub, monkeypatch=monkeypatch
+    )
+
+    # Before any token acquisition, current_user() should still load from cache
+    user = manager.current_user()
+    assert user is not None
+    assert user.username == "cached@contoso.com"
+    assert user.tenant_id == "cached-tenant"

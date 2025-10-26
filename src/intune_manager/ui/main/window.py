@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         self._first_run_status: FirstRunStatus | None = None
         self._startup_crash_info = startup_crash_info
         self._crash_report_path: Path | None = None
+        self._sync_had_errors = False
 
         self._configure_window()
         self._build_layout()
@@ -222,7 +223,7 @@ class MainWindow(QMainWindow):
         self._theme_manager.themeChanged.connect(self._apply_theme)
         self._apply_theme()
 
-    def _populate_navigation(self) -> None:
+    def _populate_navigation(self, active_key: str | None = None) -> None:
         if self._ui_context is None:
             # Ensure components initialised before populating navigation.
             self._ui_context = UIContext(
@@ -246,6 +247,9 @@ class MainWindow(QMainWindow):
         self._pages.clear()
         self._dashboard_widget = None
 
+        target_key = active_key or (self.NAV_ITEMS[0].key if self.NAV_ITEMS else None)
+        target_index = 0
+
         for index, item in enumerate(self.NAV_ITEMS):
             list_item = QListWidgetItem(item.icon or QIcon(), item.label)
             list_item.setData(Qt.ItemDataRole.UserRole, item.key)
@@ -254,9 +258,19 @@ class MainWindow(QMainWindow):
             page = self._build_page_for_item(item)
             self._pages[item.key] = page
             self._stack.addWidget(page)
-            if index == 0:
-                self._nav_list.setCurrentRow(0)
-                self._stack.setCurrentIndex(0)
+            if item.key == target_key:
+                target_index = index
+
+        if self._nav_list.count():
+            self._nav_list.setCurrentRow(target_index)
+            self._stack.setCurrentIndex(target_index)
+
+    def _reload_feature_pages(self) -> None:
+        current_key: str | None = None
+        current_item = self._nav_list.currentItem()
+        if current_item is not None:
+            current_key = current_item.data(Qt.ItemDataRole.UserRole)
+        self._populate_navigation(active_key=current_key)
 
     def _register_shortcuts(self) -> None:
         self._shortcut_definitions = self._build_shortcut_definitions()
@@ -463,12 +477,12 @@ class MainWindow(QMainWindow):
             settings_manager = SettingsManager()
             settings = settings_manager.load()
 
-            # Initialize all domain services with authenticated client
-            self._services = initialize_domain_services(auth_manager, settings)
-
             # Disconnect old subscriptions and connect to new sync service
             self._disconnect_services()
+            # Initialize all domain services with authenticated client
+            self._services = initialize_domain_services(auth_manager, settings)
             self._connect_services()
+            self._reload_feature_pages()
 
             # Update banner to show initialization
             self.show_banner(
@@ -889,6 +903,7 @@ class MainWindow(QMainWindow):
             )
             return
         self._sync_in_progress = True
+        self._sync_had_errors = False
         self.set_busy("Refreshing tenant data…", blocking=False)
         self._bridge.run_coroutine(self._services.sync.refresh_all(force=True))
 
@@ -947,9 +962,16 @@ class MainWindow(QMainWindow):
         if event.completed >= total:
             self._sync_in_progress = False
             self.clear_busy()
-            self.show_notification("Tenant data refreshed", level=ToastLevel.SUCCESS)
+            if self._sync_had_errors:
+                self.show_notification(
+                    "Tenant data refreshed with warnings",
+                    level=ToastLevel.WARNING,
+                )
+            else:
+                self.show_notification("Tenant data refreshed", level=ToastLevel.SUCCESS)
 
     def _handle_sync_error(self, event: ServiceErrorEvent) -> None:
+        self._sync_had_errors = True
         detail = str(event.error)
         self.show_notification(
             f"Sync issue: {detail}",

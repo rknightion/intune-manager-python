@@ -52,6 +52,7 @@ from intune_manager.ui.components import (
     format_relative_timestamp,
     make_toolbar_button,
 )
+from intune_manager.utils.enums import enum_text
 from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
 from intune_manager.ui.assignments.assignment_editor import AssignmentEditorDialog
@@ -229,7 +230,7 @@ class ApplicationDetailPane(QWidget):
         self._description_label.setText(app.description or "")
         self._update_badges(app)
 
-        platform = app.platform_type.value if app.platform_type else "Unknown"
+        platform = enum_text(app.platform_type) or "Unknown"
         categories = (
             ", ".join(category.display_name for category in (app.categories or []))
             or "—"
@@ -262,7 +263,7 @@ class ApplicationDetailPane(QWidget):
         else:
             for assignment in assignments:
                 target = getattr(assignment.target, "group_id", "All devices")
-                intent = assignment.intent.value
+                intent = enum_text(assignment.intent) or "Unknown"
                 filter_id = getattr(assignment.target, "assignment_filter_id", None)
                 text = f"{intent} → {target}"
                 if filter_id:
@@ -311,7 +312,10 @@ class ApplicationDetailPane(QWidget):
 
     def _update_badges(self, app: MobileApp) -> None:
         self._clear_badges()
-        intents = {assignment.intent.value for assignment in (app.assignments or [])}
+        intents = {
+            enum_text(assignment.intent) or "unknown"
+            for assignment in (app.assignments or [])
+        }
         if not intents:
             return
         for intent_key in sorted(intents):
@@ -1071,7 +1075,7 @@ class ApplicationsWidget(PageScaffold):
     def _apply_filter_options(self, apps: Iterable[MobileApp]) -> None:
         platforms = sorted(
             {
-                (app.platform_type.value if app.platform_type else "").strip()
+                (enum_text(app.platform_type) or "").strip()
                 for app in apps
                 if app.platform_type
             },
@@ -1079,7 +1083,7 @@ class ApplicationsWidget(PageScaffold):
         )
         intents = sorted(
             {
-                assignment.intent.value
+                enum_text(assignment.intent) or ""
                 for app in apps
                 for assignment in (app.assignments or [])
             },

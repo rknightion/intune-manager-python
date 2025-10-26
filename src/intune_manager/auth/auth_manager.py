@@ -123,6 +123,17 @@ class AuthManager:
             ) from exc
 
     def current_user(self) -> AuthenticatedUser | None:
+        """Return the current authenticated user.
+
+        Attempts to load user information from cached account if not already loaded.
+
+        Returns:
+            AuthenticatedUser if a cached account exists, None otherwise
+        """
+        if self._user is None and self._app is not None:
+            # Try to populate user from cached account
+            with self._lock:
+                self._get_account(self._app)
         return self._user
 
     def missing_scopes(self) -> list[str]:
@@ -232,15 +243,22 @@ class AuthManager:
             )
 
         access_token = result.get("access_token")
-        expires_on = result.get("expires_on") or result.get("expires_in")
         if not isinstance(access_token, str):
             raise AuthenticationError("MSAL response missing access token")
 
-        expiry = (
-            int(expires_on)
-            if isinstance(expires_on, (int, str))
-            else int(time.time()) + 3600
-        )
+        # Handle both expires_on (absolute timestamp) and expires_in (relative seconds)
+        expires_on = result.get("expires_on")
+        if expires_on is not None:
+            # expires_on is an absolute Unix timestamp
+            expiry = int(expires_on) if isinstance(expires_on, (int, str)) else int(time.time()) + 3600
+        else:
+            # Fall back to expires_in (relative seconds from now)
+            expires_in = result.get("expires_in")
+            if expires_in is not None and isinstance(expires_in, (int, str)):
+                expiry = int(time.time()) + int(expires_in)
+            else:
+                # Default to 1 hour from now if neither is available
+                expiry = int(time.time()) + 3600
         id_claims = result.get("id_token_claims")
         if isinstance(id_claims, dict):
             self._user = AuthenticatedUser(
@@ -260,11 +278,19 @@ class AuthManager:
         accounts = app.get_accounts()
         if accounts:
             account = accounts[0]
+            # Extract tenant_id from home_account_id (format: "objectId.tenantId")
+            home_account_id = account.get("home_account_id")
+            tenant_id = None
+            if isinstance(home_account_id, str) and "." in home_account_id:
+                parts = home_account_id.split(".", 1)
+                if len(parts) == 2:
+                    tenant_id = parts[1]
+
             self._user = AuthenticatedUser(
                 display_name=account.get("name"),
                 username=account.get("username"),
-                home_account_id=account.get("home_account_id"),
-                tenant_id=account.get("environment"),
+                home_account_id=home_account_id,
+                tenant_id=tenant_id,
             )
             return account
         return None

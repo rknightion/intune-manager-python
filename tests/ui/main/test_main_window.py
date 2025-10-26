@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
 
 from intune_manager.config import FirstRunStatus, Settings
@@ -28,6 +29,19 @@ class _DummyModule(QWidget):
         self.setObjectName(f"dummy:{page_key}")
 
 
+class _SignalStub:
+    def __init__(self) -> None:
+        self._callbacks: list = []
+
+    def connect(self, callback):  # noqa: ANN001 - mimics Qt signal API
+        self._callbacks.append(callback)
+
+
+class _DummySettingsController:
+    def __init__(self) -> None:
+        self.servicesReadyToInitialize = _SignalStub()
+
+
 class _DummySettingsPage(QWidget):
     """Minimal replacement for the real SettingsPage used in tests."""
 
@@ -42,6 +56,7 @@ class _DummySettingsPage(QWidget):
         self.diagnostics = diagnostics
         self.services = services
         self.launch_count = 0
+        self.controller = _DummySettingsController()
 
     def launch_setup_wizard(self) -> None:
         self.launch_count += 1
@@ -84,6 +99,11 @@ def main_window_builder(monkeypatch: pytest.MonkeyPatch, qtbot):
         )
         monkeypatch.setattr(
             "intune_manager.ui.main.window.SettingsPage", _DummySettingsPage
+        )
+        monkeypatch.setattr(
+            "intune_manager.ui.main.window.MainWindow._auto_initialize_services_if_configured",
+            lambda self: None,
+            raising=False,
         )
 
         status = FirstRunStatus(
@@ -181,3 +201,51 @@ def test_previous_crash_surfaces_notification(
     window, _ = main_window_builder(crash_info=crash_info)
     assert any("ended unexpectedly" in message for message in messages)
     assert window._crash_report_path == crash_log  # noqa: SLF001 - verifies wiring
+
+
+def test_domain_services_reload_rebuilds_feature_pages(
+    patched_main_window,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    window, created = patched_main_window
+    original_devices = created["devices"]
+
+    class _StubSettingsManager:
+        def load(self) -> Settings:
+            return Settings(tenant_id="tenant", client_id="client")
+
+    new_services = ServiceRegistry()
+
+    monkeypatch.setattr(
+        "intune_manager.ui.main.window.SettingsManager",
+        _StubSettingsManager,
+    )
+    monkeypatch.setattr(
+        "intune_manager.ui.main.window.initialize_domain_services",
+        lambda auth, settings: new_services,
+    )
+
+    started: list[bool] = []
+    monkeypatch.setattr(
+        MainWindow,
+        "_start_global_sync",
+        lambda self: started.append(True),
+        raising=False,
+    )
+
+    active_item = window._nav_list.currentItem()
+    previous_key = None
+    if active_item is not None:
+        previous_key = active_item.data(Qt.ItemDataRole.UserRole)
+
+    window._initialize_domain_services()
+
+    assert created["devices"] is not original_devices
+    assert created["devices"].services is new_services
+    assert started
+
+    current_item = window._nav_list.currentItem()
+    current_key = None
+    if current_item is not None:
+        current_key = current_item.data(Qt.ItemDataRole.UserRole)
+    assert current_key == previous_key

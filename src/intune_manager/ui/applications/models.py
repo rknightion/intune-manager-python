@@ -17,6 +17,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QIcon
 
 from intune_manager.data import MobileApp
+from intune_manager.utils.enums import enum_text
 from intune_manager.utils.sanitize import sanitize_search_text
 
 
@@ -39,7 +40,8 @@ def assignment_summary(app: MobileApp) -> str:
         return "No assignments"
     counter: Counter[str] = Counter()
     for assignment in assignments:
-        counter[assignment.intent.value] += 1
+        intent = enum_text(assignment.intent) or "unknown"
+        counter[intent] += 1
     parts = [f"{intent}: {count}" for intent, count in counter.items()]
     return ", ".join(parts)
 
@@ -64,7 +66,7 @@ class ApplicationTableModel(QAbstractTableModel):
             ApplicationColumn(
                 "platform_type",
                 "Platform",
-                lambda app: app.platform_type.value if app.platform_type else None,
+                lambda app: enum_text(app.platform_type),
             ),
             ApplicationColumn("publisher", "Publisher", lambda app: app.publisher),
             ApplicationColumn("owner", "Owner", lambda app: app.owner),
@@ -276,14 +278,15 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
                 return False
 
         if self._platform_filter:
-            platform = (app.platform_type.value if app.platform_type else "").lower()
+            platform_value = enum_text(app.platform_type)
+            platform = platform_value.lower() if platform_value else ""
             if platform != self._platform_filter:
                 return False
 
         if self._intent_filter:
             assignments = app.assignments or []
             if not any(
-                assignment.intent.value.lower() == self._intent_filter
+                (enum_text(assignment.intent) or "").lower() == self._intent_filter
                 for assignment in assignments
             ):
                 return False
