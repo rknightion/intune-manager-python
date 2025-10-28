@@ -21,6 +21,7 @@ from intune_manager.services import (
     ApplicationService,
     AssignmentFilterService,
     AssignmentImportService,
+    AssignmentService,
     AuditLogService,
     ConfigurationService,
     DeviceService,
@@ -109,6 +110,7 @@ def initialize_domain_services(
     filters = AssignmentFilterService(client_factory, filter_repo)
     configurations = ConfigurationService(client_factory, config_repo)
     audit = AuditLogService(client_factory, audit_repo)
+    assignments = AssignmentService(client_factory)
 
     # Create sync service that coordinates all domain services
     sync = SyncService(
@@ -123,7 +125,7 @@ def initialize_domain_services(
     logger.info(
         "Domain services initialized successfully",
         tenant_id=settings.tenant_id,
-        service_count=6,
+        service_count=7,
     )
 
     # Return updated registry with all services
@@ -131,6 +133,7 @@ def initialize_domain_services(
         devices=devices,
         applications=applications,
         groups=groups,
+        assignments=assignments,
         assignment_filters=filters,
         configurations=configurations,
         audit=audit,
