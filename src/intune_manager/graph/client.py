@@ -759,6 +759,12 @@ class GraphClientFactory:
                 headers={"User-Agent": self._config.user_agent},
                 auth=bearer_auth,
                 telemetry_callback=callback,
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=60.0,
+                    write=30.0,
+                    pool=5.0,
+                ),
             )
         return self._http_client
 
