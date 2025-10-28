@@ -79,6 +79,7 @@ class ToastWidget(QFrame):
         self.setObjectName("ToastWidget")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setMinimumWidth(320)
+        self.setMaximumWidth(450)
         self.setStyleSheet(
             "QFrame#ToastWidget {"
             f"  background-color: {bg};"
@@ -121,6 +122,7 @@ class ToastWidget(QFrame):
         self.label = QLabel(message.text)
         self.label.setObjectName("ToastLabel")
         self.label.setWordWrap(True)
+        self.label.setMaximumWidth(380)
         self.label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -251,6 +253,10 @@ class ToastManager(QObject):
         container_layout: QVBoxLayout = self._container.layout()  # type: ignore[assignment]
         container_layout.addWidget(toast, alignment=Qt.AlignmentFlag.AlignRight)
         self._container.show()
+        container_layout.activate()
+        toast.updateGeometry()
+        toast.label.updateGeometry()
+        toast.adjustSize()
         self._relocate()
 
         toast.fade_in()
