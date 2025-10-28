@@ -575,7 +575,6 @@ class GroupsWidget(PageScaffold):
         self._context = context
         self._controller = GroupController(services)
         self._refresh_token_source: CancellationTokenSource | None = None
-        self._refresh_dialog: ProgressDialog | None = None
         self._refresh_in_progress = False
 
         self._refresh_button = make_toolbar_button(
@@ -852,18 +851,8 @@ class GroupsWidget(PageScaffold):
         self._schedule_hierarchy_refresh()
 
     def _finish_refresh(self, *, mark_finished: bool = False) -> None:
-        if (
-            not self._refresh_in_progress
-            and self._refresh_token_source is None
-            and self._refresh_dialog is None
-        ):
+        if not self._refresh_in_progress and self._refresh_token_source is None:
             return
-        dialog = self._refresh_dialog
-        if dialog is not None:
-            if mark_finished:
-                dialog.mark_finished()
-            dialog.close()
-            self._refresh_dialog = None
         if self._refresh_token_source is not None:
             self._refresh_token_source.dispose()
             self._refresh_token_source = None
@@ -943,18 +932,9 @@ class GroupsWidget(PageScaffold):
         if self._refresh_token_source is not None:
             return
         token_source = CancellationTokenSource()
-        dialog = ProgressDialog(
-            title="Refreshing groups",
-            parent=self,
-            message="Preparing group refresh…",
-            token_source=token_source,
-        )
-        dialog.show()
         self._refresh_token_source = token_source
-        self._refresh_dialog = dialog
         self._refresh_in_progress = True
-        self._context.set_busy("Refreshing groups…")
-        dialog.set_message("Refreshing groups…")
+        self._context.set_busy("Refreshing groups…", blocking=False)
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
         self._context.run_async(
