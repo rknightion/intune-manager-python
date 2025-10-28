@@ -507,7 +507,6 @@ class DevicesWidget(PageScaffold):
         self._lazy_threshold = 1000
         self._lazy_chunk_size = 400
         self._refresh_token_source: CancellationTokenSource | None = None
-        self._refresh_progress_dialog: ProgressDialog | None = None
         self._refresh_in_progress = False
         self._last_refresh: datetime | None = None
 
@@ -909,33 +908,11 @@ class DevicesWidget(PageScaffold):
 
     def _handle_refresh_progress(self, event: DeviceRefreshProgressEvent) -> None:
         message = f"Refreshing devices… {event.processed:,} processed"
-        self._context.set_busy(message)
-        dialog = self._refresh_progress_dialog
-        if dialog is not None:
-            dialog.update_progress(
-                ProgressUpdate(
-                    total=None,
-                    completed=event.processed,
-                    failed=0,
-                    current=message,
-                ),
-            )
-            if event.finished:
-                dialog.mark_finished()
+        self._context.set_busy(message, blocking=False)
 
     def _finish_refresh(self, *, mark_finished: bool = False) -> None:
-        if (
-            not self._refresh_in_progress
-            and self._refresh_token_source is None
-            and self._refresh_progress_dialog is None
-        ):
+        if not self._refresh_in_progress and self._refresh_token_source is None:
             return
-        dialog = self._refresh_progress_dialog
-        if dialog is not None:
-            if mark_finished:
-                dialog.mark_finished()
-            dialog.close()
-            self._refresh_progress_dialog = None
         if self._refresh_token_source is not None:
             self._refresh_token_source.dispose()
             self._refresh_token_source = None
@@ -967,18 +944,9 @@ class DevicesWidget(PageScaffold):
         if self._refresh_token_source is not None:
             return
         token_source = CancellationTokenSource()
-        dialog = ProgressDialog(
-            title="Refreshing devices",
-            parent=self,
-            message="Preparing device refresh…",
-            token_source=token_source,
-        )
-        dialog.show()
         self._refresh_token_source = token_source
-        self._refresh_progress_dialog = dialog
         self._refresh_in_progress = True
-        self._context.set_busy("Refreshing devices…")
-        dialog.set_message("Refreshing devices…")
+        self._context.set_busy("Refreshing devices…", blocking=False)
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
         self._context.run_async(
