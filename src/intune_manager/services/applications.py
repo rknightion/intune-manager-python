@@ -246,8 +246,8 @@ class ApplicationService:
         except CancellationError:
             raise
         except GraphAPIError as exc:
-            if getattr(exc, "status_code", None) == 404:
-                logger.debug("App icon not available", app_id=app_id)
+            if getattr(exc, "status_code", None) in (404, 400):
+                logger.debug("App icon not available", app_id=app_id, status=exc.status_code)
                 return None
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
