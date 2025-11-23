@@ -37,6 +37,8 @@ class BusyOverlay(QWidget):
 
         container = QFrame()
         container.setObjectName("BusyOverlayContainer")
+        container.setMinimumWidth(360)
+        container.setMaximumWidth(520)
         container.setStyleSheet(
             "QFrame#BusyOverlayContainer {"
             "  background-color: rgba(15, 23, 42, 0.72);"

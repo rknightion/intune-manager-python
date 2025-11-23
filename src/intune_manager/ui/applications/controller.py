@@ -186,6 +186,18 @@ class ApplicationController:
             app_id, diff, cancellation_token=cancellation_token
         )
 
+    async def apply_diffs(
+        self,
+        app_diffs: Iterable[tuple[str, AssignmentDiff]],
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        if self._assignment_service is None:
+            raise RuntimeError("Assignment service not configured")
+        await self._assignment_service.apply_diffs(
+            list(app_diffs), cancellation_token=cancellation_token
+        )
+
     def export_assignments(
         self,
         assignments: Iterable[MobileAppAssignment],

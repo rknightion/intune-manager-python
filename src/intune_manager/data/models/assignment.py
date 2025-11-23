@@ -61,6 +61,29 @@ class AllDevicesAssignmentTarget(AssignmentTarget):
         default="#microsoft.graph.allDevicesAssignmentTarget",
         alias="@odata.type",
     )
+    assignment_filter_id: str | None = Field(
+        default=None,
+        alias="deviceAndAppManagementAssignmentFilterId",
+    )
+    assignment_filter_type: AssignmentFilterType = Field(
+        default=AssignmentFilterType.NONE,
+        alias="deviceAndAppManagementAssignmentFilterType",
+    )
+
+
+class AllLicensedUsersAssignmentTarget(AssignmentTarget):
+    odata_type: Literal["#microsoft.graph.allLicensedUsersAssignmentTarget"] = Field(
+        default="#microsoft.graph.allLicensedUsersAssignmentTarget",
+        alias="@odata.type",
+    )
+    assignment_filter_id: str | None = Field(
+        default=None,
+        alias="deviceAndAppManagementAssignmentFilterId",
+    )
+    assignment_filter_type: AssignmentFilterType = Field(
+        default=AssignmentFilterType.NONE,
+        alias="deviceAndAppManagementAssignmentFilterType",
+    )
 
 
 class FilteredGroupAssignmentTarget(AssignmentTarget):

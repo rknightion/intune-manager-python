@@ -43,7 +43,7 @@ class DeviceService:
     ) -> None:
         self._client_factory = client_factory
         self._repository = repository
-        self._default_ttl = timedelta(minutes=15)
+        self._default_ttl = timedelta(minutes=45)
         self._validator = GraphResponseValidator("devices")
         self._chunk_size = 200
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
+
+import asyncio
 
 from intune_manager.data import MobileAppAssignment
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.requests import (
+    BETA_VERSION,
     GraphRequest,
     mobile_app_assign_request,
     mobile_app_assignment_delete_request,
@@ -16,6 +19,7 @@ from intune_manager.services.base import (
     ServiceErrorEvent,
     run_optimistic_mutation,
 )
+from intune_manager.graph.errors import GraphAPIError, GraphErrorCategory
 from intune_manager.utils import CancellationError, CancellationToken, get_logger
 
 
@@ -176,43 +180,201 @@ class AssignmentService:
             logger.debug("Assignment diff is noop", app_id=app_id)
             return
 
+        requests: list[GraphRequest] = []
         payload_assignments = [
-            assignment.to_graph() for assignment in diff.to_create
-        ] + [update.desired.to_graph() for update in diff.to_update]
-
+            _normalized_assignment_payload(assignment) for assignment in diff.to_create
+        ] + [
+            _normalized_assignment_payload(update.desired) for update in diff.to_update
+        ]
         if payload_assignments:
-            request = mobile_app_assign_request(app_id, payload_assignments)
-            await self._client_factory.request_json(
-                request.method,
-                request.url,
-                json_body=request.body,
-                headers=request.headers,
-                api_version=request.api_version,
-                cancellation_token=cancellation_token,
-            )
-            logger.debug(
-                "Assignments upserted",
-                app_id=app_id,
-                created=len(diff.to_create),
-                updated=len(diff.to_update),
-            )
+            requests.append(mobile_app_assign_request(app_id, payload_assignments))
 
-        delete_requests: list[GraphRequest] = []
         for assignment in diff.to_delete:
             if not assignment.id:
                 continue
-            delete_requests.append(
-                mobile_app_assignment_delete_request(app_id, assignment.id),
+            requests.append(mobile_app_assignment_delete_request(app_id, assignment.id))
+
+        if not requests:
+            logger.debug("Assignment diff contained no actionable requests", app_id=app_id)
+            return
+
+        await self._execute_batch_with_retry(
+            requests,
+            cancellation_token=cancellation_token,
+        )
+        logger.debug(
+            "Assignments applied via batch",
+            app_id=app_id,
+            created=len(diff.to_create),
+            updated=len(diff.to_update),
+            deleted=len(diff.to_delete),
+        )
+
+    async def apply_diffs(
+        self,
+        app_diffs: Iterable[tuple[str, AssignmentDiff]],
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        """Apply assignment diffs for multiple apps using batched /batch requests."""
+
+        requests: list[GraphRequest] = []
+        app_by_request: dict[str, str] = {}
+        last_error_messages: list[str] = []
+
+        for app_id, diff in app_diffs:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+            if diff.is_noop:
+                continue
+            payload_assignments = [
+                _normalized_assignment_payload(assignment) for assignment in diff.to_create
+            ] + [
+                _normalized_assignment_payload(update.desired) for update in diff.to_update
+            ]
+            if payload_assignments:
+                req = mobile_app_assign_request(app_id, payload_assignments)
+                requests.append(req)
+            for assignment in diff.to_delete:
+                if not assignment.id:
+                    continue
+                requests.append(
+                    mobile_app_assignment_delete_request(app_id, assignment.id)
+                )
+
+        if not requests:
+            logger.debug("No assignment changes to apply across apps")
+            return
+
+        # Chunk to Graph batch limit (20 requests per batch)
+        errors: list[str] = []
+        last_error_messages: list[str] = []
+        idx = 0
+        while idx < len(requests):
+            chunk = requests[idx : idx + 20]
+            # Assign stable IDs for mapping responses to apps
+            for offset, req in enumerate(chunk, start=1):
+                req_id = f"{idx+offset}"
+                req.request_id = req_id
+                app_id = _app_id_from_request(req)
+                if app_id:
+                    app_by_request[req_id] = app_id
+
+            try:
+                responses = await self._execute_batch_with_retry(
+                    chunk,
+                    cancellation_token=cancellation_token,
+                )
+            except GraphAPIError as exc:
+                last_error_messages.append(str(exc))
+                raise
+
+            for response in responses:
+                status = int(response.get("status", 0))
+                if status >= 400:
+                    req_id = response.get("id")
+                    app_id = app_by_request.get(req_id, "unknown app")
+                    body = response.get("body")
+                    message = f"{app_id} failed ({status}): {body or response}"
+                    logger.error("Assignment batch item failed", app_id=app_id, status=status, body=body)
+                    errors.append(message)
+            idx += 20
+
+        if errors:
+            logger.error("Assignment batch failed", errors=errors)
+            raise GraphAPIError(
+                message="; ".join(errors or last_error_messages or ["Batch assignment failed"]),
+                category=GraphErrorCategory.UNKNOWN,
             )
 
-        if delete_requests:
-            await self._client_factory.execute_batch(
-                delete_requests,
+    async def _execute_batch_with_retry(
+        self,
+        requests: list[GraphRequest],
+        *,
+        max_retries: int = 2,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[dict[str, Any]]:
+        """Execute assignment Graph requests via /batch with basic retry on 429/503."""
+
+        attempt = 0
+        pending: list[GraphRequest] = list(requests)
+        delay = 0.0
+        successes: list[dict[str, Any]] = []
+        last_errors: list[str] = []
+
+        while pending:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            # Ensure stable IDs for mapping responses
+            for idx, req in enumerate(pending, start=1):
+                if req.request_id is None:
+                    req.request_id = str(idx)
+
+            result = await self._client_factory.execute_batch(
+                pending,
+                api_version=BETA_VERSION,
                 cancellation_token=cancellation_token,
             )
-            logger.debug(
-                "Assignments deleted", app_id=app_id, deleted=len(delete_requests)
-            )
+
+            raw_responses = result.get("responses", []) if isinstance(result, dict) else []
+            responses = {resp.get("id"): resp for resp in raw_responses}
+            retry: list[GraphRequest] = []
+            retry_after_seconds = 0.0
+            errors: list[str] = []
+
+            for req in pending:
+                resp = responses.get(req.request_id)
+                if resp is None:
+                    errors.append(f"No batch response for request {req.request_id}")
+                    continue
+                status = int(resp.get("status", 0))
+                if status in (429, 503):
+                    headers = resp.get("headers") or {}
+                    retry_header = headers.get("Retry-After") or headers.get(
+                        "retry-after"
+                    )
+                    try:
+                        retry_after_seconds = max(
+                            retry_after_seconds, float(retry_header or 0.0)
+                        )
+                    except ValueError:
+                        retry_after_seconds = max(retry_after_seconds, 0.0)
+                    retry.append(req)
+                    continue
+                if status >= 400:
+                    body = resp.get("body")
+                    errors.append(
+                        f"{req.method} {req.url} failed with {status}: {body or resp}"
+                    )
+                else:
+                    successes.append(resp)
+            if errors:
+                last_errors = errors
+                logger.error("Batch request failed", errors=errors)
+                raise GraphAPIError(
+                    message="; ".join(errors),
+                    category=GraphErrorCategory.UNKNOWN,
+                )
+
+            if not retry:
+                return successes
+
+            attempt += 1
+            if attempt > max_retries:
+                raise GraphAPIError(
+                    message=(
+                        f"Batch assignment retries exhausted ({len(retry)} request(s) still failing). "
+                        f"Errors: {'; '.join(last_errors)}"
+                    ),
+                    category=GraphErrorCategory.RATE_LIMIT,
+                    status_code=429,
+                )
+            delay = max(retry_after_seconds, min(2**attempt, 10.0))
+            pending = retry
+
+        return successes
 
     # ---------------------------------------------------------------- Backups
 
@@ -247,6 +409,23 @@ def _assignments_equal(
     payload_a.pop("id", None)
     payload_b.pop("id", None)
     return payload_a == payload_b
+
+
+def _app_id_from_request(request: GraphRequest) -> str | None:
+    """Extract mobile app ID from request URL (assign/assignments endpoints)."""
+
+    url = request.url or ""
+    if "/mobileApps/" not in url:
+        return None
+    tail = url.split("/mobileApps/", maxsplit=1)[-1]
+    return tail.split("/", maxsplit=1)[0] or None
+
+
+def _normalized_assignment_payload(assignment: MobileAppAssignment) -> dict[str, Any]:
+    payload = assignment.to_graph()
+    if not payload.get("id"):
+        payload.pop("id", None)
+    return payload
 
 
 __all__ = [

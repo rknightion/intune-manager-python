@@ -60,6 +60,8 @@ DEFAULT_VERSION_OVERRIDES: dict[str, str] = {
     "/deviceManagement/assignmentFilters": GraphAPIVersion.BETA.value,
     "/deviceManagement/auditEvents": GraphAPIVersion.BETA.value,
     "/deviceManagement/managedDevices": GraphAPIVersion.BETA.value,
+    # Use beta to ensure Windows/Android/WinGet app types are returned
+    "/deviceAppManagement/mobileApps": GraphAPIVersion.BETA.value,
 }
 
 
@@ -520,7 +522,17 @@ class GraphClientFactory:
             api_version=api_version,
             cancellation_token=cancellation_token,
         )
-        return response.json()
+        if response.status_code == 204:
+            return {}
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except Exception:
+            # Some Graph actions (e.g., assign) legitimately return empty bodies even with 2xx codes.
+            if response.status_code and 200 <= response.status_code < 300:
+                return {}
+            raise
 
     async def request_bytes(
         self,
@@ -756,7 +768,11 @@ class GraphClientFactory:
                 return request
 
             self._http_client = RateLimitedAsyncClient(
-                headers={"User-Agent": self._config.user_agent},
+                headers={
+                    "User-Agent": self._config.user_agent,
+                    # Request full metadata so @odata.type is present for derived types
+                    "Accept": "application/json;odata.metadata=full",
+                },
                 auth=bearer_auth,
                 telemetry_callback=callback,
                 timeout=httpx.Timeout(

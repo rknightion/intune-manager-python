@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFileDialog,
+    QDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -40,11 +41,14 @@ from intune_manager.data import (
 from intune_manager.data.models.application import MobileAppPlatform
 from intune_manager.data.models.assignment import (
     AssignmentIntent,
-    FilteredGroupAssignmentTarget,
     GroupAssignmentTarget,
+    AllDevicesAssignmentTarget,
+    AllLicensedUsersAssignmentTarget,
+    AssignmentTarget,
 )
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.applications import InstallSummaryEvent
+from intune_manager.graph.errors import AuthenticationError
 from intune_manager.utils import (
     format_file_size,
     format_license_count,
@@ -60,14 +64,23 @@ from intune_manager.ui.components import (
     format_relative_timestamp,
     make_toolbar_button,
 )
-from intune_manager.utils.app_types import get_display_name, is_compatible
+from intune_manager.utils.app_types import (
+    PLATFORM_TYPE_COMPATIBILITY,
+    get_display_name,
+    is_compatible,
+)
 from intune_manager.utils.enums import enum_text
 from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
 from intune_manager.ui.assignments.assignment_editor import AssignmentEditorDialog
 from .controller import ApplicationController
 from .models import ApplicationFilterProxyModel, ApplicationTableModel
-from .bulk_assignment import BulkAssignmentDialog, BulkAssignmentPlan
+from .bulk_assignment import (
+    BulkAssignmentDialog,
+    BulkAssignmentPlan,
+    ALL_DEVICES_ID,
+    ALL_USERS_ID,
+)
 
 
 def _toast_level_for(severity: ErrorSeverity) -> ToastLevel:
@@ -595,6 +608,9 @@ class ApplicationsWidget(PageScaffold):
         self._command_unregister: Callable[[], None] | None = None
         self._cached_groups: list[DirectoryGroup] = []
         self._cached_filters: list[AssignmentFilter] = []
+        self._auth_warning_shown = False
+        settings = SettingsManager().load()
+        self._tenant_id = settings.tenant_id if settings else None
 
         # Filter message label for showing incompatibility warnings
         self._filter_message = QLabel()
@@ -640,6 +656,14 @@ class ApplicationsWidget(PageScaffold):
         self.destroyed.connect(lambda *_: self._cleanup())
 
     # ----------------------------------------------------------------- UI setup
+
+    def _active_tenant_id(self) -> str | None:
+        """Resolve the current tenant ID from settings (cached for convenience)."""
+
+        settings = SettingsManager().load()
+        if settings and settings.tenant_id:
+            self._tenant_id = settings.tenant_id
+        return self._tenant_id
 
     def _build_filters(self) -> None:
         filters = QWidget()
@@ -732,12 +756,19 @@ class ApplicationsWidget(PageScaffold):
 
     def _load_cached_apps(self) -> None:
         self._list_message.clear()
-        apps = list(self._controller.list_cached())
-        self._last_refresh = self._controller.last_refresh()
+        tenant_id = self._active_tenant_id()
+        apps = list(self._controller.list_cached(tenant_id=tenant_id))
+        self._last_refresh = self._controller.last_refresh(tenant_id=tenant_id)
         self._set_apps_for_view(
             apps,
             preserve_selection=self._selected_app.id if self._selected_app else None,
         )
+        if apps:
+            self._context.run_async(
+                self._background_fetch_icons_async(
+                    apps, tenant_id=tenant_id
+                )
+            )
         self._load_groups_and_filters()
 
     def _load_groups_and_filters(self) -> None:
@@ -753,6 +784,7 @@ class ApplicationsWidget(PageScaffold):
         from_cache: bool,
     ) -> None:
         self._list_message.clear()
+        self._auth_warning_shown = False
         apps_list = list(apps)
         selected_id = self._selected_app.id if self._selected_app else None
         self._last_refresh = self._controller.last_refresh()
@@ -769,7 +801,11 @@ class ApplicationsWidget(PageScaffold):
 
         # Trigger background icon fetching for all apps
         if apps_list:
-            self._context.run_async(self._background_fetch_icons_async(apps_list))
+            self._context.run_async(
+                self._background_fetch_icons_async(
+                    apps_list, tenant_id=self._active_tenant_id()
+                )
+            )
 
     def _set_apps_for_view(
         self,
@@ -802,6 +838,20 @@ class ApplicationsWidget(PageScaffold):
         self._context.clear_busy()
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
+        if isinstance(event.error, AuthenticationError):
+            if not self._auth_warning_shown:
+                self._list_message.display(
+                    "Sign in required to load applications.",
+                    level=ToastLevel.WARNING,
+                    detail="Your Intune session expired. Open Settings and run Test sign-in to continue.",
+                )
+                self._context.show_notification(
+                    "Authentication required. Open Settings to sign in.",
+                    level=ToastLevel.WARNING,
+                    duration_ms=6000,
+                )
+                self._auth_warning_shown = True
+            return
         descriptor = describe_exception(event.error)
         detail_lines = [descriptor.detail]
         if descriptor.transient:
@@ -878,18 +928,16 @@ class ApplicationsWidget(PageScaffold):
             )
             return
         self._list_message.clear()
-        self._context.set_busy("Refreshing applications…")
+        self._context.set_busy("Refreshing applications…", blocking=False)
         self._refresh_button.setEnabled(False)
         self._force_refresh_button.setEnabled(False)
         self._context.run_async(self._refresh_async(force=force))
 
     async def _refresh_async(self, *, force: bool) -> None:
         try:
-            await self._controller.refresh(force=force)
+            tenant_id = self._active_tenant_id()
+            await self._controller.refresh(tenant_id=tenant_id, force=force)
         except Exception as exc:  # noqa: BLE001
-            self._context.clear_busy()
-            self._refresh_button.setEnabled(True)
-            self._force_refresh_button.setEnabled(True)
             descriptor = describe_exception(exc)
             detail_lines = [descriptor.detail]
             if descriptor.transient:
@@ -909,6 +957,11 @@ class ApplicationsWidget(PageScaffold):
                 toast_message,
                 level=level,
             )
+        finally:
+            self._context.clear_busy()
+            self._refresh_button.setEnabled(True)
+            self._force_refresh_button.setEnabled(True)
+            self._update_action_buttons()
 
     def _handle_install_summary_clicked(self) -> None:
         app = self._selected_app
@@ -949,10 +1002,10 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.ERROR,
             )
 
-    async def _background_fetch_icons_async(self, apps: list[MobileApp]) -> None:
+    async def _background_fetch_icons_async(self, apps: list[MobileApp], *, tenant_id: str | None = None) -> None:
         """Fetch icons in background for all apps without blocking UI."""
         try:
-            await self._controller.background_fetch_icons(apps)
+            await self._controller.background_fetch_icons(apps, tenant_id=tenant_id)
         except Exception as exc:  # noqa: BLE001
             # Silently log background fetch failures
             from intune_manager.utils import get_logger
@@ -1041,7 +1094,7 @@ class ApplicationsWidget(PageScaffold):
             )
             return
 
-        if dialog.exec() == dialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             desired = dialog.desired_assignments()
             diff = self._controller.diff_assignments(
                 current=assignments, desired=desired
@@ -1193,28 +1246,37 @@ class ApplicationsWidget(PageScaffold):
         )
 
     async def _apply_bulk_assignments_async(self, plan: BulkAssignmentPlan) -> None:
-        successes = 0
-        failures: list[str] = []
         total_apps = len(plan.apps)
+        if total_apps == 0 or not plan.groups:
+            return
+
+        self._context.set_busy("Applying assignments to selected apps…")
+        failures: list[str] = []
+        applied = 0
+
         try:
-            if total_apps == 0 or not plan.groups:
-                return
-            for index, app in enumerate(plan.apps, start=1):
-                label = app.display_name or app.id or "Application"
-                self._context.set_busy(
-                    f"Applying assignments… {index}/{total_apps} — {label}",
-                )
+            app_diffs: list[tuple[str, AssignmentDiff]] = []
+            for app in plan.apps:
                 current_assignments = list(app.assignments or [])
                 desired_assignments = list(current_assignments)
                 updated = False
                 for group in plan.groups:
                     if not group.id:
                         continue
+                    target_type = "#microsoft.graph.groupAssignmentTarget"
+                    target_group_id: str | None = group.id
+                    if group.id == ALL_DEVICES_ID:
+                        target_type = "#microsoft.graph.allDevicesAssignmentTarget"
+                        target_group_id = None
+                    elif group.id == ALL_USERS_ID:
+                        target_type = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                        target_group_id = None
                     existing = self._find_assignment(
                         current_assignments,
-                        group.id,
+                        target_group_id,
                         plan.filter_id,
                         plan.intent,
+                        target_type=target_type,
                     )
                     if existing:
                         if (
@@ -1230,14 +1292,23 @@ class ApplicationsWidget(PageScaffold):
                             ]
                             updated = True
                         continue
-                    target = (
-                        FilteredGroupAssignmentTarget(
+                    target: AssignmentTarget
+                    if group.id == ALL_DEVICES_ID:
+                        target = AllDevicesAssignmentTarget(
+                            assignment_filter_id=plan.filter_id,
+                            assignment_filter_type=plan.filter_mode,
+                        )
+                    elif group.id == ALL_USERS_ID:
+                        target = AllLicensedUsersAssignmentTarget(
+                            assignment_filter_id=plan.filter_id,
+                            assignment_filter_type=plan.filter_mode,
+                        )
+                    else:
+                        target = GroupAssignmentTarget(
                             group_id=group.id,
                             assignment_filter_id=plan.filter_id,
+                            assignment_filter_type=plan.filter_mode,
                         )
-                        if plan.filter_id
-                        else GroupAssignmentTarget(group_id=group.id)
-                    )
                     new_assignment = MobileAppAssignment.model_construct(
                         id="",
                         intent=plan.intent,
@@ -1254,12 +1325,23 @@ class ApplicationsWidget(PageScaffold):
                 )
                 if diff is None or diff.is_noop:
                     continue
-                try:
-                    await self._controller.apply_diff(app.id, diff)
-                    successes += 1
-                except Exception as exc:  # noqa: BLE001
-                    failures.append(f"{label}: {exc}")
-            if successes:
+                app_diffs.append((app.id, diff))
+
+            if not app_diffs:
+                self._context.show_notification(
+                    "No assignment changes were necessary.",
+                    level=ToastLevel.INFO,
+                    duration_ms=4000,
+                )
+                return
+
+            try:
+                await self._controller.apply_diffs(app_diffs)
+                applied = len(app_diffs)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(str(exc))
+
+            if applied:
                 await self._controller.refresh(force=True, include_assignments=True)
         finally:
             self._context.clear_busy()
@@ -1267,40 +1349,36 @@ class ApplicationsWidget(PageScaffold):
             self._force_refresh_button.setEnabled(True)
             self._update_action_buttons()
 
-        if not total_apps:
-            return
         if failures:
             self._context.show_notification(
                 f"Assignments applied with {len(failures)} failure(s). Check logs for details.",
                 level=ToastLevel.WARNING,
                 duration_ms=8000,
             )
-        elif successes:
+        elif applied:
             self._context.show_notification(
-                f"Assignments applied to {successes} application(s).",
+                f"Assignments applied to {applied} application(s).",
                 level=ToastLevel.SUCCESS,
-            )
-        else:
-            self._context.show_notification(
-                "No assignment changes were necessary.",
-                level=ToastLevel.INFO,
-                duration_ms=4000,
             )
 
     @staticmethod
     def _find_assignment(
         assignments: Iterable[MobileAppAssignment],
-        group_id: str,
+        group_id: str | None,
         filter_id: str | None,
         intent: AssignmentIntent,
+        target_type: str | None = None,
     ) -> MobileAppAssignment | None:
         for assignment in assignments:
             if assignment.intent != intent:
                 continue
             target = assignment.target
-            target_group = getattr(target, "group_id", None)
-            if target_group != group_id:
+            if target_type and getattr(target, "odata_type", None) != target_type:
                 continue
+            if group_id is not None:
+                target_group = getattr(target, "group_id", None)
+                if target_group != group_id:
+                    continue
             target_filter = getattr(target, "assignment_filter_id", None)
             if (filter_id or None) != (target_filter or None):
                 continue
@@ -1397,12 +1475,30 @@ class ApplicationsWidget(PageScaffold):
 
         # Extract all platform+type combinations from apps
         platform_type_combinations = {}  # key: (platform, type), value: count
+        platforms_present: set[str] = set()
         for app in apps:
             platform = enum_text(app.platform_type) or ""
             app_type = app.app_type or ""
             if platform and app_type:
                 key = (platform, app_type)
                 platform_type_combinations[key] = platform_type_combinations.get(key, 0) + 1
+            if platform:
+                platforms_present.add(platform.lower())
+
+        # Seed combinations for platforms we have data for, so picker shows all known types
+        for platform in platforms_present:
+            for app_type, supported_platforms in PLATFORM_TYPE_COMPATIBILITY.items():
+                if platform in supported_platforms:
+                    key = (
+                        {
+                            "ios": "iOS",
+                            "macos": "macOS",
+                            "windows": "Windows",
+                            "android": "Android",
+                        }.get(platform, platform.title()),
+                        app_type,
+                    )
+                    platform_type_combinations.setdefault(key, 0)
 
         # Create display names for type filter
         type_options = []

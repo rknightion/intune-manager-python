@@ -26,6 +26,9 @@ from intune_manager.data.models.assignment import (
 )
 from intune_manager.utils.sanitize import sanitize_search_text
 
+ALL_DEVICES_ID = "__ALL_DEVICES__"
+ALL_USERS_ID = "__ALL_USERS__"
+
 
 @dataclass(slots=True)
 class BulkAssignmentPlan:
@@ -58,7 +61,17 @@ class BulkAssignmentDialog(QDialog):
         self.resize(720, 620)
 
         self._apps = [app for app in apps if app.id]
-        self._groups = [group for group in groups if group.id]
+        special_groups = [
+            DirectoryGroup.model_construct(
+                id=ALL_DEVICES_ID,
+                display_name="All devices",
+            ),
+            DirectoryGroup.model_construct(
+                id=ALL_USERS_ID,
+                display_name="All users",
+            ),
+        ]
+        self._groups = special_groups + [group for group in groups if group.id]
         self._filters = filters
         self._plan: BulkAssignmentPlan | None = None
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import time
 from typing import Callable, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import (
@@ -203,6 +204,8 @@ class ToastManager(QObject):
         self._container.setObjectName("ToastContainer")
         self._container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._container.hide()
+        self._last_toast: tuple[str, ToastLevel, float] | None = None
+        self._dedupe_window_s = 4.0
 
         layout = QVBoxLayout(self._container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -227,14 +230,28 @@ class ToastManager(QObject):
         if not normalized:
             logger.debug("Skipping empty toast message", level=level.value)
             return None
+        now = time.monotonic()
+        if self._last_toast is not None:
+            last_text, last_level, last_timestamp = self._last_toast
+            if (
+                normalized == last_text
+                and level == last_level
+                and now - last_timestamp < self._dedupe_window_s
+            ):
+                logger.debug(
+                    "Skipping duplicate toast",
+                    level=level.value,
+                    message=normalized,
+                )
+                return None
 
         resolved_sticky = sticky
         if resolved_sticky is None:
-            resolved_sticky = level in {ToastLevel.ERROR, ToastLevel.WARNING}
+            resolved_sticky = False
 
         resolved_duration = duration_ms
         if resolved_duration is None and not resolved_sticky:
-            resolved_duration = 10_000
+            resolved_duration = 7_000
 
         message = ToastMessage(
             text=normalized,
@@ -273,6 +290,7 @@ class ToastManager(QObject):
             logger.info(normalized, level=level.value)
 
         toast.fade_in()
+        self._last_toast = (normalized, level, now)
         if resolved_duration is not None and resolved_duration > 0:
             timer = QTimer(toast)
             timer.setSingleShot(True)

@@ -15,10 +15,12 @@ APP_TYPE_MAPPING = {
     "iosVppApp": "VPP",
     "managedIOSLobApp": "Managed LOB",
     "managedIOSStoreApp": "Managed Store",
+    "managedIOSUniversalApp": "Managed Store",
     # Android
     "androidStoreApp": "Store",
     "androidLobApp": "LOB",
     "androidManagedStoreApp": "Managed Store",
+    "managedAndroidStoreApp": "Managed Store",
     "androidForWorkApp": "For Work",
     "managedAndroidLobApp": "Managed LOB",
     "androidManagedStoreWebApp": "Web",
@@ -26,11 +28,13 @@ APP_TYPE_MAPPING = {
     "macOSLobApp": "LOB",
     "macOSDmgApp": "DMG",
     "macOSPkgApp": "PKG",
+    "macOsVppApp": "VPP",
     "macOSOfficeSuiteApp": "Office Suite",
     "macOSMicrosoftDefenderApp": "Defender",
     "macOSMicrosoftEdgeApp": "Edge",
     # Windows
     "win32LobApp": "LOB",
+    "windowsAppX": "AppX",
     "winGetApp": "WinGet",
     "windowsMobileMSI": "MSI",
     "windowsUniversalAppX": "Universal AppX",
@@ -38,28 +42,34 @@ APP_TYPE_MAPPING = {
     "windowsStoreApp": "Store",
     "microsoftStoreForBusinessApp": "Store for Business",
     "officeSuiteApp": "Office Suite",
+    "windowsPhone81AppX": "AppX",
+    "windowsPhone81StoreApp": "Store",
+    "windowsPhone81XAP": "AppX",
     # Cross-platform
     "webApp": "Web",
     "managedMobileLobApp": "Managed LOB",
 }
+
+_APP_TYPE_MAPPING_LOWER = {key.lower(): value for key, value in APP_TYPE_MAPPING.items()}
 
 # Platform compatibility: which app types are valid for which platforms
 # Key: app type, Value: list of compatible platforms
 PLATFORM_TYPE_COMPATIBILITY: dict[str, list[str]] = {
     "Store": ["ios", "android", "windows"],
     "LOB": ["ios", "android", "macos", "windows"],
-    "VPP": ["ios"],
+    "VPP": ["ios", "macos"],
     "Managed LOB": ["ios", "android"],
     "Managed Store": ["ios", "android"],
     "For Work": ["android"],
-    "Web": ["android", "windows", "unknown"],
+    "Web": ["ios", "android", "macos", "windows", "unknown"],
     "DMG": ["macos"],
     "PKG": ["macos"],
     "Office Suite": ["macos", "windows"],
     "Defender": ["macos"],
-    "Edge": ["macos"],
+    "Edge": ["macos", "windows"],
     "WinGet": ["windows"],
     "MSI": ["windows"],
+    "AppX": ["windows"],
     "Universal AppX": ["windows"],
     "Store for Business": ["windows"],
 }
@@ -89,7 +99,9 @@ def extract_app_type(odata_type: str | None) -> str | None:
     # Remove the #microsoft.graph. prefix
     type_name = odata_type.replace("#microsoft.graph.", "")
 
-    return APP_TYPE_MAPPING.get(type_name)
+    return APP_TYPE_MAPPING.get(type_name) or _APP_TYPE_MAPPING_LOWER.get(
+        type_name.lower()
+    )
 
 
 def get_display_name(platform: str | None, app_type: str | None) -> str:

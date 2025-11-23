@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,16 +12,23 @@ from intune_manager.data import (
     MobileAppAssignment,
     MobileAppRepository,
 )
+from intune_manager.data.models.application import MobileAppPlatform
 from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph import GraphAPIError
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.requests import (
+    BETA_VERSION,
     mobile_app_assignments_request,
     mobile_app_icon_request,
     mobile_app_install_summary_request,
 )
 from intune_manager.services.base import EventHook, RefreshEvent, ServiceErrorEvent
 from intune_manager.utils import CancellationError, CancellationToken, get_logger
+from intune_manager.utils.app_types import (
+    PLATFORM_TYPE_COMPATIBILITY,
+    extract_app_type,
+)
+from urllib.parse import urlparse, parse_qs
 
 
 logger = get_logger(__name__)
@@ -93,8 +101,14 @@ class ApplicationService:
         )
         if cancellation_token:
             cancellation_token.raise_if_cancelled()
-        if not force and not self.is_cache_stale(tenant_id=tenant_id):
-            cached = self.list_cached(tenant_id=tenant_id)
+        cached = self.list_cached(tenant_id=tenant_id)
+        needs_metadata_refresh = any(
+            app.platform_type is None
+            or app.platform_type is MobileAppPlatform.UNKNOWN
+            or app.app_type is None
+            for app in cached
+        )
+        if not force and not self.is_cache_stale(tenant_id=tenant_id) and not needs_metadata_refresh:
             logger.info(
                 "Applications returning cached data",
                 tenant_id=tenant_id,
@@ -108,6 +122,11 @@ class ApplicationService:
                 ),
             )
             return cached
+        if needs_metadata_refresh:
+            logger.info(
+                "Application cache missing metadata; forcing refresh",
+                tenant_id=tenant_id,
+            )
 
         expands: list[str] = []
         if include_assignments:
@@ -134,6 +153,7 @@ class ApplicationService:
                 if cancellation_token:
                     cancellation_token.raise_if_cancelled()
                 payload = item if isinstance(item, dict) else {"value": item}
+                raw_odata = payload.get("@odata.type")
 
                 # Debug logging to investigate missing platformType
                 if len(apps) < 3:  # Only log first few apps
@@ -141,7 +161,7 @@ class ApplicationService:
                         "Graph API app payload fields",
                         app_id=payload.get("id"),
                         display_name=payload.get("displayName"),
-                        odata_type=payload.get("@odata.type"),
+                        odata_type=raw_odata,
                         has_platform_type="platformType" in payload,
                         platform_type_value=payload.get("platformType"),
                     )
@@ -150,6 +170,35 @@ class ApplicationService:
                 if model is None:
                     invalid_count += 1
                     continue
+
+                model = self._hydrate_missing_metadata(model)
+
+                # Ensure app_type/platform populated even if cached payload omits @odata.type
+                updates: dict[str, Any] = {}
+                if raw_odata:
+                    if model.app_type is None:
+                        inferred_type = extract_app_type(raw_odata)
+                        if inferred_type:
+                            updates["app_type"] = inferred_type
+                    if model.platform_type is None:
+                        lower = raw_odata.lower()
+                        platform = None
+                        if "ios" in lower:
+                            platform = "ios"
+                        elif "macos" in lower or "macosx" in lower:
+                            platform = "macOS"
+                        elif any(key in lower for key in ("windows", "win32", "win10")):
+                            platform = "windows"
+                        elif "android" in lower:
+                            platform = "android"
+                        elif "web" in lower:
+                            platform = "unknown"
+                        if platform:
+                            updates["platform_type"] = platform
+
+                if updates:
+                    model = model.model_copy(update=updates)
+
                 apps.append(model)
 
             if cancellation_token:
@@ -266,11 +315,88 @@ class ApplicationService:
         if not force:
             cached = self._attachments.get(cache_key, tenant_id=tenant_id)
             if cached:
+                self.icon_cached.emit(cached)
                 return cached
+
+        blob = await self._fetch_icon_from_metadata(
+            app_id, tenant_id=tenant_id, cancellation_token=cancellation_token
+        )
+        if blob is None:
+            blob = await self._fetch_icon_via_media_endpoint(
+                app_id,
+                size=size,
+                cancellation_token=cancellation_token,
+                tenant_id=tenant_id,
+            )
+        if blob is None:
+            return None
+        metadata = self._attachments.store(
+            cache_key,
+            blob,
+            tenant_id=tenant_id,
+            category="mobile_app_icon",
+        )
+        self.icon_cached.emit(metadata)
+        logger.debug("Cached app icon", app_id=app_id, size=len(blob))
+        return metadata
+
+    async def _fetch_icon_from_metadata(
+        self,
+        app_id: str,
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> bytes | None:
+        """Fetch an app icon by reading the inline largeIcon payload."""
+
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
+        path = f"/deviceAppManagement/mobileApps/{app_id}?$select=largeIcon"
+        try:
+            response = await self._client_factory.request_json(
+                "GET",
+                path,
+                api_version=BETA_VERSION,
+                cancellation_token=cancellation_token,
+            )
+        except CancellationError:
+            raise
+        except GraphAPIError as exc:
+            if getattr(exc, "status_code", None) in (400, 404):
+                logger.debug(
+                    "App icon metadata not available",
+                    app_id=app_id,
+                    status=exc.status_code,
+                )
+                return None
+            self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
+            raise
+
+        icon = response.get("largeIcon") if isinstance(response, dict) else None
+        if not isinstance(icon, dict):
+            return None
+        encoded = icon.get("value")
+        if not encoded:
+            return None
+        try:
+            return base64.b64decode(encoded)
+        except Exception:  # noqa: BLE001 - invalid/empty icon payload
+            logger.debug("Failed to decode app icon payload", app_id=app_id)
+            return None
+
+    async def _fetch_icon_via_media_endpoint(
+        self,
+        app_id: str,
+        *,
+        size: str = "large",
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> bytes | None:
+        """Fetch an app icon via the legacy $value media endpoint."""
 
         request = mobile_app_icon_request(app_id, size=size)  # type: ignore[arg-type]
         try:
-            blob = await self._client_factory.request_bytes(
+            return await self._client_factory.request_bytes(
                 request.method,
                 request.url,
                 headers=request.headers,
@@ -281,21 +407,14 @@ class ApplicationService:
             raise
         except GraphAPIError as exc:
             if getattr(exc, "status_code", None) in (404, 400):
-                logger.debug("App icon not available", app_id=app_id, status=exc.status_code)
+                logger.debug(
+                    "App icon not available via media endpoint",
+                    app_id=app_id,
+                    status=exc.status_code,
+                )
                 return None
             self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
             raise
-        if cancellation_token:
-            cancellation_token.raise_if_cancelled()
-        metadata = self._attachments.store(
-            cache_key,
-            blob,
-            tenant_id=tenant_id,
-            category="mobile_app_icon",
-        )
-        self.icon_cached.emit(metadata)
-        logger.debug("Cached app icon", app_id=app_id, size=len(blob))
-        return metadata
 
     async def background_fetch_icons(
         self,
@@ -317,12 +436,16 @@ class ApplicationService:
         """
         import asyncio
 
-        # Filter apps that need icons
-        apps_needing_icons = [
-            app
-            for app in apps
-            if app.id and not self._attachments.get(f"{app.id}:large", tenant_id=tenant_id)
-        ]
+        # Emit cached icons immediately so the UI can render without refetching
+        apps_needing_icons: list[MobileApp] = []
+        for app in apps:
+            if not app.id:
+                continue
+            cached = self._attachments.get(f"{app.id}:large", tenant_id=tenant_id)
+            if cached:
+                self.icon_cached.emit(cached)
+            else:
+                apps_needing_icons.append(app)
 
         if not apps_needing_icons:
             logger.debug("All app icons already cached")
@@ -371,6 +494,51 @@ class ApplicationService:
             )
 
         logger.info("Background icon fetch completed", fetched=len(apps_needing_icons))
+
+    def _hydrate_missing_metadata(self, app: MobileApp) -> MobileApp:
+        """Best-effort platform/type inference when Graph omits @odata.type."""
+
+        if app.platform_type and app.platform_type is not MobileAppPlatform.UNKNOWN and app.app_type:
+            return app
+
+        inferred_platform: str | None = None
+        inferred_type: str | None = None
+
+        for url in (app.information_url, app.app_store_url):
+            if not url:
+                continue
+            parsed = urlparse(url)
+            host = parsed.netloc.lower()
+            if "apps.apple.com" in host or "itunes.apple.com" in host:
+                query = parse_qs(parsed.query)
+                mt = ",".join(query.get("mt", []))
+                if "12" in mt or "mac" in parsed.path.lower():
+                    inferred_platform = "macOS"
+                elif not inferred_platform:
+                    inferred_platform = "ios"
+                if inferred_platform == "macOS":
+                    inferred_type = inferred_type or "Store"
+
+            if "microsoft.com" in host and "store" in parsed.path.lower():
+                inferred_platform = inferred_platform or "windows"
+                inferred_type = inferred_type or "Store"
+
+        updates: dict[str, Any] = {}
+        if inferred_platform and app.platform_type in (None, MobileAppPlatform.UNKNOWN):
+            updates["platform_type"] = inferred_platform
+        if inferred_type and not app.app_type:
+            updates["app_type"] = inferred_type
+
+        if (
+            "platform_type" not in updates
+            and app.platform_type in (None, MobileAppPlatform.UNKNOWN)
+            and app.app_type
+        ):
+            compatible_platforms = PLATFORM_TYPE_COMPATIBILITY.get(app.app_type)
+            if isinstance(compatible_platforms, list) and len(compatible_platforms) == 1:
+                updates["platform_type"] = compatible_platforms[0]
+
+        return app.model_copy(update=updates) if updates else app
 
 
 __all__ = ["ApplicationService", "InstallSummaryEvent"]

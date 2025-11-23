@@ -19,6 +19,7 @@ from PySide6.QtGui import QIcon
 from intune_manager.data import MobileApp
 from intune_manager.utils.enums import enum_text
 from intune_manager.utils.sanitize import sanitize_search_text
+from intune_manager.utils.app_types import get_display_name
 
 
 @dataclass(slots=True)
@@ -67,6 +68,13 @@ class ApplicationTableModel(QAbstractTableModel):
                 "platform_type",
                 "Platform",
                 lambda app: enum_text(app.platform_type),
+            ),
+            ApplicationColumn(
+                "app_type",
+                "Type",
+                lambda app: get_display_name(
+                    enum_text(app.platform_type), app.app_type
+                ),
             ),
             ApplicationColumn("publisher", "Publisher", lambda app: app.publisher),
             ApplicationColumn("owner", "Owner", lambda app: app.owner),

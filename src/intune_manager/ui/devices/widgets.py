@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from intune_manager.data import ManagedDevice
 from intune_manager.graph.requests import DeviceActionName
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
+from intune_manager.graph.errors import AuthenticationError
 from intune_manager.services.devices import (
     DeviceActionEvent,
     DeviceRefreshProgressEvent,
@@ -508,6 +509,8 @@ class DevicesWidget(PageScaffold):
         self._lazy_chunk_size = 400
         self._refresh_token_source: CancellationTokenSource | None = None
         self._refresh_in_progress = False
+        self._auto_refresh_triggered = False
+        self._auth_warning_shown = False
         self._last_refresh: datetime | None = None
 
         self._refresh_button = make_toolbar_button(
@@ -807,6 +810,20 @@ class DevicesWidget(PageScaffold):
         devices = self._controller.list_cached()
         self._last_refresh = self._controller.last_refresh()
         self._set_devices_for_view(devices, auto_select_first=True)
+        self._maybe_auto_refresh_stale()
+
+    def _maybe_auto_refresh_stale(self) -> None:
+        if self._auto_refresh_triggered:
+            return
+        if self._services.devices is None or self._refresh_in_progress:
+            return
+        sync_service = self._services.sync
+        if sync_service is not None and getattr(sync_service, "is_refreshing", False):
+            return
+        if not self._controller.is_cache_stale():
+            return
+        self._auto_refresh_triggered = True
+        self._start_refresh(force=False)
 
     def _handle_devices_refreshed(
         self,
@@ -814,6 +831,7 @@ class DevicesWidget(PageScaffold):
         from_cache: bool,
     ) -> None:
         self._finish_refresh(mark_finished=True)
+        self._auth_warning_shown = False
         devices_list = list(devices)
         previous_ids = set(self._selected_device_ids)
         auto_select_first = not previous_ids
@@ -828,9 +846,24 @@ class DevicesWidget(PageScaffold):
                 f"Loaded {len(devices_list):,} devices from Microsoft Graph.",
                 level=ToastLevel.SUCCESS,
             )
+        self._auto_refresh_triggered = False
 
     def _handle_service_error(self, event: ServiceErrorEvent) -> None:
         self._finish_refresh()
+        if isinstance(event.error, AuthenticationError):
+            if not self._auth_warning_shown:
+                self._list_message.display(
+                    "Sign in required to load devices.",
+                    level=ToastLevel.WARNING,
+                    detail="Your session expired. Open Settings and run Test sign-in to refresh the device list.",
+                )
+                self._context.show_notification(
+                    "Authentication required. Open Settings to sign in.",
+                    level=ToastLevel.WARNING,
+                    duration_ms=6000,
+                )
+                self._auth_warning_shown = True
+            return
         descriptor = describe_exception(event.error)
         detail_lines = [descriptor.detail]
         if descriptor.transient:

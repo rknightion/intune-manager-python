@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import AliasChoices, Field, model_validator
 
-from intune_manager.utils.app_types import extract_app_type
+from intune_manager.utils.app_types import (
+    PLATFORM_TYPE_COMPATIBILITY,
+    extract_app_type,
+)
 
 from .assignment import MobileAppAssignment
 from .common import TimestampedResource
@@ -172,12 +176,20 @@ class MobileApp(TimestampedResource):
                 platform = "ios"
             elif "macos" in odata_lower or "macosx" in odata_lower:
                 platform = "macOS"
-            elif "windows" in odata_lower or "win32" in odata_lower or "win10" in odata_lower:
+            elif (
+                "windows" in odata_lower
+                or "win32" in odata_lower
+                or "win10" in odata_lower
+                or "winget" in odata_lower
+            ):
                 platform = "windows"
             elif "android" in odata_lower:
                 platform = "android"
             elif "web" in odata_lower:
                 platform = "unknown"  # Web apps don't have a specific platform
+            elif "officesuiteapp" in odata_lower:
+                # Windows Office suite omits platform in @odata.type (macOS variant includes macOS)
+                platform = "windows"
 
             if platform:
                 data["platformType"] = platform
@@ -191,5 +203,40 @@ class MobileApp(TimestampedResource):
             app_type = extract_app_type(odata_type)
             if app_type:
                 data["app_type"] = app_type
+
+        # Fallback inference for payloads missing @odata.type (e.g., legacy caches)
+        file_name = data.get("fileName") or data.get("file_name")
+        if isinstance(file_name, str):
+            extension = Path(file_name).suffix.lower()
+            if data.get("platformType") is None:
+                if extension in {".pkg", ".dmg"}:
+                    data["platformType"] = "macOS"
+                elif extension in {".msi", ".appx", ".appxbundle", ".xap", ".intunewin"}:
+                    data["platformType"] = "windows"
+                elif extension == ".apk":
+                    data["platformType"] = "android"
+                elif extension == ".ipa":
+                    data["platformType"] = "ios"
+
+            if data.get("app_type") is None:
+                if extension == ".pkg":
+                    data["app_type"] = "PKG"
+                elif extension == ".dmg":
+                    data["app_type"] = "DMG"
+                elif extension == ".msi":
+                    data["app_type"] = "MSI"
+                elif extension in {".appx", ".appxbundle", ".xap"}:
+                    data["app_type"] = "AppX"
+                elif extension == ".intunewin":
+                    data["app_type"] = "LOB"
+                elif extension in {".apk", ".ipa"}:
+                    data["app_type"] = "LOB"
+
+        # If we still don't have a platform but know the app_type, infer when unambiguous
+        if data.get("platformType") is None:
+            app_type = data.get("app_type")
+            compatible_platforms = PLATFORM_TYPE_COMPATIBILITY.get(app_type or "")
+            if isinstance(compatible_platforms, list) and len(compatible_platforms) == 1:
+                data["platformType"] = compatible_platforms[0]
 
         return data

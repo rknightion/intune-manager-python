@@ -74,6 +74,7 @@ def mobile_app_assign_request(
         method="POST",
         url=path,
         body={"mobileAppAssignments": list(assignments)},
+        headers={"Content-Type": "application/json"},
         api_version=BETA_VERSION,
     )
 
@@ -180,8 +181,10 @@ def graph_request_to_batch_entry(
         "url": url,
     }
     if request.headers:
-        entry["headers"] = request.headers
+        entry["headers"] = dict(request.headers)
     if request.body is not None and request.method in {"POST", "PATCH", "PUT"}:
+        headers = entry.setdefault("headers", {})
+        headers.setdefault("Content-Type", "application/json")
         entry["body"] = request.body
     if request.depends_on:
         entry["dependsOn"] = list(request.depends_on)
@@ -193,15 +196,32 @@ def _normalise_batch_url(
     api_version: str | None,
     params: dict[str, Any] | None,
 ) -> str:
-    if not url.startswith("/"):
-        url = "/" + url
-    if api_version:
-        if not url.startswith(f"/{api_version}"):
-            url = f"/{api_version}{url}"
+    # Strip host/version to avoid double-prefixing when calling /$batch on a versioned root.
+    trimmed = url.strip()
+    host = "graph.microsoft.com"
+    for scheme in ("https://", "http://"):
+        prefix = f"{scheme}{host}"
+        if trimmed.startswith(prefix):
+            trimmed = trimmed[len(prefix) :]
+            break
+    if not trimmed.startswith("/"):
+        trimmed = "/" + trimmed
+
+    for prefix in ("/beta", "/v1.0", "/v1", "/1.0"):
+        if trimmed == prefix:
+            trimmed = "/"
+            break
+        candidate = f"{prefix}/"
+        if trimmed.startswith(candidate):
+            trimmed = trimmed[len(prefix) :]
+            if not trimmed.startswith("/"):
+                trimmed = "/" + trimmed
+            break
+
     if params:
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}{urlencode(params, doseq=True)}"
-    return url
+        separator = "&" if "?" in trimmed else "?"
+        trimmed = f"{trimmed}{separator}{urlencode(params, doseq=True)}"
+    return trimmed
 
 
 __all__ = [

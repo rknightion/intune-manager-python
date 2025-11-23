@@ -75,6 +75,11 @@ def mobile_app_to_record(
 def record_to_mobile_app(record: MobileAppRecord) -> MobileApp:
     payload = record.payload or {}
     payload.setdefault("id", record.id)
+    # Rehydrate derived fields when missing from payload
+    if record.app_type and "app_type" not in payload:
+        payload["app_type"] = record.app_type
+    if record.platform and "platformType" not in payload:
+        payload["platformType"] = record.platform
     return MobileApp.from_graph(payload)
 
 

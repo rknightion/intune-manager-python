@@ -125,6 +125,10 @@ class AssignmentCreateDialog(QDialog):
         self._group_combo.setEnabled(is_group and has_groups)
         self._filter_combo.setEnabled(is_group and has_filters)
         self._filter_mode_combo.setEnabled(is_group and has_filters)
+        if not is_group:
+            self._group_combo.setCurrentIndex(0)
+            self._filter_combo.setCurrentIndex(0)
+            self._filter_mode_combo.setCurrentIndex(0)
 
     def _sync_filter_mode(self) -> None:
         """Enable/disable filter mode based on whether a filter is selected."""

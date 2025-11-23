@@ -9,6 +9,7 @@ from .cache_health import (
 )
 from .models import (
     AllDevicesAssignmentTarget,
+    AllLicensedUsersAssignmentTarget,
     AssignmentFilter,
     AssignmentFilterPlatform,
     AssignmentFilterType,
@@ -67,6 +68,7 @@ __all__ = [
     "MobileAppPlatform",
     "AssignmentTarget",
     "AllDevicesAssignmentTarget",
+    "AllLicensedUsersAssignmentTarget",
     "AssignmentSettings",
     "AssignmentIntent",
     "AssignmentFilterType",

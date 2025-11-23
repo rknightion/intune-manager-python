@@ -46,6 +46,11 @@ class SyncService:
         }
         self.progress: EventHook[SyncProgressEvent] = EventHook()
         self.errors: EventHook[ServiceErrorEvent] = EventHook()
+        self._in_progress = False
+
+    @property
+    def is_refreshing(self) -> bool:
+        return self._in_progress
 
     async def refresh_all(
         self,
@@ -55,44 +60,51 @@ class SyncService:
         force: bool = False,
         cancellation_token: CancellationToken | None = None,
     ) -> None:
-        target_names = list(services or self._services.keys())
-        targets: Iterable[tuple[str, object]] = (
-            (name, self._services[name]) for name in target_names
-        )
-        total = len(target_names)
-        completed = 0
-
-        for name, service in targets:
-            if cancellation_token:
-                cancellation_token.raise_if_cancelled()
-            logger.info(
-                f"Starting sync phase: {name}",
-                tenant_id=tenant_id,
-                force=force,
-                phase=name,
+        if self._in_progress:
+            logger.info("Sync already in progress; skipping duplicate request")
+            return
+        self._in_progress = True
+        try:
+            target_names = list(services or self._services.keys())
+            targets: Iterable[tuple[str, object]] = (
+                (name, self._services[name]) for name in target_names
             )
-            try:
-                await self._refresh_single(
-                    service,
+            total = len(target_names)
+            completed = 0
+
+            for name, service in targets:
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
+                logger.info(
+                    f"Starting sync phase: {name}",
                     tenant_id=tenant_id,
                     force=force,
-                    cancellation_token=cancellation_token,
-                )
-                logger.info(
-                    f"Completed sync phase: {name}",
-                    tenant_id=tenant_id,
                     phase=name,
                 )
-            except CancellationError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Sync phase failed", phase=name)
-                self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
-            finally:
-                completed += 1
-                self.progress.emit(
-                    SyncProgressEvent(phase=name, completed=completed, total=total),
-                )
+                try:
+                    await self._refresh_single(
+                        service,
+                        tenant_id=tenant_id,
+                        force=force,
+                        cancellation_token=cancellation_token,
+                    )
+                    logger.info(
+                        f"Completed sync phase: {name}",
+                        tenant_id=tenant_id,
+                        phase=name,
+                    )
+                except CancellationError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Sync phase failed", phase=name)
+                    self.errors.emit(ServiceErrorEvent(tenant_id=tenant_id, error=exc))
+                finally:
+                    completed += 1
+                    self.progress.emit(
+                        SyncProgressEvent(phase=name, completed=completed, total=total),
+                    )
+        finally:
+            self._in_progress = False
 
     async def _refresh_single(
         self,

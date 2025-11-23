@@ -125,6 +125,45 @@ def test_mobile_app_platform_accepts_graph_casing() -> None:
     assert app.platform_type == MobileAppPlatform.IOS
 
 
+def test_mobile_app_infers_pkg_from_filename() -> None:
+    payload = {
+        "id": "app-2",
+        "displayName": "macOS PKG",
+        "fileName": "example.pkg",
+    }
+
+    app = MobileApp.from_graph(payload)
+
+    assert app.platform_type == MobileAppPlatform.MACOS
+    assert app.app_type == "PKG"
+
+
+def test_mobile_app_infers_windows_type_from_filename() -> None:
+    payload = {
+        "id": "app-3",
+        "displayName": "Installer",
+        "fileName": "installer.msi",
+    }
+
+    app = MobileApp.from_graph(payload)
+
+    assert app.platform_type == MobileAppPlatform.WINDOWS
+    assert app.app_type == "MSI"
+
+
+def test_mobile_app_infers_platform_for_winget_app() -> None:
+    payload = {
+        "id": "app-4",
+        "displayName": "Winget App",
+        "@odata.type": "#microsoft.graph.winGetApp",
+    }
+
+    app = MobileApp.from_graph(payload)
+
+    assert app.platform_type == MobileAppPlatform.WINDOWS
+    assert app.app_type == "WinGet"
+
+
 def test_directory_group_accepts_name_alias() -> None:
     payload = {
         "id": "group-1",
