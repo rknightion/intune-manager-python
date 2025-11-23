@@ -17,6 +17,18 @@ class AssignmentIntent(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AssignmentFilterType(StrEnum):
+    """Filter mode for assignment targeting.
+
+    - NONE: No filter applied
+    - INCLUDE: Include only devices that match the filter
+    - EXCLUDE: Exclude devices that match the filter
+    """
+    NONE = "none"
+    INCLUDE = "include"
+    EXCLUDE = "exclude"
+
+
 class AssignmentTarget(GraphBaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -34,6 +46,14 @@ class GroupAssignmentTarget(AssignmentTarget):
         alias="@odata.type",
     )
     group_id: str = Field(alias="groupId")
+    assignment_filter_id: str | None = Field(
+        default=None,
+        alias="deviceAndAppManagementAssignmentFilterId",
+    )
+    assignment_filter_type: AssignmentFilterType = Field(
+        default=AssignmentFilterType.NONE,
+        alias="deviceAndAppManagementAssignmentFilterType",
+    )
 
 
 class AllDevicesAssignmentTarget(AssignmentTarget):

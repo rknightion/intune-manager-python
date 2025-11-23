@@ -79,7 +79,7 @@ class ToastWidget(QFrame):
         self.setObjectName("ToastWidget")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setMinimumWidth(320)
-        self.setMaximumWidth(450)
+        self.setMaximumWidth(650)
         self.setStyleSheet(
             "QFrame#ToastWidget {"
             f"  background-color: {bg};"
@@ -122,7 +122,7 @@ class ToastWidget(QFrame):
         self.label = QLabel(message.text)
         self.label.setObjectName("ToastLabel")
         self.label.setWordWrap(True)
-        self.label.setMaximumWidth(380)
+        self.label.setMaximumWidth(600)
         self.label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -253,11 +253,24 @@ class ToastManager(QObject):
         container_layout: QVBoxLayout = self._container.layout()  # type: ignore[assignment]
         container_layout.addWidget(toast, alignment=Qt.AlignmentFlag.AlignRight)
         self._container.show()
-        container_layout.activate()
-        toast.updateGeometry()
-        toast.label.updateGeometry()
-        toast.adjustSize()
-        self._relocate()
+
+        # Defer sizing to next event loop to allow text layout to complete
+        def _finalize_sizing() -> None:
+            container_layout.activate()
+            toast.updateGeometry()
+            toast.label.updateGeometry()
+            toast.adjustSize()
+            self._relocate()
+
+        QTimer.singleShot(0, _finalize_sizing)
+
+        # Log toast to console based on level
+        if level == ToastLevel.ERROR:
+            logger.error(normalized, level=level.value)
+        elif level == ToastLevel.WARNING:
+            logger.warning(normalized, level=level.value)
+        else:  # INFO and SUCCESS both use info level
+            logger.info(normalized, level=level.value)
 
         toast.fade_in()
         if resolved_duration is not None and resolved_duration > 0:

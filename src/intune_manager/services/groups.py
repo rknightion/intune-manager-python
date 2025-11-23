@@ -477,6 +477,50 @@ class GroupService:
         logger.debug("Fetched group owners", group_id=group_id, count=len(owners))
         return owners
 
+    async def refresh_members(
+        self,
+        group_id: str,
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[GroupMember]:
+        """Fetch members from Graph API and cache them."""
+        members = await self.list_members(group_id, cancellation_token=cancellation_token)
+        self._repository.cache_members(group_id, members, tenant_id=tenant_id)
+        logger.debug(
+            "Refreshed and cached group members",
+            group_id=group_id,
+            count=len(members),
+        )
+        return members
+
+    async def refresh_owners(
+        self,
+        group_id: str,
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[GroupMember]:
+        """Fetch owners from Graph API and cache them."""
+        owners = await self.list_owners(group_id, cancellation_token=cancellation_token)
+        self._repository.cache_owners(group_id, owners, tenant_id=tenant_id)
+        logger.debug(
+            "Refreshed and cached group owners", group_id=group_id, count=len(owners)
+        )
+        return owners
+
+    def get_members(
+        self, group_id: str, *, tenant_id: str | None = None
+    ) -> list[GroupMember]:
+        """Get cached members for a group."""
+        return self._repository.get_cached_members(group_id, tenant_id=tenant_id)
+
+    def get_owners(
+        self, group_id: str, *, tenant_id: str | None = None
+    ) -> list[GroupMember]:
+        """Get cached owners for a group."""
+        return self._repository.get_cached_owners(group_id, tenant_id=tenant_id)
+
     async def update_membership_rule(
         self,
         group_id: str,

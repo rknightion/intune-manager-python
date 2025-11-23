@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QComboBox,
 )
 
+from intune_manager.config import SettingsManager
 from intune_manager.data import (
     AttachmentMetadata,
     AssignmentFilter,
@@ -36,6 +37,7 @@ from intune_manager.data import (
     MobileApp,
     MobileAppAssignment,
 )
+from intune_manager.data.models.application import MobileAppPlatform
 from intune_manager.data.models.assignment import (
     AssignmentIntent,
     FilteredGroupAssignmentTarget,
@@ -43,6 +45,12 @@ from intune_manager.data.models.assignment import (
 )
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.applications import InstallSummaryEvent
+from intune_manager.utils import (
+    format_file_size,
+    format_license_count,
+    format_architecture,
+    format_min_os,
+)
 from intune_manager.ui.components import (
     CommandAction,
     InlineStatusMessage,
@@ -52,6 +60,7 @@ from intune_manager.ui.components import (
     format_relative_timestamp,
     make_toolbar_button,
 )
+from intune_manager.utils.app_types import get_display_name, is_compatible
 from intune_manager.utils.enums import enum_text
 from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
@@ -59,12 +68,6 @@ from intune_manager.ui.assignments.assignment_editor import AssignmentEditorDial
 from .controller import ApplicationController
 from .models import ApplicationFilterProxyModel, ApplicationTableModel
 from .bulk_assignment import BulkAssignmentDialog, BulkAssignmentPlan
-
-
-def _format_value(value: object | None) -> str:
-    if value is None:
-        return "—"
-    return str(value)
 
 
 def _toast_level_for(severity: ErrorSeverity) -> ToastLevel:
@@ -112,10 +115,16 @@ class ApplicationDetailPane(QWidget):
         title_font.setPointSizeF(title_font.pointSizeF() + 2)
         title_font.setWeight(QFont.Weight.DemiBold)
         self._title_label.setFont(title_font)
+        self._title_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         self._subtitle_label = QLabel("")
         self._subtitle_label.setWordWrap(True)
         self._subtitle_label.setStyleSheet("color: palette(mid);")
+        self._subtitle_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         title_layout.addWidget(self._title_label)
         title_layout.addWidget(self._subtitle_label)
@@ -143,26 +152,16 @@ class ApplicationDetailPane(QWidget):
         self._description_label = QLabel()
         self._description_label.setWordWrap(True)
         self._description_label.setStyleSheet("color: palette(mid);")
+        self._description_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         overview_layout.addWidget(self._description_label)
 
         form_group = QGroupBox("Metadata")
-        form_layout = QFormLayout(form_group)
-        form_layout.setContentsMargins(12, 8, 12, 8)
-        form_layout.setSpacing(6)
-        self._fields: dict[str, QLabel] = {}
-        for key, label in [
-            ("platform", "Platform"),
-            ("publisher", "Publisher"),
-            ("owner", "Owner"),
-            ("developer", "Developer"),
-            ("created", "Created"),
-            ("modified", "Last modified"),
-            ("categories", "Categories"),
-        ]:
-            value_label = QLabel("—")
-            value_label.setWordWrap(True)
-            self._fields[key] = value_label
-            form_layout.addRow(f"{label}:", value_label)
+        self._metadata_form_layout = QFormLayout(form_group)
+        self._metadata_form_layout.setContentsMargins(12, 8, 12, 8)
+        self._metadata_form_layout.setSpacing(6)
+        # Fields will be added dynamically based on app type
         overview_layout.addWidget(form_group)
         overview_layout.addStretch()
 
@@ -209,15 +208,172 @@ class ApplicationDetailPane(QWidget):
 
         self._current_install_summary: dict[str, object] | None = None
 
-    def display_app(self, app: MobileApp | None, icon: QIcon | None) -> None:
+    # ----------------------------------------------------------------- Metadata helpers
+
+    def _clear_metadata_fields(self) -> None:
+        """Remove all rows from metadata form layout."""
+        while self._metadata_form_layout.rowCount() > 0:
+            self._metadata_form_layout.removeRow(0)
+
+    def _add_metadata_field(self, label: str, value: str | None) -> None:
+        """Add a single field to metadata form.
+
+        Args:
+            label: Field label (e.g., "Platform")
+            value: Field value or None for "—"
+        """
+        value_label = QLabel(value if value else "—")
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._metadata_form_layout.addRow(f"{label}:", value_label)
+
+    def _populate_metadata_fields(self, app: MobileApp) -> None:
+        """Populate metadata fields dynamically based on app type."""
+        self._clear_metadata_fields()
+
+        # Base fields (always shown)
+        platform = enum_text(app.platform_type) or "Unknown"
+        categories = (
+            ", ".join(category.display_name for category in (app.categories or []))
+            or None
+        )
+        created = (
+            app.created_date_time.strftime("%Y-%m-%d %H:%M")
+            if app.created_date_time
+            else None
+        )
+        modified = (
+            app.last_modified_date_time.strftime("%Y-%m-%d %H:%M")
+            if app.last_modified_date_time
+            else None
+        )
+
+        self._add_metadata_field("Platform", platform)
+        self._add_metadata_field("Publisher", app.publisher)
+        self._add_metadata_field("Owner", app.owner)
+        self._add_metadata_field("Developer", app.developer)
+        self._add_metadata_field("Created", created)
+        self._add_metadata_field("Modified", modified)
+        self._add_metadata_field("Categories", categories)
+
+        # Assignment & Scope fields
+        if app.is_assigned is not None:
+            self._add_metadata_field("Is Assigned", "Yes" if app.is_assigned else "No")
+        if app.role_scope_tag_ids:
+            scope_tags = ", ".join(app.role_scope_tag_ids)
+            self._add_metadata_field("Scope Tags", scope_tags)
+
+        # Platform-specific fields
+        if app.platform_type == MobileAppPlatform.IOS:
+            if app.app_type == "VPP":
+                self._add_ios_vpp_fields(app)
+            elif app.app_type == "LOB":
+                self._add_lob_fields(app)
+        elif app.platform_type == MobileAppPlatform.WINDOWS:
+            if app.app_type == "LOB":
+                self._add_windows_lob_fields(app)
+            elif app.app_type == "Win32":
+                self._add_win32_fields(app)
+            else:
+                self._add_windows_fields(app)
+        elif app.platform_type == MobileAppPlatform.ANDROID:
+            if app.app_type == "LOB":
+                self._add_android_lob_fields(app)
+
+        # Generic LOB fields (if not already added by platform-specific methods)
+        if app.app_type == "LOB" and app.platform_type not in (
+            MobileAppPlatform.IOS,
+            MobileAppPlatform.WINDOWS,
+            MobileAppPlatform.ANDROID,
+        ):
+            self._add_lob_fields(app)
+
+    def _add_ios_vpp_fields(self, app: MobileApp) -> None:
+        """Add iOS VPP-specific fields."""
+        if app.bundle_id:
+            self._add_metadata_field("Bundle ID", app.bundle_id)
+        if app.used_license_count is not None or app.total_license_count is not None:
+            license_info = format_license_count(
+                app.used_license_count, app.total_license_count
+            )
+            self._add_metadata_field("License Usage", license_info)
+        if app.vpp_token_display_name or app.vpp_token_organization_name:
+            token_name = app.vpp_token_display_name or app.vpp_token_organization_name
+            self._add_metadata_field("VPP Token", token_name)
+        if app.vpp_token_account_type:
+            self._add_metadata_field(
+                "VPP Account Type", app.vpp_token_account_type.capitalize()
+            )
+        if app.app_store_url:
+            self._add_metadata_field("App Store URL", app.app_store_url)
+
+    def _add_lob_fields(self, app: MobileApp) -> None:
+        """Add generic LOB app fields."""
+        if app.file_name:
+            self._add_metadata_field("File Name", app.file_name)
+        if app.size is not None:
+            size_str = format_file_size(app.size)
+            self._add_metadata_field("Size", size_str)
+        if app.committed_content_version:
+            self._add_metadata_field("Content Version", app.committed_content_version)
+
+    def _add_windows_lob_fields(self, app: MobileApp) -> None:
+        """Add Windows LOB-specific fields."""
+        self._add_lob_fields(app)  # Include common LOB fields
+        self._add_windows_fields(app)  # Include Windows-specific fields
+
+    def _add_windows_fields(self, app: MobileApp) -> None:
+        """Add Windows app-specific fields."""
+        if app.applicable_architectures:
+            arch_str = format_architecture(app.applicable_architectures)
+            self._add_metadata_field("Architecture", arch_str)
+        if app.identity_name:
+            self._add_metadata_field("Identity Name", app.identity_name)
+        if app.minimum_supported_operating_system:
+            min_os = format_min_os(app.minimum_supported_operating_system)
+            self._add_metadata_field("Minimum OS", min_os)
+
+    def _add_win32_fields(self, app: MobileApp) -> None:
+        """Add Win32-specific fields."""
+        self._add_lob_fields(app)  # Include common LOB fields
+        if app.setup_file_path:
+            self._add_metadata_field("Setup File", app.setup_file_path)
+        if app.minimum_supported_windows_release:
+            self._add_metadata_field(
+                "Min Windows Release", app.minimum_supported_windows_release
+            )
+        if app.display_version:
+            self._add_metadata_field("Display Version", app.display_version)
+
+    def _add_android_lob_fields(self, app: MobileApp) -> None:
+        """Add Android LOB-specific fields."""
+        self._add_lob_fields(app)  # Include common LOB fields
+        if app.package_id:
+            self._add_metadata_field("Package ID", app.package_id)
+        if app.version_name:
+            self._add_metadata_field("Version Name", app.version_name)
+        if app.version_code:
+            self._add_metadata_field("Version Code", app.version_code)
+
+    # ----------------------------------------------------------------- Display methods
+
+    def display_app(
+        self,
+        app: MobileApp | None,
+        icon: QIcon | None,
+        *,
+        groups: list[DirectoryGroup] | None = None,
+        filters: list[AssignmentFilter] | None = None,
+    ) -> None:
         if app is None:
             self._title_label.setText("Select an application")
             self._subtitle_label.setText("")
             self._description_label.setText("")
             self._clear_badges()
             self._set_icon(icon)
-            for label in self._fields.values():
-                label.setText("—")
+            self._clear_metadata_fields()
             self._assignments_list.clear()
             self.update_install_summary(None)
             return
@@ -230,29 +386,12 @@ class ApplicationDetailPane(QWidget):
         self._description_label.setText(app.description or "")
         self._update_badges(app)
 
-        platform = enum_text(app.platform_type) or "Unknown"
-        categories = (
-            ", ".join(category.display_name for category in (app.categories or []))
-            or "—"
-        )
+        # Populate metadata fields dynamically based on app type
+        self._populate_metadata_fields(app)
 
-        self._set_field("platform", platform)
-        self._set_field("publisher", app.publisher)
-        self._set_field("owner", app.owner)
-        self._set_field("developer", app.developer)
-        self._set_field(
-            "created",
-            app.created_date_time.strftime("%Y-%m-%d %H:%M")
-            if app.created_date_time
-            else None,
-        )
-        self._set_field(
-            "modified",
-            app.last_modified_date_time.strftime("%Y-%m-%d %H:%M")
-            if app.last_modified_date_time
-            else None,
-        )
-        self._set_field("categories", categories)
+        # Build lookup dictionaries for groups and filters
+        group_lookup = {g.id: g for g in (groups or []) if g.id}
+        filter_lookup = {f.id: f for f in (filters or []) if f.id}
 
         self._assignments_list.clear()
         assignments = app.assignments or []
@@ -262,12 +401,49 @@ class ApplicationDetailPane(QWidget):
             self._assignments_list.addItem(placeholder)
         else:
             for assignment in assignments:
-                target = getattr(assignment.target, "group_id", "All devices")
+                # Get target display name
+                group_id = getattr(assignment.target, "group_id", None)
+                if group_id:
+                    group = group_lookup.get(group_id)
+                    if group:
+                        target = (
+                            group.display_name
+                            or group.mail
+                            or group.mail_nickname
+                            or group_id
+                        )
+                    else:
+                        target = group_id
+                else:
+                    target = "All devices"
+
                 intent = enum_text(assignment.intent) or "Unknown"
-                filter_id = getattr(assignment.target, "assignment_filter_id", None)
                 text = f"{intent} → {target}"
+
+                # Add filter information
+                filter_id = getattr(assignment.target, "assignment_filter_id", None)
+                filter_type = getattr(assignment.target, "assignment_filter_type", None)
                 if filter_id:
-                    text += f" (filter: {filter_id})"
+                    # Get filter display name
+                    assignment_filter = filter_lookup.get(filter_id)
+                    filter_name = (
+                        assignment_filter.display_name
+                        if assignment_filter and assignment_filter.display_name
+                        else filter_id
+                    )
+
+                    filter_type_str = enum_text(filter_type) if filter_type else ""
+                    mode_labels = {
+                        "none": "",
+                        "include": "Include",
+                        "exclude": "Exclude",
+                    }
+                    mode = mode_labels.get(filter_type_str.lower(), filter_type_str)
+                    if mode:
+                        text += f" ({mode}: {filter_name})"
+                    else:
+                        text += f" (Filter: {filter_name})"
+
                 item = QListWidgetItem(text)
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._assignments_list.addItem(item)
@@ -289,11 +465,6 @@ class ApplicationDetailPane(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, (key, value))
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self._install_summary_list.addItem(item)
-
-    def _set_field(self, key: str, value: object | None) -> None:
-        label = self._fields.get(key)
-        if label:
-            label.setText(_format_value(value))
 
     def _set_icon(self, icon: QIcon | None) -> None:
         if icon is None:
@@ -377,9 +548,6 @@ class ApplicationsWidget(PageScaffold):
         self._install_summary_button = make_toolbar_button(
             "Install summary", tooltip="Fetch install summary for selection."
         )
-        self._cache_icon_button = make_toolbar_button(
-            "Fetch icon", tooltip="Cache application icon for selection."
-        )
         self._edit_assignments_button = make_toolbar_button(
             "Edit assignments",
             tooltip="Open the assignment editor for the selected application.",
@@ -398,7 +566,6 @@ class ApplicationsWidget(PageScaffold):
             self._refresh_button,
             self._force_refresh_button,
             self._install_summary_button,
-            self._cache_icon_button,
             self._edit_assignments_button,
             self._bulk_assign_button,
             self._export_assignments_button,
@@ -426,6 +593,17 @@ class ApplicationsWidget(PageScaffold):
         self._selected_app: MobileApp | None = None
         self._selected_apps: list[MobileApp] = []
         self._command_unregister: Callable[[], None] | None = None
+        self._cached_groups: list[DirectoryGroup] = []
+        self._cached_filters: list[AssignmentFilter] = []
+
+        # Filter message label for showing incompatibility warnings
+        self._filter_message = QLabel()
+        self._filter_message.setStyleSheet(
+            "QLabel { background-color: #FFF3CD; color: #856404; "
+            "padding: 8px 12px; border-radius: 4px; border: 1px solid #FFE69C; }"
+        )
+        self._filter_message.setWordWrap(True)
+        self._filter_message.setVisible(False)
 
         self._model.set_icon_provider(lambda app_id: self._icon_cache.get(app_id))
 
@@ -437,7 +615,6 @@ class ApplicationsWidget(PageScaffold):
         self._install_summary_button.clicked.connect(
             self._handle_install_summary_clicked
         )
-        self._cache_icon_button.clicked.connect(self._handle_cache_icon_clicked)
         self._edit_assignments_button.clicked.connect(
             self._handle_edit_assignments_clicked
         )
@@ -479,6 +656,10 @@ class ApplicationsWidget(PageScaffold):
         self._platform_combo.currentIndexChanged.connect(self._handle_platform_changed)
         layout.addWidget(self._platform_combo)
 
+        self._type_combo = QComboBox()
+        self._type_combo.currentIndexChanged.connect(self._handle_type_changed)
+        layout.addWidget(self._type_combo)
+
         self._intent_combo = QComboBox()
         self._intent_combo.currentIndexChanged.connect(self._handle_intent_changed)
         layout.addWidget(self._intent_combo)
@@ -489,6 +670,7 @@ class ApplicationsWidget(PageScaffold):
         layout.addWidget(self._summary_label, stretch=1)
 
         self.body_layout.addWidget(filters)
+        self.body_layout.addWidget(self._filter_message)
 
     def _build_body(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -556,6 +738,14 @@ class ApplicationsWidget(PageScaffold):
             apps,
             preserve_selection=self._selected_app.id if self._selected_app else None,
         )
+        self._load_groups_and_filters()
+
+    def _load_groups_and_filters(self) -> None:
+        """Load groups and filters for assignment display."""
+        if self._services.groups is not None:
+            self._cached_groups = self._services.groups.list_cached()
+        if self._services.assignment_filters is not None:
+            self._cached_filters = self._services.assignment_filters.list_cached()
 
     def _handle_apps_refreshed(
         self,
@@ -567,6 +757,7 @@ class ApplicationsWidget(PageScaffold):
         selected_id = self._selected_app.id if self._selected_app else None
         self._last_refresh = self._controller.last_refresh()
         self._set_apps_for_view(apps_list, preserve_selection=selected_id)
+        self._load_groups_and_filters()
         if not from_cache:
             self._context.show_notification(
                 f"Loaded {len(apps_list):,} applications.",
@@ -575,6 +766,10 @@ class ApplicationsWidget(PageScaffold):
         self._context.clear_busy()
         self._refresh_button.setEnabled(True)
         self._force_refresh_button.setEnabled(True)
+
+        # Trigger background icon fetching for all apps
+        if apps_list:
+            self._context.run_async(self._background_fetch_icons_async(apps_list))
 
     def _set_apps_for_view(
         self,
@@ -656,7 +851,12 @@ class ApplicationsWidget(PageScaffold):
                 [Qt.ItemDataRole.DecorationRole],
             )
         if self._selected_app and self._selected_app.id == app_id:
-            self._detail_pane.display_app(self._selected_app, icon)
+            self._detail_pane.display_app(
+                self._selected_app,
+                icon,
+                groups=self._cached_groups,
+                filters=self._cached_filters,
+            )
 
     # ----------------------------------------------------------------- Actions
 
@@ -749,34 +949,16 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.ERROR,
             )
 
-    def _handle_cache_icon_clicked(self) -> None:
-        app = self._selected_app
-        if app is None:
-            self._context.show_notification(
-                "Select an application to fetch its icon.",
-                level=ToastLevel.WARNING,
-            )
-            return
-        self._context.set_busy("Caching icon…")
-        self._context.run_async(self._cache_icon_async(app.id))
-
-    async def _cache_icon_async(self, app_id: str) -> None:
+    async def _background_fetch_icons_async(self, apps: list[MobileApp]) -> None:
+        """Fetch icons in background for all apps without blocking UI."""
         try:
-            metadata = await self._controller.cache_icon(app_id, force=True)
-            if metadata and metadata.path.exists():
-                pixmap = QPixmap(str(metadata.path))
-                if not pixmap.isNull():
-                    icon = QIcon(pixmap)
-                    self._icon_cache[app_id] = icon
-                    if self._selected_app and self._selected_app.id == app_id:
-                        self._detail_pane.display_app(self._selected_app, icon)
+            await self._controller.background_fetch_icons(apps)
         except Exception as exc:  # noqa: BLE001
-            self._context.show_notification(
-                f"Failed to cache icon: {exc}",
-                level=ToastLevel.ERROR,
-            )
-        finally:
-            self._context.clear_busy()
+            # Silently log background fetch failures
+            from intune_manager.utils import get_logger
+
+            logger = get_logger(__name__)
+            logger.debug("Background icon fetch failed", error=str(exc))
 
     def _handle_edit_assignments_clicked(self) -> None:
         app = self._selected_app
@@ -794,9 +976,10 @@ class ApplicationsWidget(PageScaffold):
             return
 
         self._context.set_busy("Loading assignments…")
-        self._context.run_async(self._open_assignment_editor_async(app))
+        self._context.run_async(self._fetch_assignment_data_async(app))
 
-    async def _open_assignment_editor_async(self, app: MobileApp) -> None:
+    async def _fetch_assignment_data_async(self, app: MobileApp) -> None:
+        """Fetch all data needed for assignment editor asynchronously."""
         try:
             assignments = await self._controller.fetch_assignments(app.id)
         except Exception as exc:  # noqa: BLE001
@@ -827,17 +1010,37 @@ class ApplicationsWidget(PageScaffold):
                     filters = []
 
         self._context.clear_busy()
+        # Schedule dialog opening in Qt event loop (breaks out of async context)
+        QTimer.singleShot(0, lambda: self._open_assignment_editor_dialog(app, assignments, groups, filters))
+
+    def _open_assignment_editor_dialog(
+        self,
+        app: MobileApp,
+        assignments: list[MobileAppAssignment],
+        groups: list[DirectoryGroup],
+        filters: list[AssignmentFilter],
+    ) -> None:
+        """Open assignment editor dialog with pre-fetched data (synchronous)."""
         subject = app.display_name or app.id or "Application"
-        dialog = AssignmentEditorDialog(
-            assignments=assignments,
-            groups=groups,
-            filters=filters,
-            subject_name=subject,
-            on_export=lambda payload: self._export_assignments(
-                payload, suggested_name=f"{subject}_assignments.json"
-            ),
-            parent=self,
-        )
+        try:
+            dialog = AssignmentEditorDialog(
+                assignments=assignments,
+                groups=groups,
+                filters=filters,
+                subject_name=subject,
+                on_export=lambda payload: self._export_assignments(
+                    payload, suggested_name=f"{subject}_assignments.json"
+                ),
+                parent=self,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_msg = describe_exception(exc)
+            self._context.show_notification(
+                f"Failed to open assignment editor: {error_msg}",
+                level=ToastLevel.ERROR,
+            )
+            return
+
         if dialog.exec() == dialog.Accepted:
             desired = dialog.desired_assignments()
             diff = self._controller.diff_assignments(
@@ -886,6 +1089,11 @@ class ApplicationsWidget(PageScaffold):
             )
             return
 
+        # Load active tenant_id for cache consistency
+        settings_manager = SettingsManager()
+        settings = settings_manager.load()
+        tenant_id = settings.tenant_id if settings else None
+
         group_service = self._services.groups
         if group_service is None:
             self._context.show_notification(
@@ -893,15 +1101,27 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
-        groups = [group for group in group_service.list_cached() if group.id]
+        groups = [group for group in group_service.list_cached(tenant_id=tenant_id) if group.id]
         if not groups:
+            # Auto-refresh groups and retry
             self._context.show_notification(
-                "No directory groups cached. Refresh groups before running the bulk assignment wizard.",
-                level=ToastLevel.WARNING,
-                duration_ms=6000,
+                "No groups cached. Refreshing now...",
+                level=ToastLevel.INFO,
+            )
+            self._context.set_busy("Refreshing groups…")
+            self._context.run_async(
+                self._refresh_groups_and_open_bulk_assign_async(
+                    group_service, tenant_id
+                )
             )
             return
 
+        self._open_bulk_assign_dialog(groups, tenant_id)
+
+    def _open_bulk_assign_dialog(
+        self, groups: list[DirectoryGroup], tenant_id: str | None
+    ) -> None:
+        """Open the bulk assignment dialog with the given groups."""
         filters_service = self._services.assignment_filters
         filters = filters_service.list_cached() if filters_service is not None else []
 
@@ -922,6 +1142,37 @@ class ApplicationsWidget(PageScaffold):
         self._force_refresh_button.setEnabled(False)
         self._bulk_assign_button.setEnabled(False)
         self._context.run_async(self._apply_bulk_assignments_async(plan))
+
+    async def _refresh_groups_and_open_bulk_assign_async(
+        self, group_service, tenant_id: str | None
+    ) -> None:
+        """Refresh groups from Graph API and open bulk assignment dialog if successful."""
+        try:
+            await group_service.refresh(tenant_id=tenant_id, force=True)
+            groups = [
+                group
+                for group in group_service.list_cached(tenant_id=tenant_id)
+                if group.id
+            ]
+            if groups:
+                self._context.show_notification(
+                    f"Loaded {len(groups):,} groups.",
+                    level=ToastLevel.SUCCESS,
+                )
+                self._open_bulk_assign_dialog(groups, tenant_id)
+            else:
+                self._context.show_notification(
+                    "No groups available. Ensure your account has permission to read groups.",
+                    level=ToastLevel.WARNING,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._context.show_notification(
+                f"Failed to refresh groups: {exc}",
+                level=ToastLevel.ERROR,
+                duration_ms=8000,
+            )
+        finally:
+            self._context.clear_busy()
 
     def _handle_export_assignments_clicked(self) -> None:
         app = self._selected_app
@@ -1061,26 +1312,110 @@ class ApplicationsWidget(PageScaffold):
     def _handle_search_changed(self, text: str) -> None:
         self._proxy.set_search_text(text)
         self._update_summary()
+        self._check_filter_compatibility()
 
     def _handle_platform_changed(self, index: int) -> None:  # noqa: ARG002
         platform = self._platform_combo.currentData()
         self._proxy.set_platform_filter(platform)
         self._update_summary()
+        self._check_filter_compatibility()
+
+    def _handle_type_changed(self, index: int) -> None:  # noqa: ARG002
+        app_type = self._type_combo.currentData()
+        self._proxy.set_type_filter(app_type)
+        self._update_summary()
+        self._check_filter_compatibility()
 
     def _handle_intent_changed(self, index: int) -> None:  # noqa: ARG002
         intent = self._intent_combo.currentData()
         self._proxy.set_intent_filter(intent)
         self._update_summary()
 
+    def _check_filter_compatibility(self) -> None:
+        """Check if platform and type filters are compatible, show message if not."""
+        platform = self._platform_combo.currentData()
+        app_type = self._type_combo.currentData()
+
+        # If no filters, hide message
+        if not platform and not app_type:
+            self._filter_message.setVisible(False)
+            return
+
+        # Check if filters result in zero rows
+        row_count = self._proxy.rowCount()
+
+        if row_count == 0 and (platform or app_type):
+            # Check if it's due to incompatibility
+            if platform and app_type and not is_compatible(platform, app_type):
+                # Get display name for the selected type
+                type_text = self._type_combo.currentText()
+                platform_display = {
+                    "ios": "iOS",
+                    "macos": "macOS",
+                    "windows": "Windows",
+                    "android": "Android",
+                }.get(platform.lower(), platform.title())
+
+                self._filter_message.setText(
+                    f"⚠️  No results: {type_text} apps are not available for {platform_display} platform. "
+                    "Choose a compatible combination or clear filters to see all apps."
+                )
+                self._filter_message.setVisible(True)
+            elif platform or app_type or self._search_input.text():
+                # Filters are applied but just no matching results
+                self._filter_message.setText(
+                    "ℹ️  No apps match the current filters. Try adjusting your search or filter criteria."
+                )
+                self._filter_message.setVisible(True)
+            else:
+                self._filter_message.setVisible(False)
+        else:
+            # Results found or no filters
+            self._filter_message.setVisible(False)
+
     def _apply_filter_options(self, apps: Iterable[MobileApp]) -> None:
-        platforms = sorted(
-            {
-                (enum_text(app.platform_type) or "").strip()
-                for app in apps
-                if app.platform_type
-            },
-            key=lambda value: value.lower(),
+        # Get all available platforms from enum (show all, not just those with data)
+        all_platforms = [
+            p.value for p in MobileAppPlatform
+            if p != MobileAppPlatform.UNKNOWN
+        ]
+
+        # Get platforms that actually have apps in the cache
+        platforms_with_data = {
+            (enum_text(app.platform_type) or "").strip()
+            for app in apps
+            if app.platform_type and app.platform_type != MobileAppPlatform.UNKNOWN
+        }
+
+        # Populate platform combo with all known platforms
+        self._populate_combo_with_disabled(
+            self._platform_combo,
+            "All platforms",
+            all_platforms,
+            platforms_with_data
         )
+
+        # Extract all platform+type combinations from apps
+        platform_type_combinations = {}  # key: (platform, type), value: count
+        for app in apps:
+            platform = enum_text(app.platform_type) or ""
+            app_type = app.app_type or ""
+            if platform and app_type:
+                key = (platform, app_type)
+                platform_type_combinations[key] = platform_type_combinations.get(key, 0) + 1
+
+        # Create display names for type filter
+        type_options = []
+        type_data = []
+        for (platform, app_type), count in sorted(platform_type_combinations.items()):
+            display = get_display_name(platform, app_type)
+            type_options.append(display)
+            type_data.append(app_type)
+
+        # Populate type combo (all items have data by construction)
+        self._populate_combo(self._type_combo, "All types", type_options, type_data)
+
+        # Extract intents
         intents = sorted(
             {
                 enum_text(assignment.intent) or ""
@@ -1089,18 +1424,48 @@ class ApplicationsWidget(PageScaffold):
             },
             key=lambda value: value.lower(),
         )
-        self._populate_combo(self._platform_combo, "All platforms", platforms)
         self._populate_combo(self._intent_combo, "All intents", intents)
 
     def _populate_combo(
-        self, combo: QComboBox, placeholder: str, values: List[str]
+        self, combo: QComboBox, placeholder: str, values: List[str], data: List[str] | None = None
     ) -> None:
+        """Populate combo box with values and optional custom data."""
         current = combo.currentData()
         combo.blockSignals(True)
         combo.clear()
         combo.addItem(placeholder, None)
-        for value in values:
+        for i, value in enumerate(values):
+            # Use custom data if provided, otherwise use value itself
+            item_data = data[i] if data and i < len(data) else (value or None)
+            combo.addItem(value or "Unknown", item_data)
+        if current:
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index != -1 else 0)
+        else:
+            combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    def _populate_combo_with_disabled(
+        self, combo: QComboBox, placeholder: str, all_values: List[str], enabled_values: set[str]
+    ) -> None:
+        """Populate combo box with all values, disabling those not in enabled_values."""
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(placeholder, None)
+
+        for value in sorted(all_values, key=lambda v: v.lower()):
             combo.addItem(value or "Unknown", value or None)
+            # Disable if not in enabled_values
+            if value not in enabled_values:
+                index = combo.count() - 1
+                # Use gray color for disabled items
+                model = combo.model()
+                if model:
+                    item = model.item(index)
+                    if item:
+                        item.setEnabled(False)
+
         if current:
             index = combo.findData(current)
             combo.setCurrentIndex(index if index != -1 else 0)
@@ -1138,15 +1503,11 @@ class ApplicationsWidget(PageScaffold):
         else:
             app = self._selected_app
             icon = self._icon_cache.get(app.id) if app.id else None
-            self._detail_pane.display_app(app, icon)
+            self._detail_pane.display_app(
+                app, icon, groups=self._cached_groups, filters=self._cached_filters
+            )
             summary = self._install_summaries.get(app.id)
             self._detail_pane.update_install_summary(summary)
-            if (
-                self._services.applications is not None
-                and app.id
-                and app.id not in self._icon_cache
-            ):
-                self._context.run_async(self._cache_icon_async(app.id))
         self._update_action_buttons()
         self._update_summary()
 
@@ -1195,9 +1556,8 @@ class ApplicationsWidget(PageScaffold):
         service_available = self._services.applications is not None
         assignment_service_available = self._services.assignments is not None
 
-        for button in [self._install_summary_button, self._cache_icon_button]:
-            button.setEnabled(
-                service_available and app_selected and not multiple_selected
+        self._install_summary_button.setEnabled(
+            service_available and app_selected and not multiple_selected
             )
 
         self._edit_assignments_button.setEnabled(

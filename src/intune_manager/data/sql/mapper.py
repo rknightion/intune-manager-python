@@ -8,6 +8,7 @@ from intune_manager.data.models import (
     AssignmentTarget,
     ConfigurationProfile,
     DirectoryGroup,
+    GroupMember,
     ManagedDevice,
     MobileApp,
     MobileAppAssignment,
@@ -19,6 +20,7 @@ from .models import (
     AuditEventRecord,
     ConfigurationProfileRecord,
     DeviceRecord,
+    GroupMemberRecord,
     GroupRecord,
     MobileAppAssignmentRecord,
     MobileAppRecord,
@@ -62,6 +64,7 @@ def mobile_app_to_record(
         display_name=app.display_name,
         publisher=app.publisher,
         platform=getattr(app.platform_type, "value", app.platform_type),
+        app_type=app.app_type,
         publishing_state=app.publishing_state,
         last_modified_date_time=app.last_modified_date_time,
         updated_at=_utc_now(),
@@ -176,6 +179,7 @@ def assignments_to_records(
         target: AssignmentTarget = assignment.target
         target_id = getattr(target, "group_id", None)
         filter_id = getattr(target, "assignment_filter_id", None)
+        filter_type = getattr(target, "assignment_filter_type", None)
         target_type = getattr(target, "odata_type", None)
         records.append(
             MobileAppAssignmentRecord(
@@ -186,6 +190,7 @@ def assignments_to_records(
                 target_type=target_type,
                 intent=assignment.intent,
                 filter_id=filter_id,
+                filter_type=filter_type,
                 updated_at=_utc_now(),
                 payload=assignment.to_graph(),
             ),
@@ -199,6 +204,38 @@ def record_to_assignment(record: MobileAppAssignmentRecord) -> MobileAppAssignme
     return MobileAppAssignment.from_graph(payload)
 
 
+def group_members_to_records(
+    group_id: str,
+    members: Iterable[GroupMember],
+    *,
+    tenant_id: str | None = None,
+    is_owner: bool = False,
+) -> list[GroupMemberRecord]:
+    records: list[GroupMemberRecord] = []
+    for member in members:
+        records.append(
+            GroupMemberRecord(
+                group_id=group_id,
+                member_id=member.id,
+                tenant_id=tenant_id,
+                is_owner=is_owner,
+                display_name=member.display_name,
+                user_principal_name=member.user_principal_name,
+                mail=member.mail,
+                odata_type=member.odata_type,
+                updated_at=_utc_now(),
+                payload=member.to_graph(),
+            )
+        )
+    return records
+
+
+def record_to_group_member(record: GroupMemberRecord) -> GroupMember:
+    payload = record.payload or {}
+    payload.setdefault("id", record.member_id)
+    return GroupMember.from_graph(payload)
+
+
 __all__ = [
     "device_to_record",
     "record_to_device",
@@ -206,6 +243,8 @@ __all__ = [
     "record_to_mobile_app",
     "group_to_record",
     "record_to_group",
+    "group_members_to_records",
+    "record_to_group_member",
     "configuration_to_record",
     "record_to_configuration",
     "audit_event_to_record",

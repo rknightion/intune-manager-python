@@ -59,6 +59,7 @@ class MobileAppRecord(SQLModel, table=True):
     display_name: str | None = Field(default=None, index=True)
     publisher: str | None = Field(default=None, index=True)
     platform: str | None = Field(default=None, index=True)
+    app_type: str | None = Field(default=None, index=True)  # Simplified type: Store, LOB, VPP, etc.
     publishing_state: str | None = Field(default=None, index=True)
     last_modified_date_time: datetime | None = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
@@ -96,6 +97,7 @@ class MobileAppAssignmentRecord(SQLModel, table=True):
     target_type: str | None = Field(default=None, index=True)
     intent: str | None = Field(default=None, index=True)
     filter_id: str | None = Field(default=None, index=True)
+    filter_type: str | None = Field(default=None, index=True)  # include, exclude, or none
     updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
@@ -140,5 +142,22 @@ class AssignmentFilterRecord(SQLModel, table=True):
     tenant_id: str | None = Field(default=None, index=True)
     display_name: str | None = Field(default=None, index=True)
     platform: str | None = Field(default=None, index=True)
+    updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
+    payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
+
+class GroupMemberRecord(SQLModel, table=True):
+    """Group member/owner snapshot with composite key."""
+
+    __tablename__ = "group_members"
+
+    group_id: str = Field(primary_key=True, index=True)
+    member_id: str = Field(primary_key=True, index=True)
+    tenant_id: str | None = Field(default=None, index=True)
+    is_owner: bool = Field(default=False, index=True)
+    display_name: str | None = Field(default=None, index=True)
+    user_principal_name: str | None = Field(default=None, index=True)
+    mail: str | None = Field(default=None)
+    odata_type: str | None = Field(default=None)
     updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))

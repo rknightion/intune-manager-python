@@ -207,6 +207,7 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
         super().__init__()
         self._search_text: str = ""
         self._platform_filter: str | None = None
+        self._type_filter: str | None = None
         self._intent_filter: str | None = None
         self._fuzzy_threshold: float = 0.62
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -225,6 +226,13 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
         if self._platform_filter == key:
             return
         self._platform_filter = key
+        self.invalidateFilter()
+
+    def set_type_filter(self, app_type: str | None) -> None:
+        key = app_type.lower() if app_type else None
+        if self._type_filter == key:
+            return
+        self._type_filter = key
         self.invalidateFilter()
 
     def set_intent_filter(self, intent: str | None) -> None:
@@ -281,6 +289,11 @@ class ApplicationFilterProxyModel(QSortFilterProxyModel):
             platform_value = enum_text(app.platform_type)
             platform = platform_value.lower() if platform_value else ""
             if platform != self._platform_filter:
+                return False
+
+        if self._type_filter:
+            app_type = app.app_type.lower() if app.app_type else ""
+            if app_type != self._type_filter:
                 return False
 
         if self._intent_filter:

@@ -74,6 +74,30 @@ class GroupController:
     def owner_freshness(self, group_id: str) -> datetime | None:
         return self._owner_freshness.get(group_id)
 
+    def load_members_from_cache(
+        self, group_id: str, tenant_id: str | None = None
+    ) -> list[GroupMember]:
+        """Load members from service database cache."""
+        if self._service is None:
+            return []
+        members = self._service.get_members(group_id, tenant_id=tenant_id)
+        if members:
+            self._member_cache[group_id] = members
+            # Don't set freshness since we're loading from cache
+        return members
+
+    def load_owners_from_cache(
+        self, group_id: str, tenant_id: str | None = None
+    ) -> list[GroupMember]:
+        """Load owners from service database cache."""
+        if self._service is None:
+            return []
+        owners = self._service.get_owners(group_id, tenant_id=tenant_id)
+        if owners:
+            self._owner_cache[group_id] = owners
+            # Don't set freshness since we're loading from cache
+        return owners
+
     def member_stream(
         self,
         group_id: str,
@@ -154,6 +178,41 @@ class GroupController:
             raise RuntimeError("Group service not configured")
         owners = await self._service.list_owners(
             group_id, cancellation_token=cancellation_token
+        )
+        self._owner_cache[group_id] = owners
+        self._owner_freshness[group_id] = datetime.now(UTC)
+        return owners
+
+    async def refresh_members(
+        self,
+        group_id: str,
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[GroupMember]:
+        """Fetch members from API and update cache."""
+        if self._service is None:
+            raise RuntimeError("Group service not configured")
+        members = await self._service.refresh_members(
+            group_id, tenant_id=tenant_id, cancellation_token=cancellation_token
+        )
+        self._member_cache[group_id] = members
+        self._member_streams.pop(group_id, None)
+        self._member_freshness[group_id] = datetime.now(UTC)
+        return members
+
+    async def refresh_owners(
+        self,
+        group_id: str,
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> list[GroupMember]:
+        """Fetch owners from API and update cache."""
+        if self._service is None:
+            raise RuntimeError("Group service not configured")
+        owners = await self._service.refresh_owners(
+            group_id, tenant_id=tenant_id, cancellation_token=cancellation_token
         )
         self._owner_cache[group_id] = owners
         self._owner_freshness[group_id] = datetime.now(UTC)

@@ -11,6 +11,7 @@ from .dialogs import (
     save_file_dialog,
     show_error_dialog,
     show_info_dialog,
+    show_token_expired_dialog,
 )
 from .layouts import PageScaffold, SectionHeader, make_toolbar_button
 from .notifications import ToastLevel, ToastManager
@@ -43,6 +44,7 @@ __all__ = [
     "save_file_dialog",
     "show_error_dialog",
     "show_info_dialog",
+    "show_token_expired_dialog",
     "PageScaffold",
     "SectionHeader",
     "make_toolbar_button",

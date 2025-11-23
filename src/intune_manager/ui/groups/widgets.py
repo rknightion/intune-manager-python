@@ -583,12 +583,6 @@ class GroupsWidget(PageScaffold):
         self._force_refresh_button = make_toolbar_button(
             "Force refresh", tooltip="Bypass cache and refetch groups."
         )
-        self._load_members_button = make_toolbar_button(
-            "Load members", tooltip="Load membership for the selected group."
-        )
-        self._load_owners_button = make_toolbar_button(
-            "Load owners", tooltip="Load owners for the selected group."
-        )
         self._add_member_button = make_toolbar_button(
             "Add member", tooltip="Add a member by object ID."
         )
@@ -613,8 +607,6 @@ class GroupsWidget(PageScaffold):
         actions: List[QToolButton] = [
             self._refresh_button,
             self._force_refresh_button,
-            self._load_members_button,
-            self._load_owners_button,
             self._add_member_button,
             self._remove_member_button,
             self._edit_rule_button,
@@ -655,8 +647,6 @@ class GroupsWidget(PageScaffold):
 
         self._refresh_button.clicked.connect(self._handle_refresh_clicked)
         self._force_refresh_button.clicked.connect(self._handle_force_refresh_clicked)
-        self._load_members_button.clicked.connect(self._handle_load_members_clicked)
-        self._load_owners_button.clicked.connect(self._handle_load_owners_clicked)
         self._add_member_button.clicked.connect(self._handle_add_member_clicked)
         self._remove_member_button.clicked.connect(self._handle_remove_member_clicked)
         self._edit_rule_button.clicked.connect(self._handle_edit_rule_clicked)
@@ -768,10 +758,10 @@ class GroupsWidget(PageScaffold):
             self._handle_members_prev_requested
         )
         self._detail_pane.membersRefreshRequested.connect(
-            self._handle_load_members_clicked
+            self._handle_members_refresh_requested
         )
         self._detail_pane.ownersRefreshRequested.connect(
-            self._handle_load_owners_clicked
+            self._handle_owners_refresh_requested
         )
         splitter.addWidget(self._detail_pane)
 
@@ -947,6 +937,32 @@ class GroupsWidget(PageScaffold):
         token = token_source.token
         try:
             await self._controller.refresh(force=force, cancellation_token=token)
+            # Also refresh members/owners for the selected group
+            if self._selected_group and self._selected_group.id:
+                try:
+                    members = await self._controller.refresh_members(
+                        self._selected_group.id, cancellation_token=token
+                    )
+                    self._detail_pane.set_members(
+                        members,
+                        refreshed_at=self._controller.member_freshness(
+                            self._selected_group.id
+                        ),
+                    )
+                    owners = await self._controller.refresh_owners(
+                        self._selected_group.id, cancellation_token=token
+                    )
+                    self._detail_pane.set_owners(
+                        owners,
+                        refreshed_at=self._controller.owner_freshness(
+                            self._selected_group.id
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._context.show_notification(
+                        f"Failed to refresh membership: {exc}",
+                        level=ToastLevel.WARNING,
+                    )
         except CancellationError:
             self._finish_refresh()
             self._context.show_notification(
@@ -955,47 +971,55 @@ class GroupsWidget(PageScaffold):
         except Exception:  # noqa: BLE001
             raise
 
-    def _handle_load_members_clicked(self) -> None:
-        group = self._selected_group
-        if group is None:
+    def _handle_members_refresh_requested(self) -> None:
+        """Handle refresh members request from detail pane."""
+        if self._selected_group and self._selected_group.id:
+            self._context.set_busy("Refreshing members…")
+            self._context.run_async(self._refresh_members_async(self._selected_group.id))
+
+    def _handle_owners_refresh_requested(self) -> None:
+        """Handle refresh owners request from detail pane."""
+        if self._selected_group and self._selected_group.id:
+            self._context.set_busy("Refreshing owners…")
+            self._context.run_async(self._refresh_owners_async(self._selected_group.id))
+
+    async def _refresh_members_async(self, group_id: str) -> None:
+        """Refresh members for a specific group."""
+        try:
+            members = await self._controller.refresh_members(group_id)
+            if self._selected_group and self._selected_group.id == group_id:
+                self._detail_pane.set_members(
+                    members,
+                    refreshed_at=self._controller.member_freshness(group_id),
+                )
+            self._context.clear_busy()
             self._context.show_notification(
-                "Select a group before loading members.",
-                level=ToastLevel.WARNING,
+                f"Refreshed {len(members)} members.", level=ToastLevel.SUCCESS
             )
-            return
-        if not getattr(group, "id", None):
+        except Exception as exc:  # noqa: BLE001
+            self._context.clear_busy()
             self._context.show_notification(
-                "Selected group is missing an identifier.",
+                f"Failed to refresh members: {exc}",
                 level=ToastLevel.ERROR,
             )
-            return
-        self._detail_pane.set_members([], loading=True)
-        self._context.set_busy("Loading members…")
-        self._start_member_stream(group.id)
-        self._context.run_async(self._fetch_next_member_page_async(group.id))
 
-    def _handle_load_owners_clicked(self) -> None:
-        group = self._selected_group
-        if group is None:
-            self._context.show_notification(
-                "Select a group before loading owners.",
-                level=ToastLevel.WARNING,
-            )
-            return
-        self._detail_pane.set_owners([], loading=True)
-        self._context.run_async(self._load_owners_async(group.id))
-
-    async def _load_owners_async(self, group_id: str) -> None:
+    async def _refresh_owners_async(self, group_id: str) -> None:
+        """Refresh owners for a specific group."""
         try:
-            owners = await self._controller.list_owners(group_id)
+            owners = await self._controller.refresh_owners(group_id)
             if self._selected_group and self._selected_group.id == group_id:
                 self._detail_pane.set_owners(
                     owners,
                     refreshed_at=self._controller.owner_freshness(group_id),
                 )
-        except Exception as exc:  # noqa: BLE001
+            self._context.clear_busy()
             self._context.show_notification(
-                f"Failed to load owners: {exc}",
+                f"Refreshed {len(owners)} owners.", level=ToastLevel.SUCCESS
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._context.clear_busy()
+            self._context.show_notification(
+                f"Failed to refresh owners: {exc}",
                 level=ToastLevel.ERROR,
             )
 
@@ -1614,8 +1638,18 @@ class GroupsWidget(PageScaffold):
             self._detail_pane.display_group(next_group)
             if previous_id != next_group.id:
                 self._prepare_member_state_for_group(next_group)
-            owner_cache = self._controller.cached_owners(next_group.id)
-            if owner_cache is not None:
+                # Auto-load members from cache
+                members = self._controller.load_members_from_cache(next_group.id)
+                if members:
+                    self._detail_pane.set_members(
+                        members,
+                        refreshed_at=self._controller.member_freshness(next_group.id),
+                    )
+                else:
+                    self._detail_pane.clear_members()
+            # Auto-load owners from cache
+            owner_cache = self._controller.load_owners_from_cache(next_group.id)
+            if owner_cache:
                 self._detail_pane.set_owners(
                     owner_cache,
                     refreshed_at=self._controller.owner_freshness(next_group.id),
@@ -1777,8 +1811,6 @@ class GroupsWidget(PageScaffold):
 
         self._refresh_button.setEnabled(service_available)
         self._force_refresh_button.setEnabled(service_available)
-        self._load_members_button.setEnabled(service_available and group_selected)
-        self._load_owners_button.setEnabled(service_available and group_selected)
         self._add_member_button.setEnabled(service_available and group_selected)
         self._remove_member_button.setEnabled(service_available and group_selected)
         self._edit_rule_button.setEnabled(service_available and dynamic_group)

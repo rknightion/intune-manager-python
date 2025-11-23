@@ -3,6 +3,7 @@
 from .application import MobileApp, MobileAppPlatform
 from .assignment import (
     AllDevicesAssignmentTarget,
+    AssignmentFilterType,
     AssignmentIntent,
     AssignmentSettings,
     AssignmentTarget,
@@ -45,6 +46,7 @@ __all__ = [
     "FilteredGroupAssignmentTarget",
     "AssignmentSettings",
     "AssignmentIntent",
+    "AssignmentFilterType",
     "MobileAppAssignment",
     "DirectoryGroup",
     "GroupMember",

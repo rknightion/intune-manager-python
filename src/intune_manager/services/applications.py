@@ -85,10 +85,21 @@ class ApplicationService:
         include_categories: bool = True,
         cancellation_token: CancellationToken | None = None,
     ) -> list[MobileApp]:
+        logger.info(
+            "Applications refresh started",
+            tenant_id=tenant_id,
+            force=force,
+            cache_stale=self.is_cache_stale(tenant_id=tenant_id),
+        )
         if cancellation_token:
             cancellation_token.raise_if_cancelled()
         if not force and not self.is_cache_stale(tenant_id=tenant_id):
             cached = self.list_cached(tenant_id=tenant_id)
+            logger.info(
+                "Applications returning cached data",
+                tenant_id=tenant_id,
+                count=len(cached),
+            )
             self.refreshed.emit(
                 RefreshEvent(
                     tenant_id=tenant_id,
@@ -105,6 +116,11 @@ class ApplicationService:
             expands.append("categories")
         params = {"$expand": ",".join(expands)} if expands else None
 
+        logger.info(
+            "Fetching applications from Graph API",
+            tenant_id=tenant_id,
+            params=params,
+        )
         try:
             apps: list[MobileApp] = []
             self._validator.reset()
@@ -118,6 +134,18 @@ class ApplicationService:
                 if cancellation_token:
                     cancellation_token.raise_if_cancelled()
                 payload = item if isinstance(item, dict) else {"value": item}
+
+                # Debug logging to investigate missing platformType
+                if len(apps) < 3:  # Only log first few apps
+                    logger.debug(
+                        "Graph API app payload fields",
+                        app_id=payload.get("id"),
+                        display_name=payload.get("displayName"),
+                        odata_type=payload.get("@odata.type"),
+                        has_platform_type="platformType" in payload,
+                        platform_type_value=payload.get("platformType"),
+                    )
+
                 model = self._validator.parse(MobileApp, payload)
                 if model is None:
                     invalid_count += 1
@@ -130,6 +158,12 @@ class ApplicationService:
                 apps,
                 tenant_id=tenant_id,
                 expires_in=self._default_ttl,
+            )
+            logger.info(
+                "Applications refresh completed",
+                tenant_id=tenant_id,
+                count=len(apps),
+                invalid_count=invalid_count,
             )
             self.refreshed.emit(
                 RefreshEvent(
@@ -262,6 +296,81 @@ class ApplicationService:
         self.icon_cached.emit(metadata)
         logger.debug("Cached app icon", app_id=app_id, size=len(blob))
         return metadata
+
+    async def background_fetch_icons(
+        self,
+        apps: list[MobileApp],
+        *,
+        tenant_id: str | None = None,
+        batch_size: int = 10,
+        max_concurrent: int = 3,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        """Fetch icons in background for apps without cached icons.
+
+        Args:
+            apps: List of apps to fetch icons for
+            tenant_id: Optional tenant ID for scoping
+            batch_size: Number of apps to process in each batch
+            max_concurrent: Maximum number of concurrent icon fetches
+            cancellation_token: Optional cancellation token
+        """
+        import asyncio
+
+        # Filter apps that need icons
+        apps_needing_icons = [
+            app
+            for app in apps
+            if app.id and not self._attachments.get(f"{app.id}:large", tenant_id=tenant_id)
+        ]
+
+        if not apps_needing_icons:
+            logger.debug("All app icons already cached")
+            return
+
+        logger.info(
+            "Starting background icon fetch",
+            total_apps=len(apps),
+            needs_icons=len(apps_needing_icons),
+        )
+
+        # Semaphore for rate limiting
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def fetch_with_limit(app: MobileApp) -> None:
+            """Fetch icon with concurrency limit and error handling."""
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+
+            async with semaphore:
+                try:
+                    await self.cache_icon(
+                        app.id,
+                        tenant_id=tenant_id,
+                        force=False,
+                        cancellation_token=cancellation_token,
+                    )
+                    # Rate limit: small delay between fetches
+                    await asyncio.sleep(0.5)
+                except CancellationError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # Silently log failures in background fetching
+                    logger.debug(
+                        "Background icon fetch failed", app_id=app.id, error=str(exc)
+                    )
+
+        # Process in batches
+        for batch_start in range(0, len(apps_needing_icons), batch_size):
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+
+            batch = apps_needing_icons[batch_start : batch_start + batch_size]
+            await asyncio.gather(
+                *[fetch_with_limit(app) for app in batch], return_exceptions=True
+            )
+
+        logger.info("Background icon fetch completed", fetched=len(apps_needing_icons))
 
 
 __all__ = ["ApplicationService", "InstallSummaryEvent"]

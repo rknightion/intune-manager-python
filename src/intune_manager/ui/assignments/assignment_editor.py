@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from typing import Callable, Iterable, List
 
-from PySide6.QtCore import QDateTime, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -16,20 +14,17 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QDateTimeEdit,
     QVBoxLayout,
     QWidget,
 )
-from pydantic import ValidationError
 
 from intune_manager.data import (
     AssignmentFilter,
+    AssignmentFilterType,
     AssignmentIntent,
-    AssignmentSettings,
     DirectoryGroup,
     MobileAppAssignment,
 )
@@ -38,21 +33,10 @@ from intune_manager.data.models.assignment import (
     FilteredGroupAssignmentTarget,
     GroupAssignmentTarget,
 )
+from intune_manager.utils.enums import enum_text
 
 
 AssignmentExportCallback = Callable[[Iterable[MobileAppAssignment]], None]
-
-
-def _qdatetime_from_datetime(value: datetime | None) -> QDateTime:
-    if value is None:
-        return QDateTime.currentDateTime()
-    return QDateTime(value)
-
-
-def _qdatetime_to_datetime(value: QDateTime) -> datetime:
-    if hasattr(value, "toPython"):
-        return value.toPython()
-    return datetime.fromtimestamp(value.toSecsSinceEpoch())
 
 
 class AssignmentCreateDialog(QDialog):
@@ -104,11 +88,18 @@ class AssignmentCreateDialog(QDialog):
         form.addWidget(QLabel("Assignment filter"), 2, 0)
         form.addWidget(self._filter_combo, 2, 1)
 
+        self._filter_mode_combo = QComboBox()
+        self._filter_mode_combo.addItem("No filter", AssignmentFilterType.NONE.value)
+        self._filter_mode_combo.addItem("Include devices matching filter", AssignmentFilterType.INCLUDE.value)
+        self._filter_mode_combo.addItem("Exclude devices matching filter", AssignmentFilterType.EXCLUDE.value)
+        form.addWidget(QLabel("Filter mode"), 3, 0)
+        form.addWidget(self._filter_mode_combo, 3, 1)
+
         self._intent_combo = QComboBox()
         for intent in AssignmentIntent:
             self._intent_combo.addItem(intent.value, intent.value)
-        form.addWidget(QLabel("Intent"), 3, 0)
-        form.addWidget(self._intent_combo, 3, 1)
+        form.addWidget(QLabel("Intent"), 4, 0)
+        form.addWidget(self._intent_combo, 4, 1)
 
         layout.addLayout(form)
 
@@ -120,7 +111,9 @@ class AssignmentCreateDialog(QDialog):
         layout.addWidget(self._button_box)
 
         self._target_type_combo.currentIndexChanged.connect(self._sync_inputs)
+        self._filter_combo.currentIndexChanged.connect(self._sync_filter_mode)
         self._sync_inputs()
+        self._sync_filter_mode()
 
     def assignment(self) -> MobileAppAssignment | None:
         return self._assignment
@@ -128,8 +121,21 @@ class AssignmentCreateDialog(QDialog):
     def _sync_inputs(self) -> None:
         is_group = self._target_type_combo.currentData() == "group"
         has_groups = bool(self._groups)
+        has_filters = bool(self._filters)
         self._group_combo.setEnabled(is_group and has_groups)
-        self._filter_combo.setEnabled(is_group and bool(self._filters))
+        self._filter_combo.setEnabled(is_group and has_filters)
+        self._filter_mode_combo.setEnabled(is_group and has_filters)
+
+    def _sync_filter_mode(self) -> None:
+        """Enable/disable filter mode based on whether a filter is selected."""
+        filter_id = self._filter_combo.currentData()
+        if filter_id is None:
+            # No filter selected, disable filter mode and set to NONE
+            self._filter_mode_combo.setEnabled(False)
+            self._filter_mode_combo.setCurrentIndex(0)  # Set to "No filter"
+        else:
+            # Filter selected, enable filter mode
+            self._filter_mode_combo.setEnabled(True)
 
     def _handle_accept(self) -> None:
         target_type = self._target_type_combo.currentData()
@@ -141,12 +147,24 @@ class AssignmentCreateDialog(QDialog):
                 )
                 return
             filter_id = self._filter_combo.currentData()
-            if filter_id:
-                target = FilteredGroupAssignmentTarget(
-                    group_id=group_id, assignment_filter_id=filter_id
+            filter_mode_str = self._filter_mode_combo.currentData()
+            filter_mode = AssignmentFilterType(filter_mode_str) if filter_mode_str else AssignmentFilterType.NONE
+
+            # Validate: if filter is selected, mode must not be NONE
+            if filter_id and filter_mode == AssignmentFilterType.NONE:
+                QMessageBox.warning(
+                    self,
+                    "Missing filter mode",
+                    "Please select a filter mode (Include/Exclude) when using an assignment filter.",
                 )
-            else:
-                target = GroupAssignmentTarget(group_id=group_id)
+                return
+
+            # Always use GroupAssignmentTarget with filter fields
+            target = GroupAssignmentTarget(
+                group_id=group_id,
+                assignment_filter_id=filter_id,
+                assignment_filter_type=filter_mode
+            )
         else:
             target = AllDevicesAssignmentTarget()
 
@@ -191,11 +209,10 @@ class AssignmentEditorDialog(QDialog):
         }
         self._combos: list[QComboBox] = []
         self._export_callback = on_export
-        self._updating_settings = False
 
         layout = QVBoxLayout(self)
         header = QLabel(
-            "Adjust assignment intents, add or remove targets, and optionally tweak advanced settings.",
+            "Adjust assignment intents, add or remove targets, and configure filters.",
             parent=self,
         )
         header.setWordWrap(True)
@@ -203,7 +220,7 @@ class AssignmentEditorDialog(QDialog):
 
         self._table = QTableWidget(0, 5, parent=self)
         self._table.setHorizontalHeaderLabels(
-            ["Target", "Intent", "Filter", "Type", "Schedule"]
+            ["Target", "Intent", "Filter", "Filter Mode", "Type"]
         )
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -214,41 +231,10 @@ class AssignmentEditorDialog(QDialog):
         controls_layout = QHBoxLayout()
         self._add_button = QPushButton("Add target")
         self._remove_button = QPushButton("Remove target")
-        self._apply_settings_button = QPushButton("Apply settings")
         controls_layout.addWidget(self._add_button)
         controls_layout.addWidget(self._remove_button)
         controls_layout.addStretch()
-        controls_layout.addWidget(self._apply_settings_button)
         layout.addLayout(controls_layout)
-
-        schedule_box = QGroupBox("Scheduling window (optional)")
-        schedule_layout = QGridLayout(schedule_box)
-        schedule_layout.setSpacing(8)
-        self._start_checkbox = QCheckBox("Start at", parent=schedule_box)
-        self._start_edit = QDateTimeEdit(parent=schedule_box)
-        self._start_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self._start_edit.setCalendarPopup(True)
-        self._deadline_checkbox = QCheckBox("Deadline", parent=schedule_box)
-        self._deadline_edit = QDateTimeEdit(parent=schedule_box)
-        self._deadline_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self._deadline_edit.setCalendarPopup(True)
-        schedule_layout.addWidget(self._start_checkbox, 0, 0)
-        schedule_layout.addWidget(self._start_edit, 0, 1)
-        schedule_layout.addWidget(self._deadline_checkbox, 1, 0)
-        schedule_layout.addWidget(self._deadline_edit, 1, 1)
-        layout.addWidget(schedule_box)
-
-        settings_box = QGroupBox("Assignment settings (JSON)")
-        settings_layout = QVBoxLayout(settings_box)
-        settings_hint = QLabel(
-            "Paste Graph assignment settings payloads (optional). Leave empty for defaults."
-        )
-        settings_hint.setWordWrap(True)
-        settings_hint.setStyleSheet("color: palette(mid);")
-        settings_layout.addWidget(settings_hint)
-        self._settings_edit = QPlainTextEdit()
-        settings_layout.addWidget(self._settings_edit, stretch=1)
-        layout.addWidget(settings_box, stretch=1)
 
         helper_box = QGroupBox("Tips")
         helper_layout = QGridLayout(helper_box)
@@ -285,17 +271,11 @@ class AssignmentEditorDialog(QDialog):
         self._export_button.clicked.connect(self._handle_export_clicked)
         self._add_button.clicked.connect(self._handle_add_assignment)
         self._remove_button.clicked.connect(self._handle_remove_assignment)
-        self._apply_settings_button.clicked.connect(self._apply_settings_clicked)
         self._table.currentCellChanged.connect(self._handle_selection_changed)
-        self._start_checkbox.toggled.connect(self._sync_schedule_inputs)
-        self._deadline_checkbox.toggled.connect(self._sync_schedule_inputs)
 
         self._rebuild_table()
         if self._table.rowCount() > 0:
             self._table.selectRow(0)
-            self._load_settings_for_row(0)
-        else:
-            self._set_schedule_controls(None)
 
     # ----------------------------------------------------------------- Helpers
 
@@ -322,7 +302,6 @@ class AssignmentEditorDialog(QDialog):
         row = self._table.rowCount() - 1
         if row >= 0:
             self._table.selectRow(row)
-            self._load_settings_for_row(row)
 
     def _handle_remove_assignment(self) -> None:
         row = self._selected_row()
@@ -334,129 +313,80 @@ class AssignmentEditorDialog(QDialog):
         if self._table.rowCount() > 0:
             new_row = min(row, self._table.rowCount() - 1)
             self._table.selectRow(new_row)
-            self._load_settings_for_row(new_row)
-        else:
-            self._settings_edit.clear()
-
-    def _apply_settings_clicked(self) -> None:
-        row = self._selected_row()
-        if row is None:
-            QMessageBox.information(
-                self, "No selection", "Select a target before applying settings."
-            )
-            return
-        text = self._settings_edit.toPlainText().strip()
-        existing = self._assignments[row].settings
-
-        start_dt = (
-            _qdatetime_to_datetime(self._start_edit.dateTime())
-            if self._start_checkbox.isChecked()
-            else None
-        )
-        deadline_dt = (
-            _qdatetime_to_datetime(self._deadline_edit.dateTime())
-            if self._deadline_checkbox.isChecked()
-            else None
-        )
-        if start_dt and deadline_dt and start_dt >= deadline_dt:
-            QMessageBox.warning(
-                self, "Invalid schedule", "The deadline must be after the start time."
-            )
-            return
-
-        if text:
-            try:
-                payload = json.loads(text)
-                base_settings = AssignmentSettings.model_validate(payload)
-            except (json.JSONDecodeError, ValidationError) as exc:
-                QMessageBox.warning(
-                    self, "Invalid settings", f"Unable to parse settings JSON: {exc}"
-                )
-                return
-        else:
-            base_settings = existing or AssignmentSettings()
-
-        if not text and start_dt is None and deadline_dt is None:
-            settings_obj: AssignmentSettings | None = None
-        else:
-            settings_obj = base_settings.model_copy(
-                update={
-                    "start_date_time": start_dt,
-                    "deadline_date_time": deadline_dt,
-                },
-            )
-
-        self._assignments[row] = self._assignments[row].model_copy(
-            update={"settings": settings_obj}
-        )
-        self._rebuild_table()
-        if self._table.rowCount() > 0:
-            self._table.selectRow(min(row, self._table.rowCount() - 1))
-            self._load_settings_for_row(min(row, self._table.rowCount() - 1))
-
-        if settings_obj is None:
-            QMessageBox.information(
-                self,
-                "Settings cleared",
-                "Advanced settings removed for the selected assignment.",
-            )
-        else:
-            QMessageBox.information(
-                self,
-                "Settings updated",
-                "Advanced settings applied to the selected assignment.",
-            )
 
     def _handle_selection_changed(
         self, current_row: int, _current_col: int, _prev_row: int, _prev_col: int
     ) -> None:
-        if current_row < 0:
-            self._settings_edit.clear()
-            return
-        self._load_settings_for_row(current_row)
-
-    def _load_settings_for_row(self, row: int) -> None:
-        if row < 0 or row >= len(self._assignments):
-            self._settings_edit.clear()
-            self._set_schedule_controls(None)
-            return
-        assignment = self._assignments[row]
-        self._updating_settings = True
-        try:
-            payload = assignment.settings.to_graph() if assignment.settings else {}
-            self._settings_edit.setPlainText(
-                json.dumps(payload, indent=2) if payload else ""
-            )
-        finally:
-            self._updating_settings = False
-        self._set_schedule_controls(assignment)
+        # Selection changed - no additional action needed now that settings/schedule removed
+        pass
 
     def _rebuild_table(self) -> None:
         self._table.setRowCount(len(self._assignments))
         self._combos.clear()
         for row, assignment in enumerate(self._assignments):
             target_item = QTableWidgetItem(self._target_label(assignment))
-            filter_item = QTableWidgetItem(self._filter_label(assignment))
             type_item = QTableWidgetItem(self._target_type_label(assignment))
-            for item in (target_item, filter_item, type_item):
+            for item in (target_item, type_item):
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self._table.setItem(row, 0, target_item)
-            combo = QComboBox()
+
+            # Intent combo
+            intent_combo = QComboBox()
             for intent in AssignmentIntent:
-                combo.addItem(intent.value, intent.value)
-            combo.setCurrentText(assignment.intent.value)
-            combo.currentIndexChanged.connect(
-                lambda _idx, row=row, widget=combo: self._update_intent(row, widget)
+                intent_combo.addItem(intent.value, intent.value)
+            intent_combo.setCurrentText(enum_text(assignment.intent) or "")
+            intent_combo.currentIndexChanged.connect(
+                lambda _idx, row=row, widget=intent_combo: self._update_intent(row, widget)
             )
-            self._table.setCellWidget(row, 1, combo)
-            self._combos.append(combo)
-            self._table.setItem(row, 2, filter_item)
-            self._table.setItem(row, 3, type_item)
-            schedule_item = QTableWidgetItem(self._schedule_label(assignment))
-            schedule_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            self._table.setCellWidget(row, 1, intent_combo)
+            self._combos.append(intent_combo)
+
+            # Filter combo (only for group assignments)
+            filter_combo = QComboBox()
+            filter_combo.addItem("No filter", None)
+            for assignment_filter in self._filters:
+                if not assignment_filter.id:
+                    continue
+                filter_combo.addItem(
+                    assignment_filter.display_name or assignment_filter.id,
+                    assignment_filter.id,
+                )
+            # Set current filter
+            current_filter_id = getattr(assignment.target, "assignment_filter_id", None)
+            if current_filter_id:
+                index = filter_combo.findData(current_filter_id)
+                if index >= 0:
+                    filter_combo.setCurrentIndex(index)
+            # Disable for non-group targets
+            is_group_target = isinstance(assignment.target, GroupAssignmentTarget)
+            filter_combo.setEnabled(is_group_target)
+            filter_combo.currentIndexChanged.connect(
+                lambda _idx, row=row, widget=filter_combo: self._update_filter(row, widget)
             )
-            self._table.setItem(row, 4, schedule_item)
+            self._table.setCellWidget(row, 2, filter_combo)
+            self._combos.append(filter_combo)
+
+            # Filter mode combo
+            filter_mode_combo = QComboBox()
+            filter_mode_combo.addItem("—", AssignmentFilterType.NONE.value)
+            filter_mode_combo.addItem("Include", AssignmentFilterType.INCLUDE.value)
+            filter_mode_combo.addItem("Exclude", AssignmentFilterType.EXCLUDE.value)
+            # Set current filter mode
+            current_filter_type = getattr(assignment.target, "assignment_filter_type", AssignmentFilterType.NONE)
+            filter_type_str = enum_text(current_filter_type) if current_filter_type else AssignmentFilterType.NONE.value
+            index = filter_mode_combo.findData(filter_type_str)
+            if index >= 0:
+                filter_mode_combo.setCurrentIndex(index)
+            # Disable for non-group targets or when no filter selected
+            has_filter = current_filter_id is not None
+            filter_mode_combo.setEnabled(is_group_target and has_filter)
+            filter_mode_combo.currentIndexChanged.connect(
+                lambda _idx, row=row, widget=filter_mode_combo: self._update_filter_mode(row, widget)
+            )
+            self._table.setCellWidget(row, 3, filter_mode_combo)
+            self._combos.append(filter_mode_combo)
+
+            self._table.setItem(row, 4, type_item)
 
         self._table.resizeColumnsToContents()
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -475,14 +405,82 @@ class AssignmentEditorDialog(QDialog):
             return
         selected = combo.currentData()
         assignment = self._assignments[row]
-        if selected == assignment.intent.value:
+        if selected == enum_text(assignment.intent):
             return
         self._assignments[row] = assignment.model_copy(
             update={"intent": AssignmentIntent(selected)}
         )
-        schedule_item = self._table.item(row, 4)
-        if schedule_item is not None:
-            schedule_item.setText(self._schedule_label(self._assignments[row]))
+
+    def _update_filter(self, row: int, combo: QComboBox) -> None:
+        """Update filter for a group assignment."""
+        if row < 0 or row >= len(self._assignments):
+            return
+        assignment = self._assignments[row]
+        if not isinstance(assignment.target, GroupAssignmentTarget):
+            return
+
+        new_filter_id = combo.currentData()
+        current_filter_id = assignment.target.assignment_filter_id
+
+        if new_filter_id == current_filter_id:
+            return
+
+        # Update the target with new filter
+        new_target = assignment.target.model_copy(
+            update={"assignment_filter_id": new_filter_id}
+        )
+
+        # If filter is being cleared, also clear the filter mode
+        if new_filter_id is None:
+            new_target = new_target.model_copy(
+                update={"assignment_filter_type": AssignmentFilterType.NONE}
+            )
+
+        self._assignments[row] = assignment.model_copy(update={"target": new_target})
+
+        # Update filter mode combo enabled state
+        filter_mode_combo = self._table.cellWidget(row, 3)
+        if isinstance(filter_mode_combo, QComboBox):
+            filter_mode_combo.setEnabled(new_filter_id is not None)
+            if new_filter_id is None:
+                # Reset to NONE when filter cleared
+                index = filter_mode_combo.findData(AssignmentFilterType.NONE.value)
+                if index >= 0:
+                    filter_mode_combo.setCurrentIndex(index)
+
+    def _update_filter_mode(self, row: int, combo: QComboBox) -> None:
+        """Update filter mode for a group assignment."""
+        if row < 0 or row >= len(self._assignments):
+            return
+        assignment = self._assignments[row]
+        if not isinstance(assignment.target, GroupAssignmentTarget):
+            return
+
+        new_mode_str = combo.currentData()
+        new_mode = AssignmentFilterType(new_mode_str) if new_mode_str else AssignmentFilterType.NONE
+        current_mode = assignment.target.assignment_filter_type or AssignmentFilterType.NONE
+
+        if new_mode == current_mode:
+            return
+
+        # Validate: if filter is set, mode must not be NONE
+        if assignment.target.assignment_filter_id and new_mode == AssignmentFilterType.NONE:
+            QMessageBox.warning(
+                self,
+                "Invalid filter mode",
+                "Filter mode cannot be '—' when a filter is selected. Please choose Include or Exclude.",
+            )
+            # Reset combo to current valid value
+            index = combo.findData(enum_text(current_mode))
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            return
+
+        # Update the target with new filter mode
+        new_target = assignment.target.model_copy(
+            update={"assignment_filter_type": new_mode}
+        )
+        self._assignments[row] = assignment.model_copy(update={"target": new_target})
 
     def _target_label(self, assignment: MobileAppAssignment) -> str:
         target = assignment.target
@@ -509,44 +507,27 @@ class AssignmentEditorDialog(QDialog):
             else filter_id
         )
 
+    def _filter_mode_label(self, assignment: MobileAppAssignment) -> str:
+        """Get user-friendly label for filter mode."""
+        filter_type = getattr(assignment.target, "assignment_filter_type", None)
+        if not filter_type:
+            return "—"
+
+        # Handle both enum and string values
+        filter_type_str = enum_text(filter_type) if filter_type else ""
+
+        mode_labels = {
+            "none": "—",
+            "include": "Include",
+            "exclude": "Exclude",
+        }
+        return mode_labels.get(filter_type_str.lower(), filter_type_str or "—")
+
     def _target_type_label(self, assignment: MobileAppAssignment) -> str:
         odata_type = getattr(assignment.target, "odata_type", "")
         if odata_type.startswith("#microsoft.graph."):
             return odata_type.split(".")[-1]
         return odata_type or "Unknown"
-
-    def _schedule_label(self, assignment: MobileAppAssignment) -> str:
-        settings = assignment.settings
-        if not settings:
-            return "—"
-        start = settings.start_date_time
-        deadline = settings.deadline_date_time
-        fragments: list[str] = []
-        if start:
-            fragments.append(f"Start {start:%Y-%m-%d %H:%M}")
-        if deadline:
-            fragments.append(f"Due {deadline:%Y-%m-%d %H:%M}")
-        return " / ".join(fragments) if fragments else "—"
-
-    def _set_schedule_controls(self, assignment: MobileAppAssignment | None) -> None:
-        start = None
-        deadline = None
-        if assignment and assignment.settings:
-            start = assignment.settings.start_date_time
-            deadline = assignment.settings.deadline_date_time
-        self._start_checkbox.blockSignals(True)
-        self._deadline_checkbox.blockSignals(True)
-        self._start_checkbox.setChecked(start is not None)
-        self._deadline_checkbox.setChecked(deadline is not None)
-        self._start_checkbox.blockSignals(False)
-        self._deadline_checkbox.blockSignals(False)
-        self._start_edit.setDateTime(_qdatetime_from_datetime(start))
-        self._deadline_edit.setDateTime(_qdatetime_from_datetime(deadline))
-        self._sync_schedule_inputs()
-
-    def _sync_schedule_inputs(self) -> None:
-        self._start_edit.setEnabled(self._start_checkbox.isChecked())
-        self._deadline_edit.setEnabled(self._deadline_checkbox.isChecked())
 
 
 __all__ = [

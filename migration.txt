@@ -85,4 +85,188 @@ You are permitted to consume migration-done.txt to see what previous work has be
 - [x] Graph.3: Increase httpx timeout for complex Graph API queries — NOTE: `src/intune_manager/graph/client.py:762-767` added explicit `httpx.Timeout` configuration (connect=10s, read=60s, write=30s, pool=5s) to `RateLimitedAsyncClient` initialization; resolves timeout errors when fetching audit events with filters and other complex Graph API queries that exceed default 5-second timeout.
 - [x] UX.5: Fix toast notification text cropping — NOTE: `src/intune_manager/ui/components/notifications.py:125` reduced label `setMaximumWidth` from 400px to 380px to account for frame padding (24px) and close button (36px), ensuring text doesn't get cropped in multi-line notifications.
 - [x] Service.1: Initialize missing AssignmentService in bootstrap — NOTE: `src/intune_manager/bootstrap.py:24,113,136,128` added `AssignmentService` import, created instance with `client_factory` parameter, added to `ServiceRegistry` return, and updated service_count to 7; resolves "Assignment service not configured" warnings throughout application and enables assignment workflows in Applications and Assignments modules.
+
+### Session 2025-10-28
+- [x] UI.2: Fix QListWidgetItem parent keyword argument crash — NOTE: `src/intune_manager/ui/applications/bulk_assignment.py:206,225` changed `QListWidgetItem(label, parent=self._app_list)` to `QListWidgetItem(label, self._app_list)` (parent must be positional argument in PySide6); resolves AttributeError crash when opening Bulk Assignment dialog.
+- [x] UI.3: Add exception handling to Edit Assignments dialog — NOTE: `src/intune_manager/ui/applications/widgets.py:831-848` wrapped `AssignmentEditorDialog` creation in try/except block with error notification; prevents silent failures and provides user feedback if dialog creation fails.
+- [x] Data.2: Extract platform from @odata.type for MobileApp — NOTE: `src/intune_manager/data/models/application.py:70-113` added `@model_validator` to extract platform from `@odata.type` field (e.g., `#microsoft.graph.iosStoreApp` → `ios`) when `platformType` is missing from Graph API response; resolves empty platform dropdown and "unknown" platform display in Applications overview tab.
+- [x] Graph.4: Add debug logging for platform data investigation — NOTE: `src/intune_manager/services/applications.py:122-131` added debug logging to log first 3 app payloads during refresh, showing `@odata.type`, `platformType` presence/value; aids in troubleshooting Graph API response structure.
+- [x] UX.6: Remove App Assignments page from navigation — NOTE: `src/intune_manager/ui/main/window.py:55,87,347-356` removed `AssignmentsWidget` import, removed "App Assignments" NavigationItem, and removed assignments widget factory case; Bulk Assignment functionality remains accessible via Applications page multi-select + "Bulk assign" button.
+- [x] UX.7: Increase toast notification sizing for better text display — NOTE: `src/intune_manager/ui/components/notifications.py:82,125` increased toast max width from 450px to 650px and label max width from 380px to 600px; allows longer messages to display on 2-3 lines without text cutoff; toasts automatically adjust height to content with existing `adjustSize()` logic.
+- [x] Service.2: Add diagnostic logging for startup sync investigation — NOTE: `src/intune_manager/services/applications.py:88-93,98-102,119-123,162-167` added INFO-level logging at key points in refresh flow (start, cache return, Graph fetch start, completion); `src/intune_manager/services/sync.py:68-73,81-85` added phase start/completion logging; helps diagnose why applications/groups cache may appear stale despite being included in startup sync.
+
+### Session 2025-10-29
+- [x] Data.3: Auto-load group members/owners during sync — NOTE: Implemented automatic loading of group members and owners during startup/background sync instead of requiring manual "Load Members/Owners" buttons:
+  - `src/intune_manager/data/sql/models.py:147-161` added `GroupMemberRecord` table with composite key (group_id, member_id) and is_owner flag; includes display_name, user_principal_name, mail, odata_type fields; TTL: 30 minutes (matching group metadata).
+  - `src/intune_manager/data/sql/engine.py:18` bumped SCHEMA_VERSION from 1 to 2 for new table.
+  - `src/intune_manager/data/sql/__init__.py:10,24` exported `GroupMemberRecord`.
+  - `src/intune_manager/data/sql/mapper.py:11,23,204-233,243-244` added `group_members_to_records()` and `record_to_group_member()` mapper functions.
+  - `src/intune_manager/data/repositories/groups.py` added member/owner caching methods: `cache_members()`, `cache_owners()`, `get_cached_members()`, `get_cached_owners()`, `is_members_stale()`, `is_owners_stale()`.
+  - `src/intune_manager/services/groups.py:480-522` added `refresh_members()`, `refresh_owners()`, `get_members()`, `get_owners()` to fetch from API and cache, or retrieve from cache.
+  - `src/intune_manager/services/sync.py:117-120,136-182` integrated member/owner sync into `refresh_all()`; after group metadata sync, iterates all groups and refreshes members/owners with progress logging and error handling (continues on individual group failures).
+  - `src/intune_manager/ui/groups/controller.py:77-99,186-219` added `load_members_from_cache()`, `load_owners_from_cache()`, `refresh_members()`, `refresh_owners()` to bridge UI and service cache.
+  - `src/intune_manager/ui/groups/widgets.py:586-591,616-617,650-651` removed "Load Members/Owners" buttons and their click handlers.
+  - `src/intune_manager/ui/groups/widgets.py:1563-1580` auto-load members/owners from cache on group selection.
+  - `src/intune_manager/ui/groups/widgets.py:940-965` existing refresh button now also refreshes members/owners for selected group.
+  - `src/intune_manager/ui/groups/widgets.py:760-765,974-1024` added refresh handlers for detail pane member/owner refresh requests with user feedback.
+  - Members and owners are now automatically synced during startup and available immediately on group selection without manual button clicks; refresh button updates both group metadata and membership data.
+
+### Session 2025-11-02
+- [x] Bug.1: Fix GroupService AttributeError in sync.py — NOTE: `src/intune_manager/services/sync.py:144` changed `group_service.list_groups(tenant_id=tenant_id)` to `group_service.list_cached(tenant_id=tenant_id)`; the correct method name is `list_cached()`, not `list_groups()`; this error was introduced in Session 2025-10-29 Data.3 when implementing automatic group member/owner loading.
+- [x] UX.8: Fix toast notification sizing race condition — NOTE: `src/intune_manager/ui/components/notifications.py:257-265` deferred sizing operations (`activate()`, `updateGeometry()`, `adjustSize()`, `_relocate()`) to next event loop iteration using `QTimer.singleShot(0, _finalize_sizing)` instead of executing immediately after `show()`; this allows Qt's text layout engine to finish calculating multi-line wrapped text dimensions before the toast adjusts its size, resolving issues with toasts showing empty/incorrectly sized until text appears.
+- [x] UX.9: Add toast notification logging to console — NOTE: `src/intune_manager/ui/components/notifications.py:267-273` added console logging for all toasts in `ToastManager.show_toast()`; toast level maps to log level (ToastLevel.ERROR → logger.error(), ToastLevel.WARNING → logger.warning(), ToastLevel.INFO/SUCCESS → logger.info()); enables debugging of warning/error toasts that were previously only visible in UI.
+- [x] Bug.2: Fix bulk assignment tenant_id consistency — NOTE: `src/intune_manager/ui/applications/widgets.py:899-902,911` added `SettingsManager` import and logic to load active `tenant_id` in `_handle_bulk_assign_clicked()`; now passes `tenant_id` to `group_service.list_cached(tenant_id=tenant_id)` ensuring cache query uses same tenant_id as sync (resolves cache miss when groups synced with tenant_id but queried with None).
+- [x] UX.10: Auto-refresh groups when bulk assignment finds no cached groups — NOTE: `src/intune_manager/ui/applications/widgets.py:912-982` implemented automatic group refresh when bulk assignment finds no cached groups; added `_refresh_groups_and_open_bulk_assign_async()` method to fetch groups from Graph API and auto-open dialog on success; refactored dialog opening into `_open_bulk_assign_dialog()` helper; eliminates manual "refresh groups first" workflow and provides seamless UX with progress feedback.
+- [x] Data.4: Add app_type field for application type filtering — NOTE: Added comprehensive app type filtering capability:
+  - `src/intune_manager/utils/app_types.py` (new file): Created utility functions for mapping Microsoft Graph @odata.type values to user-friendly type names (Store, LOB, VPP, WinGet, etc.); includes platform-type compatibility checking via `is_compatible()` function and `get_display_name()` for creating "Platform - Type" display strings.
+  - `src/intune_manager/data/models/application.py:58,75-123`: Added `app_type` field to `MobileApp` model; updated `@model_validator` to extract both platform and app type from @odata.type (e.g., "#microsoft.graph.iosVppApp" → platform="ios", app_type="VPP").
+  - `src/intune_manager/data/sql/models.py:62`: Added indexed `app_type` column to `MobileAppRecord` for fast type-based filtering.
+  - `src/intune_manager/data/sql/engine.py:18`: Bumped SCHEMA_VERSION from 2 to 3 (triggers cache invalidation and fresh fetch on next startup).
+  - `src/intune_manager/data/sql/mapper.py:67`: Updated `mobile_app_to_record()` mapper to include `app_type` field.
+- [x] UI.4: Add type filter dropdown to Applications page — NOTE: `src/intune_manager/ui/applications/widgets.py`:
+  - Lines 40,56: Added imports for `MobileAppPlatform` enum and app_types utilities (`get_display_name`, `is_compatible`).
+  - Lines 483-485: Added `self._type_combo` QComboBox between platform and intent filters in `_build_filters()`.
+  - Lines 1135-1139: Added `_handle_type_changed()` handler to update proxy filter and check compatibility.
+  - Lines 1140-1196: Added `_check_filter_compatibility()` method to show inline warning when platform+type combination is invalid (e.g., "iOS VPP + Windows") or when no results match filters.
+  - Lines 1198-1237: Updated `_apply_filter_options()` to populate all known platforms (not just those with data) and create "Platform - Type" combinations for type dropdown; added `_populate_combo_with_disabled()` to gray out platforms without cached apps.
+  - Lines 433-440,508: Added `self._filter_message` QLabel styled as warning banner to display incompatibility messages inline below filter bar.
+- [x] UI.5: Fix platform filter to show all platforms — NOTE: `src/intune_manager/ui/applications/widgets.py:1140-1159` changed platform dropdown from dynamically populated (only showing platforms with data) to showing all platforms from `MobileAppPlatform` enum (Windows, macOS, iOS, Android); platforms without cached apps are disabled/grayed out but remain visible, resolving issue where Windows and Android were missing from dropdown.
+- [x] UI.6: Add type filtering to ApplicationFilterProxyModel — NOTE: `src/intune_manager/ui/applications/models.py`:
+  - Line 210: Added `_type_filter` instance variable.
+  - Lines 231-236: Added `set_type_filter()` method to update type filter and invalidate proxy.
+  - Lines 294-297: Added type filtering check in `filterAcceptsRow()` to filter apps by `app.app_type` field.
+- [x] Bug.3: Fix AttributeError in assignment editor dialog — NOTE: `src/intune_manager/ui/assignments/assignment_editor.py:42,448,479` added `enum_text` utility import and replaced `assignment.intent.value` with `enum_text(assignment.intent)` to safely handle both enum objects and string values from cache; resolves AttributeError: 'str' object has no attribute 'value' when clicking "Edit assignments" button.
+- [x] Data.5: Add assignment filter mode (include/exclude) support — NOTE: Implemented complete support for Intune assignment filter types:
+  - `src/intune_manager/data/models/assignment.py:20-29`: Added `AssignmentFilterType` StrEnum with values NONE, INCLUDE, EXCLUDE.
+  - `src/intune_manager/data/models/assignment.py:49-56`: Updated `GroupAssignmentTarget` to include `assignment_filter_id` and `assignment_filter_type` fields mapped to Graph API aliases `deviceAndAppManagementAssignmentFilterId` and `deviceAndAppManagementAssignmentFilterType`.
+  - `src/intune_manager/data/models/__init__.py:6,49`: Added `AssignmentFilterType` to imports and exports.
+  - `src/intune_manager/data/__init__.py:14,72`: Exported `AssignmentFilterType` from data module.
+  - `src/intune_manager/data/sql/models.py:100`: Added indexed `filter_type` column to `MobileAppAssignmentRecord` for caching filter mode (include/exclude/none).
+  - `src/intune_manager/data/sql/engine.py:18`: Bumped SCHEMA_VERSION from 3 to 4 for new filter_type column.
+  - `src/intune_manager/data/sql/mapper.py:182-193`: Updated `assignments_to_records()` to extract and store `assignment_filter_type` from assignment targets.
+- [x] UI.7: Add filter mode dropdown to assignment editor — NOTE: `src/intune_manager/ui/assignments/assignment_editor.py`:
+  - Lines 31,109-114: Added `AssignmentFilterType` import and filter mode combo with three options (No filter, Include, Exclude).
+  - Lines 218-220,528-542: Expanded assignment table to 6 columns, added `_filter_mode_label()` method to display filter mode as "Include"/"Exclude"/"—".
+  - Lines 145-165: Updated `_handle_accept()` to create `GroupAssignmentTarget` with both `assignment_filter_id` and `assignment_filter_type` fields from UI selections.
+- [x] UI.8: Add filter mode dropdown to bulk assignment wizard — NOTE: `src/intune_manager/ui/applications/bulk_assignment.py`:
+  - Lines 25-29,41: Added `AssignmentFilterType` import, updated `BulkAssignmentPlan` dataclass to include `filter_mode: AssignmentFilterType` field.
+  - Lines 187-195: Added filter mode combo after filter selection in configuration section.
+  - Lines 340-345,365: Updated `_handle_accept()` to extract filter mode from combo and pass to `BulkAssignmentPlan`.
+- [x] UI.9: Update assignment display to show filter modes — NOTE: `src/intune_manager/ui/applications/widgets.py:267-287` updated application detail pane assignment list to display filter mode alongside filter ID; format changed from "(filter: {filter_id})" to "(filter: {filter_id} - Include/Exclude)" based on `assignment_filter_type` field extracted from assignment target.
+- [x] Bug.4: Fix AsyncIO RuntimeError when opening assignment editor — NOTE: Refactored assignment editor opening to use two-phase approach (async data fetch + sync dialog display):
+  - `src/intune_manager/ui/applications/widgets.py:9,825-906`: Added QTimer import; split `_open_assignment_editor_async()` into `_fetch_assignment_data_async()` (async data fetching) and `_open_assignment_editor_dialog()` (synchronous dialog display); used `QTimer.singleShot(0, ...)` to break out of async context before calling `dialog.exec()`.
+  - This eliminates nested `run_async()` calls that caused "RuntimeError: Cannot enter into task while another task is being executed" when user clicked Save.
+- [x] UX.11: Simplify assignment configuration (remove scheduling & JSON settings) — NOTE: Removed complex configuration options from both assignment editor and bulk assignment wizard:
+  - **Assignment Editor** (`src/intune_manager/ui/assignments/assignment_editor.py`):
+    - Removed scheduling UI (lines 238-253): deleted QGroupBox with QDateTimeEdit widgets for start/deadline.
+    - Removed JSON settings editor (lines 255-265): deleted QPlainTextEdit for advanced settings payload.
+    - Removed "Apply settings" button and `_apply_settings_clicked()` handler method.
+    - Removed schedule-related methods: `_schedule_label()`, `_set_schedule_controls()`, `_sync_schedule_inputs()`, `_load_settings_for_row()`.
+    - Updated table from 6 to 5 columns (removed "Schedule" column); headers now: Target, Intent, Filter, Filter Mode, Type.
+    - Updated header text from "tweak advanced settings" to "configure filters".
+    - Removed unused imports: json, QCheckBox, QPlainTextEdit, QDateTimeEdit, QDateTime, ValidationError, AssignmentSettings, datetime helpers.
+  - **Bulk Assignment Wizard** (`src/intune_manager/ui/applications/bulk_assignment.py`):
+    - Removed JSON settings editor (lines 197-210): deleted QPlainTextEdit and hint label.
+    - Updated `BulkAssignmentPlan` dataclass: removed `settings: AssignmentSettings | None` field.
+    - Simplified `_handle_accept()`: removed JSON parsing and validation logic (lines 331-343).
+    - Removed unused imports: json, QPlainTextEdit, ValidationError, AssignmentSettings.
+  - Configuration now limited to: intent, target/groups, filter, filter mode only.
+- [x] UX.12: Add filter/filter mode UI coupling and validation — NOTE: Improved filter mode UX to prevent invalid states:
+  - **Assignment Editor** (`src/intune_manager/ui/assignments/assignment_editor.py`):
+    - Added `_sync_filter_mode()` method (lines 129-138): disables filter mode dropdown when no filter selected; enables when filter selected.
+    - Connected filter combo signal (line 114): `self._filter_combo.currentIndexChanged.connect(self._sync_filter_mode)`.
+    - Added validation in `_handle_accept()` (lines 153-160): shows warning dialog if filter selected but mode is NONE; prevents invalid submission.
+  - **Bulk Assignment Wizard** (`src/intune_manager/ui/applications/bulk_assignment.py`):
+    - Added `_sync_filter_mode()` method (lines 296-305): same disable/enable logic as assignment editor.
+    - Connected filter combo signal (line 90): `self._filter_combo.currentIndexChanged.connect(self._sync_filter_mode)`.
+    - Added validation in `_handle_accept()` (lines 340-347): same warning dialog as assignment editor.
+  - Filter mode dropdown is now grayed out when "No assignment filter" is selected; validation prevents saving filter without mode selection.
+
+### Session 2025-11-02
+- [x] UX.13: Enable text selection in application detail view — NOTE: `src/intune_manager/ui/applications/widgets.py:118-120,125-127,155-157,176-178` added `setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)` to title label, subtitle label, description label, and all metadata field value labels in ApplicationDetailPane; users can now select and copy app names, IDs, publishers, owners, dates, and other metadata using standard OS copy/paste.
+
+- [x] UX.14: Show filter and group display names in Assignments tab — NOTE: Enhanced Assignments tab to show human-readable names instead of GUIDs:
+  - **ApplicationDetailPane** (`src/intune_manager/ui/applications/widgets.py`):
+    - Lines 227-234: Updated `display_app()` signature to accept optional `groups` and `filters` parameters.
+    - Lines 279-336: Refactored assignment display logic to build lookup dictionaries for groups and filters; now displays group display_name/mail instead of group_id, and filter display_name instead of filter_id.
+    - Format changed from "Required → {group_id} (filter: {filter_id} - Include)" to "Required → {group_name} (Include: {filter_name})".
+  - **ApplicationsWidget** (`src/intune_manager/ui/applications/widgets.py`):
+    - Lines 492-493: Added `_cached_groups` and `_cached_filters` instance variables.
+    - Lines 640-645: Added `_load_groups_and_filters()` method to fetch and cache groups/filters from services.
+    - Lines 638,657,747-752,865-870,1422-1424: Updated all `display_app()` calls to pass cached groups and filters.
+    - Calls `_load_groups_and_filters()` on app list load and refresh to keep lookup data current.
+
+- [x] UX.15: Remove manual "Fetch icon" button from toolbar — NOTE: `src/intune_manager/ui/applications/widgets.py` removed manual icon fetch button since icons now auto-fetch:
+  - Lines 443-445: Removed `_cache_icon_button` creation.
+  - Line 464: Removed button from actions toolbar list.
+  - Line 514: Removed click signal connection.
+  - Lines 840-872: Removed `_handle_cache_icon_clicked()` and `_cache_icon_async()` methods.
+  - Line 1457-1459: Changed button enable logic from loop to single button (install_summary only).
+  - Icons still auto-fetch on app selection (existing behavior at lines 1427-1433); manual button no longer needed with background fetching.
+
+- [x] Data.6: Implement background icon fetching with batching and rate limiting — NOTE: Added automatic background icon fetching for all apps after refresh:
+  - **ApplicationService** (`src/intune_manager/services/applications.py`):
+    - Lines 300-373: Added `background_fetch_icons()` method with configurable batch_size (default 10) and max_concurrent (default 3).
+    - Uses asyncio.Semaphore for concurrency control; 0.5s delay between fetches for rate limiting.
+    - Filters apps that already have cached icons; silently logs failures (no user-facing errors for background operations).
+    - Emits `icon_cached` signal for each successful fetch to update UI incrementally.
+  - **ApplicationController** (`src/intune_manager/ui/applications/controller.py`):
+    - Lines 135-147: Added `background_fetch_icons()` method to expose service functionality to UI layer.
+  - **ApplicationsWidget** (`src/intune_manager/ui/applications/widgets.py`):
+    - Line 664: Added call to `_background_fetch_icons_async()` in `_handle_apps_refreshed()` after app list loads.
+    - Lines 844-853: Added `_background_fetch_icons_async()` method to trigger background fetching via controller.
+  - Icons now automatically fetch in background after app list refresh; existing 7-day TTL handles cleanup of orphaned icons for deleted apps.
+
+### Session 2025-11-02 (continued)
+- [x] Data.7: Expand MobileApp model with 35+ Graph API fields — NOTE: Added comprehensive field coverage for all app types:
+  - **MobileApp Model** (`src/intune_manager/data/models/application.py`):
+    - Lines 73-80: Added Priority 1 base fields (all apps): `large_icon`, `is_assigned`, `role_scope_tag_ids`, `superseding_app_count`.
+    - Lines 82-102: Added Priority 2 iOS VPP fields (12 fields): `bundle_id`, `used_license_count`, `total_license_count`, `release_date_time`, `app_store_url`, `licensing_type`, `applicable_device_type`, VPP token metadata (organization_name, account_type, apple_id, display_name, id).
+    - Lines 104-111: Added Priority 3 LOB app fields: `committed_content_version`, `file_name`, `size` (bytes, read-only from Graph).
+    - Lines 113-127: Added Priority 4 Windows fields: `applicable_architectures`, `identity_name`, `identity_publisher_hash`, `identity_resource_identifier`, `is_bundle`, `minimum_supported_operating_system`.
+    - Lines 129-134: Added Priority 5 Win32 LOB fields: `setup_file_path`, `minimum_supported_windows_release`, `display_version`.
+    - Lines 136-144: Added Priority 6 Android fields: `package_id`, `version_name`, `version_code`, `minimum_supported_android_operating_system`, `app_availability`, `version`.
+  - All new fields are optional (`| None`) for backward compatibility; no database migration needed (stored in existing JSON payload column).
+  - Graph API field aliases configured for automatic mapping (e.g., `bundleId`, `usedLicenseCount`, `applicableArchitectures`).
+
+- [x] UI.10: Create formatting utilities for human-readable app metadata — NOTE: Created new formatter module:
+  - **Formatters Module** (`src/intune_manager/utils/formatters.py`): New file with 4 formatting functions:
+    - `format_file_size(bytes_value)`: Converts bytes to KB/MB/GB/TB with 1 decimal place; returns "—" for None/0.
+    - `format_license_count(used, total)`: Formats as "45 / 100 (45%)" with automatic percentage calculation.
+    - `format_architecture(arch_value)`: Converts comma-separated architecture strings to display format ("x86, x64, ARM"); handles "neutral" → "Any".
+    - `format_min_os(os_dict)`: Extracts minimum OS version from Graph API complex object (e.g., `{"v10_0": True, "v10_1903": True}` → "Windows 10 v1903").
+  - **Utils Init** (`src/intune_manager/utils/__init__.py`):
+    - Lines 36-41: Added formatter imports.
+    - Lines 78-81: Exported formatter functions in `__all__`.
+
+- [x] UI.11: Implement dynamic platform-aware field display in detail view — NOTE: Refactored ApplicationDetailPane for conditional field rendering:
+  - **ApplicationDetailPane** (`src/intune_manager/ui/applications/widgets.py`):
+    - Lines 48-53: Added formatter imports.
+    - Lines 161-165: Changed from static field dictionary to dynamic `_metadata_form_layout` that rebuilds on each app display.
+    - Lines 213-221: Added `_clear_metadata_fields()` to remove all form rows; `_add_metadata_field()` to add single field with value.
+    - Lines 223-267: Added `_populate_metadata_fields()` main coordinator that shows base fields (platform, publisher, owner, dates) then conditionally adds platform/type-specific fields.
+    - Lines 269-290: Added `_add_ios_vpp_fields()` for iOS VPP apps (bundle ID, license usage, VPP token, App Store URL, release date).
+    - Lines 292-296: Added `_add_lob_fields()` for LOB apps (file name, file size using `format_file_size()`).
+    - Lines 298-304: Added `_add_windows_lob_fields()` for Windows LOB (committed version, setup file path).
+    - Lines 306-320: Added `_add_windows_fields()` for Windows apps (architecture using `format_architecture()`, identity fields, min OS using `format_min_os()`, bundle status).
+    - Lines 322-331: Added `_add_win32_fields()` for Win32 apps (display version, min Windows release).
+    - Lines 333-346: Added `_add_android_lob_fields()` for Android LOB (package ID, version name/code).
+    - Lines 268: Updated `display_app()` to call `_populate_metadata_fields()` instead of manual field setting.
+    - Removed obsolete `_set_field()` method and `_format_value()` function.
+  - Metadata section now shows 8-20 fields depending on app type/platform; only populated fields are displayed (no empty rows).
+
+- [x] Bug.5: Fix icon fetch AttributeError crash — NOTE: `src/intune_manager/ui/applications/widgets.py:1511-1516` removed auto-fetch-on-selection code that called deleted `_cache_icon_async()` method; this method was removed in previous session when manual "Fetch icon" button was deleted, but the auto-fetch call was missed. Icons are now exclusively fetched via background batch process implemented in Data.6; eliminates "AttributeError: 'ApplicationsWidget' object has no attribute '_cache_icon_async'" crash that caused background fetch failures and greyed-out action buttons.
+
+- [x] UI.12: Enable inline filter/mode editing in assignment editor — NOTE: Implemented full inline editing for assignment filters:
+  - **Assignment Editor** (`src/intune_manager/ui/assignments/assignment_editor.py`):
+    - Lines 323-392: Refactored `_rebuild_table()` to replace read-only filter/filter_mode QTableWidgetItems with editable QComboBox widgets (mirroring existing intent combo pattern).
+    - Lines 344-367: Filter combo populated with "No filter" + all available filters from `self._filters`; current filter selected; disabled for non-group targets; connected to `_update_filter()` handler.
+    - Lines 369-387: Filter mode combo with three options ("—", "Include", "Exclude"); current mode selected; disabled for non-group targets or when no filter selected; connected to `_update_filter_mode()` handler.
+    - Lines 414-449: Added `_update_filter()` method to update GroupAssignmentTarget with new filter ID; automatically clears filter mode to NONE when filter removed; dynamically enables/disables filter mode combo based on filter selection.
+    - Lines 451-483: Added `_update_filter_mode()` method to update GroupAssignmentTarget with new filter mode; includes validation to prevent setting mode to NONE when filter is selected (shows warning dialog and reverts combo).
+  - Changes propagate to `self._assignments` list via `model_copy()` and are automatically included when `desired_assignments()` is called on dialog accept.
+  - Users can now edit filters and filter modes directly in the table without removing and re-adding assignment targets.
+
+- [x] Bug.6: Fix bulk assignment silent failure — NOTE: `src/intune_manager/ui/applications/bulk_assignment.py` added missing `settings: AssignmentSettings | None = None` field to `BulkAssignmentPlan` dataclass (line 39) and added `AssignmentSettings` import (line 25); the apply logic in `widgets.py:1221` tried to access `plan.settings` which didn't exist on the dataclass, causing an `AttributeError` that was silently caught by the broad exception handler; users would click "Apply" in bulk assignment wizard and nothing would happen (no assignments created, no error shown); bulk assignment now works properly.
+
 **Start at the top and work your way down**

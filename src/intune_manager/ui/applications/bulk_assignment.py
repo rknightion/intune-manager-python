@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import List
 
@@ -16,13 +15,15 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPlainTextEdit,
     QVBoxLayout,
 )
-from pydantic import ValidationError
 
 from intune_manager.data import AssignmentFilter, DirectoryGroup, MobileApp
-from intune_manager.data.models.assignment import AssignmentIntent, AssignmentSettings
+from intune_manager.data.models.assignment import (
+    AssignmentFilterType,
+    AssignmentIntent,
+    AssignmentSettings,
+)
 from intune_manager.utils.sanitize import sanitize_search_text
 
 
@@ -34,7 +35,8 @@ class BulkAssignmentPlan:
     groups: list[DirectoryGroup]
     intent: AssignmentIntent
     filter_id: str | None
-    settings: AssignmentSettings | None
+    filter_mode: AssignmentFilterType
+    settings: AssignmentSettings | None = None
 
     def group_ids(self) -> list[str]:
         return [group.id for group in self.groups if group.id]
@@ -87,6 +89,8 @@ class BulkAssignmentDialog(QDialog):
         self._button_box.rejected.connect(self.reject)
         layout.addWidget(self._button_box)
 
+        self._filter_combo.currentIndexChanged.connect(self._sync_filter_mode)
+        self._sync_filter_mode()
         self._update_summary()
 
     # ------------------------------------------------------------------ Sections
@@ -179,20 +183,15 @@ class BulkAssignmentDialog(QDialog):
             self._filter_combo.addItem(label, assignment_filter.id)
         layout.addRow("Assignment filter", self._filter_combo)
 
-        self._settings_edit = QPlainTextEdit(parent=box)
-        self._settings_edit.setPlaceholderText(
-            "Optional: paste assignment settings JSON payload."
+        self._filter_mode_combo = QComboBox(parent=box)
+        self._filter_mode_combo.addItem("No filter", AssignmentFilterType.NONE.value)
+        self._filter_mode_combo.addItem(
+            "Include devices matching filter", AssignmentFilterType.INCLUDE.value
         )
-        self._settings_edit.setMinimumHeight(120)
-        layout.addRow("Advanced settings", self._settings_edit)
-
-        settings_hint = QLabel(
-            "Leave settings empty to apply provider defaults. JSON is validated before submission.",
-            parent=box,
+        self._filter_mode_combo.addItem(
+            "Exclude devices matching filter", AssignmentFilterType.EXCLUDE.value
         )
-        settings_hint.setWordWrap(True)
-        settings_hint.setStyleSheet("color: palette(mid);")
-        layout.addRow("", settings_hint)
+        layout.addRow("Filter mode", self._filter_mode_combo)
 
         return box
 
@@ -203,7 +202,7 @@ class BulkAssignmentDialog(QDialog):
         self._app_list.clear()
         for app in self._apps:
             label = app.display_name or app.id
-            item = QListWidgetItem(label, parent=self._app_list)
+            item = QListWidgetItem(label, self._app_list)
             item.setFlags(
                 item.flags()
                 | Qt.ItemFlag.ItemIsUserCheckable
@@ -222,7 +221,7 @@ class BulkAssignmentDialog(QDialog):
         self._group_list.clear()
         for group in self._groups:
             label = group.display_name or group.mail or group.mail_nickname or group.id
-            item = QListWidgetItem(label, parent=self._group_list)
+            item = QListWidgetItem(label, self._group_list)
             item.setFlags(
                 item.flags()
                 | Qt.ItemFlag.ItemIsUserCheckable
@@ -296,6 +295,17 @@ class BulkAssignmentDialog(QDialog):
         )
         self._summary_label.setText(summary)
 
+    def _sync_filter_mode(self) -> None:
+        """Enable/disable filter mode based on whether a filter is selected."""
+        filter_id = self._filter_combo.currentData()
+        if filter_id is None:
+            # No filter selected, disable filter mode and set to NONE
+            self._filter_mode_combo.setEnabled(False)
+            self._filter_mode_combo.setCurrentIndex(0)  # Set to "No filter"
+        else:
+            # Filter selected, enable filter mode
+            self._filter_mode_combo.setEnabled(True)
+
     # ----------------------------------------------------------------- Dialog API
 
     def plan(self) -> BulkAssignmentPlan | None:
@@ -322,25 +332,27 @@ class BulkAssignmentDialog(QDialog):
         intent_value = self._intent_combo.currentData()
         intent = AssignmentIntent(intent_value)
         filter_id = self._filter_combo.currentData()
-        settings_text = self._settings_edit.toPlainText().strip()
-        settings: AssignmentSettings | None = None
-        if settings_text:
-            try:
-                payload = json.loads(settings_text)
-                settings = AssignmentSettings.model_validate(payload)
-            except (json.JSONDecodeError, ValidationError) as exc:
-                QMessageBox.warning(
-                    self,
-                    "Invalid settings",
-                    f"Unable to parse assignment settings: {exc}",
-                )
-                return
+        filter_mode_str = self._filter_mode_combo.currentData()
+        filter_mode = (
+            AssignmentFilterType(filter_mode_str)
+            if filter_mode_str
+            else AssignmentFilterType.NONE
+        )
+
+        # Validate: if filter is selected, mode must not be NONE
+        if filter_id and filter_mode == AssignmentFilterType.NONE:
+            QMessageBox.warning(
+                self,
+                "Missing filter mode",
+                "Please select a filter mode (Include/Exclude) when using an assignment filter.",
+            )
+            return
 
         self._plan = BulkAssignmentPlan(
             apps=apps,
             groups=groups,
             intent=intent,
             filter_id=filter_id,
-            settings=settings,
+            filter_mode=filter_mode,
         )
         self.accept()

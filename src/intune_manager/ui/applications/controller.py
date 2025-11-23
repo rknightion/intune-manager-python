@@ -132,6 +132,20 @@ class ApplicationController:
             cancellation_token=cancellation_token,
         )
 
+    async def background_fetch_icons(
+        self,
+        apps: list[MobileApp],
+        *,
+        tenant_id: str | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
+        """Fetch icons in background for apps without cached icons."""
+        if self._app_service is None:
+            return
+        await self._app_service.background_fetch_icons(
+            apps, tenant_id=tenant_id, cancellation_token=cancellation_token
+        )
+
     async def fetch_install_summary(
         self,
         app_id: str,

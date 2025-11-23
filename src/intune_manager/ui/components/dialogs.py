@@ -107,10 +107,35 @@ def save_file_dialog(
     return None
 
 
+def show_token_expired_dialog(parent: QWidget) -> bool:
+    """Show a dialog explaining that the authentication token has expired.
+
+    Args:
+        parent: Parent widget for the dialog
+
+    Returns:
+        True if user wants to proceed with interactive login, False otherwise
+    """
+    box = QMessageBox(parent)
+    box.setWindowTitle("Sign-in Required")
+    box.setText("Your authentication session has expired.")
+    box.setInformativeText(
+        "Your Microsoft authentication token has expired and needs to be refreshed.\n\n"
+        "Click 'Sign In' to open an interactive browser window and sign in again."
+    )
+    box.setIcon(QMessageBox.Icon.Warning)
+    sign_in_button = box.addButton("Sign In", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(sign_in_button)
+    box.exec()
+    return box.clickedButton() is sign_in_button
+
+
 __all__ = [
     "show_error_dialog",
     "show_info_dialog",
     "ask_confirmation",
     "open_file_dialog",
     "save_file_dialog",
+    "show_token_expired_dialog",
 ]

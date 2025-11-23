@@ -15,7 +15,7 @@ from .models import SchemaVersion
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4  # Added filter_type field to MobileAppAssignmentRecord for include/exclude mode
 
 
 @dataclass(slots=True)

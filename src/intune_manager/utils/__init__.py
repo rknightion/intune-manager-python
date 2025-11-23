@@ -33,6 +33,12 @@ from .progress import (
     ProgressTracker,
     ProgressUpdate,
 )
+from .formatters import (
+    format_file_size,
+    format_license_count,
+    format_architecture,
+    format_min_os,
+)
 
 __all__ = [
     "LoggingOptions",
@@ -69,4 +75,8 @@ __all__ = [
     "ProgressTracker",
     "ProgressReporter",
     "ProgressCallback",
+    "format_file_size",
+    "format_license_count",
+    "format_architecture",
+    "format_min_os",
 ]

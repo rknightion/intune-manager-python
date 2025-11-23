@@ -50,9 +50,9 @@ from intune_manager.ui.components import (
     ToastLevel,
     ToastManager,
     UIContext,
+    show_token_expired_dialog,
 )
 from intune_manager.ui.components.badges import TenantIdentity
-from intune_manager.ui.assignments import AssignmentsWidget
 from intune_manager.ui.applications import ApplicationsWidget
 from intune_manager.ui.dashboard import DashboardWidget
 from intune_manager.ui.devices import DevicesWidget
@@ -61,6 +61,7 @@ from intune_manager.ui.reports import ReportsWidget
 from intune_manager.ui.settings import SettingsPage
 from intune_manager.utils import get_logger, safe_mode_enabled, safe_mode_reason
 from intune_manager.utils.asyncio import AsyncBridge
+from intune_manager.graph.errors import AuthenticationError
 
 
 if TYPE_CHECKING:
@@ -84,7 +85,6 @@ class MainWindow(QMainWindow):
         NavigationItem("dashboard", "Dashboard"),
         NavigationItem("devices", "Devices"),
         NavigationItem("applications", "Applications"),
-        NavigationItem("assignments", "App Assignments"),
         NavigationItem("groups", "Groups"),
         NavigationItem("reports", "Reports"),
         NavigationItem("settings", "Settings"),
@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         self._crash_report_path: Path | None = None
         self._sync_had_errors = False
         self._active_tenant_id: str | None = None
+        self._re_auth_in_progress = False
 
         self._configure_window()
         self._build_layout()
@@ -344,16 +345,6 @@ class MainWindow(QMainWindow):
                 context=self._ui_context,
                 parent=self._stack,
             )
-        if item.key == "assignments":
-            if self._ui_context is None:
-                raise RuntimeError(
-                    "UI context not initialised before assignments view creation"
-                )
-            return AssignmentsWidget(
-                self._services,
-                context=self._ui_context,
-                parent=self._stack,
-            )
         if item.key == "reports":
             if self._ui_context is None:
                 raise RuntimeError(
@@ -483,6 +474,23 @@ class MainWindow(QMainWindow):
             logger.info("Triggering initial tenant data sync")
             self._start_global_sync()
 
+        except AuthenticationError as exc:
+            logger.warning(
+                "Authentication token expired during service initialization",
+                error=str(exc),
+            )
+            # Show dialog asking user if they want to re-authenticate
+            if show_token_expired_dialog(self):
+                logger.info("User accepted re-authentication prompt")
+                self._handle_re_authentication()
+            else:
+                logger.info("User declined re-authentication prompt")
+                self.show_notification(
+                    "Authentication required. Open Settings to sign in.",
+                    level=ToastLevel.WARNING,
+                    duration_ms=6000,
+                )
+
         except Exception as exc:  # noqa: BLE001 - ensure UI feedback
             logger.exception("Failed to initialize domain services")
             self.show_banner(
@@ -579,6 +587,23 @@ class MainWindow(QMainWindow):
 
             # Initialize services (this will trigger sync)
             self._initialize_domain_services()
+
+        except AuthenticationError as exc:
+            logger.warning(
+                "Authentication token expired during auto-initialization",
+                error=str(exc),
+            )
+            # Show dialog asking user if they want to re-authenticate
+            if show_token_expired_dialog(self):
+                logger.info("User accepted re-authentication prompt")
+                self._handle_re_authentication()
+            else:
+                logger.info("User declined re-authentication prompt")
+                self.show_notification(
+                    "Authentication required. Open Settings to sign in.",
+                    level=ToastLevel.WARNING,
+                    duration_ms=6000,
+                )
 
         except Exception as exc:  # noqa: BLE001 - ensure startup continues
             logger.exception("Failed to auto-initialize services on startup")
@@ -990,14 +1015,90 @@ class MainWindow(QMainWindow):
 
     def _handle_sync_error(self, event: ServiceErrorEvent) -> None:
         self._sync_had_errors = True
-        detail = str(event.error)
-        self.show_notification(
-            f"Sync issue: {detail}",
-            level=ToastLevel.ERROR,
-            duration_ms=8000,
-        )
+
+        # Check if the error is an authentication error (token expired)
+        if isinstance(event.error, AuthenticationError):
+            # Skip if we're already handling re-authentication
+            if self._re_auth_in_progress:
+                logger.debug("Re-authentication already in progress, skipping dialog")
+                return
+
+            logger.warning(
+                "Authentication token expired during sync",
+                error=str(event.error),
+            )
+            # Mark that we're handling re-authentication to prevent duplicate dialogs
+            self._re_auth_in_progress = True
+
+            # Show dialog asking user if they want to re-authenticate
+            if show_token_expired_dialog(self):
+                logger.info("User accepted re-authentication prompt during sync")
+                self._handle_re_authentication()
+            else:
+                logger.info("User declined re-authentication prompt during sync")
+                self._re_auth_in_progress = False
+                self.show_notification(
+                    "Authentication required. Open Settings to sign in.",
+                    level=ToastLevel.WARNING,
+                    duration_ms=6000,
+                )
+        else:
+            # Handle other errors as before
+            detail = str(event.error)
+            self.show_notification(
+                f"Sync issue: {detail}",
+                level=ToastLevel.ERROR,
+                duration_ms=8000,
+            )
 
     # ----------------------------------------------------------------- Helpers
+
+    def _handle_re_authentication(self) -> None:
+        """Handle re-authentication when token expires.
+
+        Triggers interactive sign-in flow and re-initializes services on success.
+        """
+        self.set_busy("Signing in...", blocking=True)
+
+        async def do_sign_in() -> None:
+            try:
+                # Load settings to get scopes
+                settings_manager = SettingsManager()
+                settings = settings_manager.load()
+
+                # Trigger interactive sign-in
+                logger.info("Starting interactive sign-in flow")
+                await auth_manager.sign_in_interactive(scopes=list(settings.configured_scopes()))
+
+                # Sign-in successful, re-initialize services
+                logger.info("Sign-in successful, re-initializing services")
+                self._update_tenant_badge(settings.tenant_id)
+                self._initialize_domain_services()
+
+                self.show_notification(
+                    "Sign-in successful! Refreshing data...",
+                    level=ToastLevel.SUCCESS,
+                    duration_ms=4000,
+                )
+            except AuthenticationError as exc:
+                logger.error("Interactive sign-in failed", error=str(exc))
+                self.show_notification(
+                    f"Sign-in failed: {exc}",
+                    level=ToastLevel.ERROR,
+                    duration_ms=8000,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Unexpected error during re-authentication")
+                self.show_notification(
+                    f"Sign-in error: {exc}",
+                    level=ToastLevel.ERROR,
+                    duration_ms=8000,
+                )
+            finally:
+                self.clear_busy()
+                self._re_auth_in_progress = False
+
+        self.run_async(do_sign_in())
 
     def _current_page(self) -> QWidget | None:
         return self._stack.currentWidget()
