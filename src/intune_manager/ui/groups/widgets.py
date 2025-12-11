@@ -1207,27 +1207,74 @@ class GroupsWidget(PageScaffold):
             self._context.clear_busy()
 
     def _handle_delete_group_clicked(self) -> None:
-        group = self._selected_group
-        if group is None:
+        if not self._selected_group_ids:
             self._context.show_notification(
                 "Select a group before deleting.",
                 level=ToastLevel.WARNING,
             )
             return
+
+        groups = [
+            self._group_lookup.get(group_id)
+            for group_id in self._selected_group_ids
+            if group_id
+        ]
+        groups = [group for group in groups if group is not None]
+        if not groups:
+            self._context.show_notification(
+                "Unable to delete the selected group(s); missing identifiers.",
+                level=ToastLevel.ERROR,
+            )
+            return
+
+        if len(groups) == 1:
+            name = groups[0].display_name or groups[0].mail or groups[0].mail_nickname
+            prompt = f"Delete group {name or groups[0].id}? This action cannot be undone."
+        else:
+            preview = ", ".join(
+                (g.display_name or g.mail or g.mail_nickname or g.id) for g in groups[:3]
+            )
+            remainder = len(groups) - 3
+            suffix = "…" if remainder > 0 else ""
+            prompt = (
+                f"Delete {len(groups)} groups? This action cannot be undone.\n\n"
+                f"Examples: {preview}{suffix}"
+            )
+
         confirm = QMessageBox.question(
             self,
-            "Delete group",
-            f"Delete group {group.display_name}? This action cannot be undone.",
+            "Delete group(s)",
+            prompt,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        self._context.set_busy("Deleting group…")
-        self._context.run_async(self._delete_group_async(group.id))
+        self._context.set_busy("Deleting group(s)…")
+        self._context.run_async(self._delete_groups_async(groups))
 
-    async def _delete_group_async(self, group_id: str) -> None:
+    async def _delete_groups_async(self, groups: list[DirectoryGroup]) -> None:
         try:
-            await self._controller.delete_group(group_id)
-            self._context.show_notification("Group deleted.", level=ToastLevel.SUCCESS)
+            failures: list[str] = []
+            for group in groups:
+                try:
+                    await self._controller.delete_group(group.id)
+                except Exception as exc:  # noqa: BLE001
+                    label = group.display_name or group.mail or group.mail_nickname or group.id
+                    failures.append(f"{label}: {exc}")
+            if failures:
+                success_count = len(groups) - len(failures)
+                message = (
+                    f"Deleted {success_count} of {len(groups)} group(s). "
+                    f"Failures: {'; '.join(failures)}"
+                )
+                self._context.show_notification(
+                    message,
+                    level=ToastLevel.ERROR,
+                    duration_ms=10000,
+                )
+            else:
+                self._context.show_notification(
+                    f"Deleted {len(groups)} group(s).", level=ToastLevel.SUCCESS
+                )
             await self._controller.refresh(force=True)
         except Exception as exc:  # noqa: BLE001
             self._context.show_notification(
@@ -1815,7 +1862,9 @@ class GroupsWidget(PageScaffold):
         self._remove_member_button.setEnabled(service_available and group_selected)
         self._edit_rule_button.setEnabled(service_available and dynamic_group)
         self._create_group_button.setEnabled(service_available)
-        self._delete_group_button.setEnabled(service_available and group_selected)
+        self._delete_group_button.setEnabled(
+            service_available and bool(self._selected_group_ids)
+        )
         self._send_assignments_button.setEnabled(group_selected)
 
     def _is_dynamic_group(self, group: DirectoryGroup | None) -> bool:

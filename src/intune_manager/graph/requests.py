@@ -115,6 +115,22 @@ def mobile_app_install_summary_request(app_id: str) -> GraphRequest:
     return GraphRequest(method="GET", url=path, api_version=BETA_VERSION)
 
 
+def mobile_app_install_summary_report_request(app_id: str) -> GraphRequest:
+    """Fetch install summary via the reports action (replacement for removed nav property)."""
+
+    path = "/deviceManagement/reports/getAppsInstallSummaryReport"
+    body = {
+        "filter": f"ApplicationId eq '{app_id}'",
+    }
+    return GraphRequest(
+        method="POST",
+        url=path,
+        body=body,
+        headers={"Content-Type": "application/json"},
+        api_version=BETA_VERSION,
+    )
+
+
 def mobile_app_icon_request(
     app_id: str,
     size: Literal["large", "small"] = "large",
@@ -236,6 +252,7 @@ __all__ = [
     "mobile_app_assignment_update_request",
     "mobile_app_assignment_delete_request",
     "mobile_app_install_summary_request",
+    "mobile_app_install_summary_report_request",
     "mobile_app_icon_request",
     "configuration_assign_request",
     "audit_events_request",

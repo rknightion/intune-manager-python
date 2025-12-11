@@ -24,6 +24,7 @@ DEFAULT_GRAPH_SCOPES: tuple[str, ...] = (
     "https://graph.microsoft.com/DeviceManagementConfiguration.Read.All",
     "https://graph.microsoft.com/DeviceManagementConfiguration.ReadWrite.All",
     "https://graph.microsoft.com/Group.Read.All",
+    "https://graph.microsoft.com/Group.ReadWrite.All",
     "https://graph.microsoft.com/GroupMember.Read.All",
     "https://graph.microsoft.com/AuditLog.Read.All",
 )
@@ -86,9 +87,13 @@ class Settings:
     )
 
     def configured_scopes(self) -> Iterable[str]:
-        """Return deduplicated scopes preserving order."""
+        """Return deduplicated scopes preserving order (includes new defaults)."""
+
+        merged: list[str] = list(self.graph_scopes) + [
+            scope for scope in DEFAULT_GRAPH_SCOPES if scope not in self.graph_scopes
+        ]
         seen = set[str]()
-        for scope in self.graph_scopes:
+        for scope in merged:
             if scope and scope not in seen:
                 seen.add(scope)
                 yield scope

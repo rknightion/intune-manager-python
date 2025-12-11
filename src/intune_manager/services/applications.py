@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import csv
+import io
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,13 +16,13 @@ from intune_manager.data import (
 )
 from intune_manager.data.models.application import MobileAppPlatform
 from intune_manager.data.validation import GraphResponseValidator
-from intune_manager.graph import GraphAPIError
+from intune_manager.graph import GraphAPIError, GraphErrorCategory
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.requests import (
     BETA_VERSION,
     mobile_app_assignments_request,
     mobile_app_icon_request,
-    mobile_app_install_summary_request,
+    mobile_app_install_summary_report_request,
 )
 from intune_manager.services.base import EventHook, RefreshEvent, ServiceErrorEvent
 from intune_manager.utils import CancellationError, CancellationToken, get_logger
@@ -261,14 +263,16 @@ class ApplicationService:
                     logger.debug("Install summary served from cache", app_id=app_id)
                     return payload
 
-        request = mobile_app_install_summary_request(app_id)
+        request = mobile_app_install_summary_report_request(app_id)
         summary = await self._client_factory.request_json(
             request.method,
             request.url,
+            json_body=request.body,
             headers=request.headers,
             api_version=request.api_version,
             cancellation_token=cancellation_token,
         )
+        summary = self._parse_install_summary_report(summary, app_id)
         event = InstallSummaryEvent(app_id=app_id, summary=summary)
         self.install_summary.emit(event)
         self._install_summary_cache[app_id] = (summary, datetime.now(UTC))
@@ -278,6 +282,139 @@ class ApplicationService:
             tenant_id=tenant_id,
         )
         return summary
+
+    def _parse_install_summary_report(
+        self,
+        payload: dict[str, Any],
+        app_id: str,
+    ) -> dict[str, Any]:
+        encoded = payload.get("value")
+        if not encoded:
+            raise GraphAPIError(
+                message="Install summary report returned no data",
+                category=GraphErrorCategory.VALIDATION,
+            )
+        try:
+            decoded = base64.b64decode(encoded)
+        except Exception as exc:  # noqa: BLE001
+            raise GraphAPIError(
+                message="Failed to decode install summary report payload",
+                category=GraphErrorCategory.VALIDATION,
+            ) from exc
+
+        try:
+            text = decoded.decode("utf-8-sig")
+        except Exception as exc:  # noqa: BLE001
+            raise GraphAPIError(
+                message="Install summary report payload is not valid UTF-8 text",
+                category=GraphErrorCategory.VALIDATION,
+            ) from exc
+
+        reader = csv.DictReader(io.StringIO(text))
+        rows = [row for row in reader if row and any(value for value in row.values())]
+        if not rows:
+            raise GraphAPIError(
+                message="Install summary report was empty",
+                category=GraphErrorCategory.VALIDATION,
+            )
+
+        # Prefer matching rows for the requested app ID when present.
+        identifier_field = self._match_field(reader.fieldnames or [], ["ApplicationId"])
+        filtered = rows
+        if identifier_field:
+            filtered = [
+                row
+                for row in rows
+                if str(row.get(identifier_field, "")).lower() == app_id.lower()
+            ] or rows
+        row = filtered[0]
+
+        summary: dict[str, Any] = {
+            "source": "deviceManagement/reports/getAppsInstallSummaryReport (beta)",
+            "rowsProcessed": len(rows),
+        }
+        for field_key, aliases in {
+            "applicationId": ["ApplicationId"],
+            "applicationName": ["ApplicationName", "DisplayName", "AppName"],
+            "platform": ["Platform", "OS"],
+            "publisher": ["Publisher", "Vendor"],
+        }.items():
+            value = self._extract_field(row, aliases)
+            if value is not None:
+                summary[field_key] = value
+
+        count_aliases = {
+            "installedDeviceCount": ["InstalledDeviceCount", "InstalledDevices"],
+            "failedDeviceCount": ["FailedDeviceCount", "FailedDevices"],
+            "notApplicableDeviceCount": [
+                "NotApplicableDeviceCount",
+                "NotApplicableDevices",
+            ],
+            "notInstalledDeviceCount": ["NotInstalledDeviceCount", "NotInstalledDevices"],
+            "pendingInstallDeviceCount": [
+                "PendingInstallDeviceCount",
+                "PendingDevices",
+                "PendingInstallations",
+            ],
+            "installedUserCount": ["InstalledUserCount", "InstalledUsers"],
+            "failedUserCount": ["FailedUserCount", "FailedUsers"],
+            "notApplicableUserCount": [
+                "NotApplicableUserCount",
+                "NotApplicableUsers",
+            ],
+            "notInstalledUserCount": ["NotInstalledUserCount", "NotInstalledUsers"],
+            "pendingInstallUserCount": [
+                "PendingInstallUserCount",
+                "PendingUsers",
+                "PendingUserInstalls",
+            ],
+        }
+        for target, aliases in count_aliases.items():
+            value = self._extract_int(row, aliases)
+            if value is not None:
+                summary[target] = value
+
+        if len(summary) <= 2:  # Only metadata present
+            summary["rawRow"] = row
+            raise GraphAPIError(
+                message="Install summary report did not contain expected columns",
+                category=GraphErrorCategory.VALIDATION,
+            )
+
+        return summary
+
+    @staticmethod
+    def _normalize_field(name: str) -> str:
+        return "".join(ch for ch in name.lower() if ch.isalnum())
+
+    def _match_field(self, available: list[str], aliases: list[str]) -> str | None:
+        normalised = {self._normalize_field(field): field for field in available if field}
+        for alias in aliases:
+            key = self._normalize_field(alias)
+            if key in normalised:
+                return normalised[key]
+        return None
+
+    def _extract_field(self, row: dict[str, Any], aliases: list[str]) -> str | None:
+        field = self._match_field(list(row.keys()), aliases)
+        if not field:
+            return None
+        value = row.get(field)
+        if value is None:
+            return None
+        return str(value).strip()
+
+    def _extract_int(self, row: dict[str, Any], aliases: list[str]) -> int | None:
+        field = self._match_field(list(row.keys()), aliases)
+        if not field:
+            return None
+        value = row.get(field)
+        if value is None:
+            return None
+        try:
+            return int(float(str(value).strip() or 0))
+        except Exception:
+            return None
 
     async def fetch_assignments(
         self,

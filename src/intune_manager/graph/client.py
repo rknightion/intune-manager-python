@@ -379,7 +379,7 @@ class GraphClientConfig:
     scopes: Sequence[str]
     user_agent: str = "IntuneManager-Python"
     telemetry_namespace: str = "intune-manager"
-    api_version: GraphAPIVersion | str = GraphAPIVersion.V1
+    api_version: GraphAPIVersion | str = GraphAPIVersion.BETA
     version_overrides: Mapping[str, GraphAPIVersion | str] = field(
         default_factory=lambda: dict(DEFAULT_VERSION_OVERRIDES),
     )
