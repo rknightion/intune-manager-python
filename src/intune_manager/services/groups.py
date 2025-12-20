@@ -485,7 +485,9 @@ class GroupService:
         cancellation_token: CancellationToken | None = None,
     ) -> list[GroupMember]:
         """Fetch members from Graph API and cache them."""
-        members = await self.list_members(group_id, cancellation_token=cancellation_token)
+        members = await self.list_members(
+            group_id, cancellation_token=cancellation_token
+        )
         self._repository.cache_members(group_id, members, tenant_id=tenant_id)
         logger.debug(
             "Refreshed and cached group members",

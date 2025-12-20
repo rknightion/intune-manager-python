@@ -605,7 +605,7 @@ class MainWindow(QMainWindow):
                     duration_ms=6000,
                 )
 
-        except Exception as exc:  # noqa: BLE001 - ensure startup continues
+        except Exception:  # noqa: BLE001 - ensure startup continues
             logger.exception("Failed to auto-initialize services on startup")
             # Don't show error banner on startup - user hasn't requested anything yet
             # They can manually trigger via Settings if needed
@@ -620,7 +620,9 @@ class MainWindow(QMainWindow):
         )
         if reason:
             message = f"{message}\nReason: {reason}"
-        action_label = "Clear caches" if self._services.diagnostics is not None else None
+        action_label = (
+            "Clear caches" if self._services.diagnostics is not None else None
+        )
         self.show_banner(
             message,
             level=ToastLevel.WARNING,
@@ -1011,7 +1013,9 @@ class MainWindow(QMainWindow):
                     level=ToastLevel.WARNING,
                 )
             else:
-                self.show_notification("Tenant data refreshed", level=ToastLevel.SUCCESS)
+                self.show_notification(
+                    "Tenant data refreshed", level=ToastLevel.SUCCESS
+                )
 
     def _handle_sync_error(self, event: ServiceErrorEvent) -> None:
         self._sync_had_errors = True
@@ -1068,7 +1072,9 @@ class MainWindow(QMainWindow):
 
                 # Trigger interactive sign-in
                 logger.info("Starting interactive sign-in flow")
-                await auth_manager.sign_in_interactive(scopes=list(settings.configured_scopes()))
+                await auth_manager.sign_in_interactive(
+                    scopes=list(settings.configured_scopes())
+                )
 
                 # Sign-in successful, re-initialize services
                 logger.info("Sign-in successful, re-initializing services")

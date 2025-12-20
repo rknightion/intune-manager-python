@@ -39,7 +39,6 @@ from intune_manager.ui.components import (
     CommandAction,
     InlineStatusMessage,
     PageScaffold,
-    ProgressDialog,
     ToastLevel,
     UIContext,
     stage_groups,
@@ -975,7 +974,9 @@ class GroupsWidget(PageScaffold):
         """Handle refresh members request from detail pane."""
         if self._selected_group and self._selected_group.id:
             self._context.set_busy("Refreshing members…")
-            self._context.run_async(self._refresh_members_async(self._selected_group.id))
+            self._context.run_async(
+                self._refresh_members_async(self._selected_group.id)
+            )
 
     def _handle_owners_refresh_requested(self) -> None:
         """Handle refresh owners request from detail pane."""
@@ -1229,10 +1230,13 @@ class GroupsWidget(PageScaffold):
 
         if len(groups) == 1:
             name = groups[0].display_name or groups[0].mail or groups[0].mail_nickname
-            prompt = f"Delete group {name or groups[0].id}? This action cannot be undone."
+            prompt = (
+                f"Delete group {name or groups[0].id}? This action cannot be undone."
+            )
         else:
             preview = ", ".join(
-                (g.display_name or g.mail or g.mail_nickname or g.id) for g in groups[:3]
+                (g.display_name or g.mail or g.mail_nickname or g.id)
+                for g in groups[:3]
             )
             remainder = len(groups) - 3
             suffix = "…" if remainder > 0 else ""
@@ -1258,7 +1262,12 @@ class GroupsWidget(PageScaffold):
                 try:
                     await self._controller.delete_group(group.id)
                 except Exception as exc:  # noqa: BLE001
-                    label = group.display_name or group.mail or group.mail_nickname or group.id
+                    label = (
+                        group.display_name
+                        or group.mail
+                        or group.mail_nickname
+                        or group.id
+                    )
                     failures.append(f"{label}: {exc}")
             if failures:
                 success_count = len(groups) - len(failures)

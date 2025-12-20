@@ -48,6 +48,7 @@ from intune_manager.data.models.assignment import (
 )
 from intune_manager.services import ServiceErrorEvent, ServiceRegistry
 from intune_manager.services.applications import InstallSummaryEvent
+from intune_manager.services.assignments import AssignmentDiff
 from intune_manager.graph.errors import AuthenticationError
 from intune_manager.utils import (
     format_file_size,
@@ -765,9 +766,7 @@ class ApplicationsWidget(PageScaffold):
         )
         if apps:
             self._context.run_async(
-                self._background_fetch_icons_async(
-                    apps, tenant_id=tenant_id
-                )
+                self._background_fetch_icons_async(apps, tenant_id=tenant_id)
             )
         self._load_groups_and_filters()
 
@@ -1002,7 +1001,9 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.ERROR,
             )
 
-    async def _background_fetch_icons_async(self, apps: list[MobileApp], *, tenant_id: str | None = None) -> None:
+    async def _background_fetch_icons_async(
+        self, apps: list[MobileApp], *, tenant_id: str | None = None
+    ) -> None:
         """Fetch icons in background for all apps without blocking UI."""
         try:
             await self._controller.background_fetch_icons(apps, tenant_id=tenant_id)
@@ -1064,7 +1065,12 @@ class ApplicationsWidget(PageScaffold):
 
         self._context.clear_busy()
         # Schedule dialog opening in Qt event loop (breaks out of async context)
-        QTimer.singleShot(0, lambda: self._open_assignment_editor_dialog(app, assignments, groups, filters))
+        QTimer.singleShot(
+            0,
+            lambda: self._open_assignment_editor_dialog(
+                app, assignments, groups, filters
+            ),
+        )
 
     def _open_assignment_editor_dialog(
         self,
@@ -1154,7 +1160,11 @@ class ApplicationsWidget(PageScaffold):
                 level=ToastLevel.WARNING,
             )
             return
-        groups = [group for group in group_service.list_cached(tenant_id=tenant_id) if group.id]
+        groups = [
+            group
+            for group in group_service.list_cached(tenant_id=tenant_id)
+            if group.id
+        ]
         if not groups:
             # Auto-refresh groups and retry
             self._context.show_notification(
@@ -1269,7 +1279,9 @@ class ApplicationsWidget(PageScaffold):
                         target_type = "#microsoft.graph.allDevicesAssignmentTarget"
                         target_group_id = None
                     elif group.id == ALL_USERS_ID:
-                        target_type = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                        target_type = (
+                            "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                        )
                         target_group_id = None
                     existing = self._find_assignment(
                         current_assignments,
@@ -1454,8 +1466,7 @@ class ApplicationsWidget(PageScaffold):
     def _apply_filter_options(self, apps: Iterable[MobileApp]) -> None:
         # Get all available platforms from enum (show all, not just those with data)
         all_platforms = [
-            p.value for p in MobileAppPlatform
-            if p != MobileAppPlatform.UNKNOWN
+            p.value for p in MobileAppPlatform if p != MobileAppPlatform.UNKNOWN
         ]
 
         # Get platforms that actually have apps in the cache
@@ -1467,10 +1478,7 @@ class ApplicationsWidget(PageScaffold):
 
         # Populate platform combo with all known platforms
         self._populate_combo_with_disabled(
-            self._platform_combo,
-            "All platforms",
-            all_platforms,
-            platforms_with_data
+            self._platform_combo, "All platforms", all_platforms, platforms_with_data
         )
 
         # Extract all platform+type combinations from apps
@@ -1481,7 +1489,9 @@ class ApplicationsWidget(PageScaffold):
             app_type = app.app_type or ""
             if platform and app_type:
                 key = (platform, app_type)
-                platform_type_combinations[key] = platform_type_combinations.get(key, 0) + 1
+                platform_type_combinations[key] = (
+                    platform_type_combinations.get(key, 0) + 1
+                )
             if platform:
                 platforms_present.add(platform.lower())
 
@@ -1523,7 +1533,11 @@ class ApplicationsWidget(PageScaffold):
         self._populate_combo(self._intent_combo, "All intents", intents)
 
     def _populate_combo(
-        self, combo: QComboBox, placeholder: str, values: List[str], data: List[str] | None = None
+        self,
+        combo: QComboBox,
+        placeholder: str,
+        values: List[str],
+        data: List[str] | None = None,
     ) -> None:
         """Populate combo box with values and optional custom data."""
         current = combo.currentData()
@@ -1542,7 +1556,11 @@ class ApplicationsWidget(PageScaffold):
         combo.blockSignals(False)
 
     def _populate_combo_with_disabled(
-        self, combo: QComboBox, placeholder: str, all_values: List[str], enabled_values: set[str]
+        self,
+        combo: QComboBox,
+        placeholder: str,
+        all_values: List[str],
+        enabled_values: set[str],
     ) -> None:
         """Populate combo box with all values, disabling those not in enabled_values."""
         current = combo.currentData()
@@ -1654,7 +1672,7 @@ class ApplicationsWidget(PageScaffold):
 
         self._install_summary_button.setEnabled(
             service_available and app_selected and not multiple_selected
-            )
+        )
 
         self._edit_assignments_button.setEnabled(
             service_available

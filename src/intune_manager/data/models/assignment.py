@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, ValidationError, field_validator
 
 from .common import GraphBaseModel, GraphResource
 
@@ -24,6 +24,7 @@ class AssignmentFilterType(StrEnum):
     - INCLUDE: Include only devices that match the filter
     - EXCLUDE: Exclude devices that match the filter
     """
+
     NONE = "none"
     INCLUDE = "include"
     EXCLUDE = "exclude"
@@ -110,3 +111,37 @@ class MobileAppAssignment(GraphResource):
     intent: AssignmentIntent
     target: AssignmentTarget
     settings: AssignmentSettings | None = None
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _coerce_target(cls, value: Any) -> Any:
+        if isinstance(value, AssignmentTarget):
+            return value
+        if not isinstance(value, dict):
+            return value
+
+        odata_type = value.get("@odata.type") or value.get("odata_type")
+        if not isinstance(odata_type, str):
+            return value
+
+        target_model: type[AssignmentTarget] | None
+        match odata_type:
+            case "#microsoft.graph.groupAssignmentTarget":
+                target_model = GroupAssignmentTarget
+            case "#microsoft.graph.allDevicesAssignmentTarget":
+                target_model = AllDevicesAssignmentTarget
+            case "#microsoft.graph.allLicensedUsersAssignmentTarget":
+                target_model = AllLicensedUsersAssignmentTarget
+            case "#microsoft.graph.exclusionGroupAssignmentTarget":
+                target_model = FilteredGroupAssignmentTarget
+            case _:
+                target_model = None
+
+        if target_model is None:
+            return value
+
+        try:
+            return target_model.model_validate(value)
+        except ValidationError:
+            # Older cached payloads may be missing required fields (e.g. groupId).
+            return AssignmentTarget.model_validate(value)

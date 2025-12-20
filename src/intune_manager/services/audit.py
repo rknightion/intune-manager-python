@@ -76,7 +76,9 @@ class AuditLogService:
         elif self._default_window:
             window_start = datetime.now(UTC) - self._default_window
             iso_window = window_start.replace(microsecond=0).isoformat()
-            params["$filter"] = f"activityDateTime ge {iso_window.replace('+00:00', 'Z')}"
+            params["$filter"] = (
+                f"activityDateTime ge {iso_window.replace('+00:00', 'Z')}"
+            )
         params.setdefault("$orderby", "activityDateTime desc")
         requested_top = top or self._max_events
         max_events = min(requested_top, self._max_events)

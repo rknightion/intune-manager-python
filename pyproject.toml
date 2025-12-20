@@ -63,6 +63,9 @@ disallow_untyped_defs = false  # Enable later for stricter type coverage
 module = "PySide6.*"
 ignore_missing_imports = false
 
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
+
 [tool.licensecheck]
 # Specify project license (must match [project.license])
 license = "MIT"

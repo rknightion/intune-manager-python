@@ -30,7 +30,7 @@ from intune_manager.data import (
 )
 from intune_manager.data.models.assignment import (
     AllDevicesAssignmentTarget,
-    FilteredGroupAssignmentTarget,
+    AllLicensedUsersAssignmentTarget,
     GroupAssignmentTarget,
 )
 from intune_manager.utils.enums import enum_text
@@ -90,8 +90,12 @@ class AssignmentCreateDialog(QDialog):
 
         self._filter_mode_combo = QComboBox()
         self._filter_mode_combo.addItem("No filter", AssignmentFilterType.NONE.value)
-        self._filter_mode_combo.addItem("Include devices matching filter", AssignmentFilterType.INCLUDE.value)
-        self._filter_mode_combo.addItem("Exclude devices matching filter", AssignmentFilterType.EXCLUDE.value)
+        self._filter_mode_combo.addItem(
+            "Include devices matching filter", AssignmentFilterType.INCLUDE.value
+        )
+        self._filter_mode_combo.addItem(
+            "Exclude devices matching filter", AssignmentFilterType.EXCLUDE.value
+        )
         form.addWidget(QLabel("Filter mode"), 3, 0)
         form.addWidget(self._filter_mode_combo, 3, 1)
 
@@ -119,16 +123,17 @@ class AssignmentCreateDialog(QDialog):
         return self._assignment
 
     def _sync_inputs(self) -> None:
-        is_group = self._target_type_combo.currentData() == "group"
+        target_type = self._target_type_combo.currentData()
+        is_group = target_type == "group"
+        supports_filters = target_type in {"group", "all_devices"}
         has_groups = bool(self._groups)
         has_filters = bool(self._filters)
         self._group_combo.setEnabled(is_group and has_groups)
-        self._filter_combo.setEnabled(is_group and has_filters)
-        self._filter_mode_combo.setEnabled(is_group and has_filters)
+        self._filter_combo.setEnabled(supports_filters and has_filters)
+        self._filter_mode_combo.setEnabled(supports_filters and has_filters)
         if not is_group:
             self._group_combo.setCurrentIndex(0)
-            self._filter_combo.setCurrentIndex(0)
-            self._filter_mode_combo.setCurrentIndex(0)
+        self._sync_filter_mode()
 
     def _sync_filter_mode(self) -> None:
         """Enable/disable filter mode based on whether a filter is selected."""
@@ -143,6 +148,23 @@ class AssignmentCreateDialog(QDialog):
 
     def _handle_accept(self) -> None:
         target_type = self._target_type_combo.currentData()
+        filter_id = self._filter_combo.currentData()
+        filter_mode_str = self._filter_mode_combo.currentData()
+        filter_mode = (
+            AssignmentFilterType(filter_mode_str)
+            if filter_mode_str
+            else AssignmentFilterType.NONE
+        )
+
+        # Validate: if filter is selected, mode must not be NONE
+        if filter_id and filter_mode == AssignmentFilterType.NONE:
+            QMessageBox.warning(
+                self,
+                "Missing filter mode",
+                "Please select a filter mode (Include/Exclude) when using an assignment filter.",
+            )
+            return
+
         if target_type == "group":
             group_id = self._group_combo.currentData()
             if not group_id:
@@ -150,27 +172,18 @@ class AssignmentCreateDialog(QDialog):
                     self, "Missing group", "Select a group target before continuing."
                 )
                 return
-            filter_id = self._filter_combo.currentData()
-            filter_mode_str = self._filter_mode_combo.currentData()
-            filter_mode = AssignmentFilterType(filter_mode_str) if filter_mode_str else AssignmentFilterType.NONE
-
-            # Validate: if filter is selected, mode must not be NONE
-            if filter_id and filter_mode == AssignmentFilterType.NONE:
-                QMessageBox.warning(
-                    self,
-                    "Missing filter mode",
-                    "Please select a filter mode (Include/Exclude) when using an assignment filter.",
-                )
-                return
 
             # Always use GroupAssignmentTarget with filter fields
             target = GroupAssignmentTarget(
                 group_id=group_id,
                 assignment_filter_id=filter_id,
-                assignment_filter_type=filter_mode
+                assignment_filter_type=filter_mode,
             )
         else:
-            target = AllDevicesAssignmentTarget()
+            target = AllDevicesAssignmentTarget(
+                assignment_filter_id=filter_id,
+                assignment_filter_type=filter_mode,
+            )
 
         intent_value = self._intent_combo.currentData()
         intent = AssignmentIntent(intent_value)
@@ -340,7 +353,9 @@ class AssignmentEditorDialog(QDialog):
                 intent_combo.addItem(intent.value, intent.value)
             intent_combo.setCurrentText(enum_text(assignment.intent) or "")
             intent_combo.currentIndexChanged.connect(
-                lambda _idx, row=row, widget=intent_combo: self._update_intent(row, widget)
+                lambda _idx, row=row, widget=intent_combo: self._update_intent(
+                    row, widget
+                )
             )
             self._table.setCellWidget(row, 1, intent_combo)
             self._combos.append(intent_combo)
@@ -361,11 +376,20 @@ class AssignmentEditorDialog(QDialog):
                 index = filter_combo.findData(current_filter_id)
                 if index >= 0:
                     filter_combo.setCurrentIndex(index)
-            # Disable for non-group targets
-            is_group_target = isinstance(assignment.target, GroupAssignmentTarget)
-            filter_combo.setEnabled(is_group_target)
+            # Enable for targets that support assignment filters (groups + all devices)
+            supports_filters = isinstance(
+                assignment.target,
+                (
+                    GroupAssignmentTarget,
+                    AllDevicesAssignmentTarget,
+                    AllLicensedUsersAssignmentTarget,
+                ),
+            )
+            filter_combo.setEnabled(supports_filters)
             filter_combo.currentIndexChanged.connect(
-                lambda _idx, row=row, widget=filter_combo: self._update_filter(row, widget)
+                lambda _idx, row=row, widget=filter_combo: self._update_filter(
+                    row, widget
+                )
             )
             self._table.setCellWidget(row, 2, filter_combo)
             self._combos.append(filter_combo)
@@ -376,16 +400,24 @@ class AssignmentEditorDialog(QDialog):
             filter_mode_combo.addItem("Include", AssignmentFilterType.INCLUDE.value)
             filter_mode_combo.addItem("Exclude", AssignmentFilterType.EXCLUDE.value)
             # Set current filter mode
-            current_filter_type = getattr(assignment.target, "assignment_filter_type", AssignmentFilterType.NONE)
-            filter_type_str = enum_text(current_filter_type) if current_filter_type else AssignmentFilterType.NONE.value
+            current_filter_type = getattr(
+                assignment.target, "assignment_filter_type", AssignmentFilterType.NONE
+            )
+            filter_type_str = (
+                enum_text(current_filter_type)
+                if current_filter_type
+                else AssignmentFilterType.NONE.value
+            )
             index = filter_mode_combo.findData(filter_type_str)
             if index >= 0:
                 filter_mode_combo.setCurrentIndex(index)
-            # Disable for non-group targets or when no filter selected
+            # Disable for targets that don't support filters or when no filter selected
             has_filter = current_filter_id is not None
-            filter_mode_combo.setEnabled(is_group_target and has_filter)
+            filter_mode_combo.setEnabled(supports_filters and has_filter)
             filter_mode_combo.currentIndexChanged.connect(
-                lambda _idx, row=row, widget=filter_mode_combo: self._update_filter_mode(row, widget)
+                lambda _idx,
+                row=row,
+                widget=filter_mode_combo: self._update_filter_mode(row, widget)
             )
             self._table.setCellWidget(row, 3, filter_mode_combo)
             self._combos.append(filter_mode_combo)
@@ -420,19 +452,25 @@ class AssignmentEditorDialog(QDialog):
         if row < 0 or row >= len(self._assignments):
             return
         assignment = self._assignments[row]
-        if not isinstance(assignment.target, GroupAssignmentTarget):
+        target = assignment.target
+        if not isinstance(
+            target,
+            (
+                GroupAssignmentTarget,
+                AllDevicesAssignmentTarget,
+                AllLicensedUsersAssignmentTarget,
+            ),
+        ):
             return
 
         new_filter_id = combo.currentData()
-        current_filter_id = assignment.target.assignment_filter_id
+        current_filter_id = getattr(target, "assignment_filter_id", None)
 
         if new_filter_id == current_filter_id:
             return
 
         # Update the target with new filter
-        new_target = assignment.target.model_copy(
-            update={"assignment_filter_id": new_filter_id}
-        )
+        new_target = target.model_copy(update={"assignment_filter_id": new_filter_id})
 
         # If filter is being cleared, also clear the filter mode
         if new_filter_id is None:
@@ -457,18 +495,35 @@ class AssignmentEditorDialog(QDialog):
         if row < 0 or row >= len(self._assignments):
             return
         assignment = self._assignments[row]
-        if not isinstance(assignment.target, GroupAssignmentTarget):
+        target = assignment.target
+        if not isinstance(
+            target,
+            (
+                GroupAssignmentTarget,
+                AllDevicesAssignmentTarget,
+                AllLicensedUsersAssignmentTarget,
+            ),
+        ):
             return
 
         new_mode_str = combo.currentData()
-        new_mode = AssignmentFilterType(new_mode_str) if new_mode_str else AssignmentFilterType.NONE
-        current_mode = assignment.target.assignment_filter_type or AssignmentFilterType.NONE
+        new_mode = (
+            AssignmentFilterType(new_mode_str)
+            if new_mode_str
+            else AssignmentFilterType.NONE
+        )
+        current_mode = (
+            getattr(target, "assignment_filter_type", None) or AssignmentFilterType.NONE
+        )
 
         if new_mode == current_mode:
             return
 
         # Validate: if filter is set, mode must not be NONE
-        if assignment.target.assignment_filter_id and new_mode == AssignmentFilterType.NONE:
+        if (
+            getattr(target, "assignment_filter_id", None)
+            and new_mode == AssignmentFilterType.NONE
+        ):
             QMessageBox.warning(
                 self,
                 "Invalid filter mode",
@@ -481,9 +536,7 @@ class AssignmentEditorDialog(QDialog):
             return
 
         # Update the target with new filter mode
-        new_target = assignment.target.model_copy(
-            update={"assignment_filter_type": new_mode}
-        )
+        new_target = target.model_copy(update={"assignment_filter_type": new_mode})
         self._assignments[row] = assignment.model_copy(update={"target": new_target})
 
     def _target_label(self, assignment: MobileAppAssignment) -> str:
@@ -491,6 +544,8 @@ class AssignmentEditorDialog(QDialog):
         group_id = getattr(target, "group_id", None)
         if isinstance(target, AllDevicesAssignmentTarget):
             return "All devices"
+        if isinstance(target, AllLicensedUsersAssignmentTarget):
+            return "All users"
         if group_id:
             group = self._group_lookup.get(group_id)
             if group:

@@ -59,7 +59,9 @@ class MobileAppRecord(SQLModel, table=True):
     display_name: str | None = Field(default=None, index=True)
     publisher: str | None = Field(default=None, index=True)
     platform: str | None = Field(default=None, index=True)
-    app_type: str | None = Field(default=None, index=True)  # Simplified type: Store, LOB, VPP, etc.
+    app_type: str | None = Field(
+        default=None, index=True
+    )  # Simplified type: Store, LOB, VPP, etc.
     publishing_state: str | None = Field(default=None, index=True)
     last_modified_date_time: datetime | None = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
@@ -97,7 +99,9 @@ class MobileAppAssignmentRecord(SQLModel, table=True):
     target_type: str | None = Field(default=None, index=True)
     intent: str | None = Field(default=None, index=True)
     filter_id: str | None = Field(default=None, index=True)
-    filter_type: str | None = Field(default=None, index=True)  # include, exclude, or none
+    filter_type: str | None = Field(
+        default=None, index=True
+    )  # include, exclude, or none
     updated_at: datetime = Field(default_factory=_utc_now, nullable=False)
     payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 

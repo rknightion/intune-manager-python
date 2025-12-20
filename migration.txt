@@ -71,6 +71,13 @@ You are permitted to consume migration-done.txt to see what previous work has be
 ---
 
 ## Current Migration Tasks
+### Session 2025-12-14
+- [x] Bug.15: Assignment editor filter dropdown disabled for existing assignments — NOTE: Root cause was `MobileAppAssignment.target` parsing/serialization losing derived target fields, so the editor treated existing `allDevicesAssignmentTarget` rows as unsupported and disabled the filter combo. Added a Pydantic `field_validator` to coerce `target` into `GroupAssignmentTarget`/`AllDevicesAssignmentTarget`/`AllLicensedUsersAssignmentTarget` (with safe fallback for older cached payloads), and updated `GraphBaseModel.to_graph()` to use `serialize_as_any=True` so `groupId` + filter fields serialize correctly. Assignment editor now also supports filters for “All users”. Files: `src/intune_manager/data/models/assignment.py`, `src/intune_manager/data/models/common.py`, `src/intune_manager/ui/assignments/assignment_editor.py`, `tests/data/test_domain_models.py`.
+- [x] TestInfra.1: Fix pytest import file mismatch for duplicate basenames — NOTE: Added pytest `--import-mode=importlib` to avoid collisions between `tests/services/test_sync_service.py` and `tests/ui/sync/test_sync_service.py` (`pyproject.toml`).
+- [x] Chore.1: Clear ruff lint blockers surfaced during validation — NOTE: Missing `AssignmentDiff` import, unused imports, add missing module logger, and small cleanup in `MainWindow` exception handler. Files: `src/intune_manager/ui/applications/widgets.py`, `src/intune_manager/ui/assignments/widgets.py`, `src/intune_manager/ui/components/recovery.py`, `src/intune_manager/ui/devices/models.py`, `src/intune_manager/ui/devices/widgets.py`, `src/intune_manager/ui/groups/widgets.py`, `src/intune_manager/ui/main/window.py`.
+- [!] Typecheck: `uv run intune-manager-typecheck` currently reports many pre-existing mypy issues across the UI/Graph layers (294 errors in 57 files). Not addressed in this session.
+- [!] Tests: `uv run intune-manager-tests` now collects successfully, but has multiple pre-existing failures/errors (auth/device/sync/UI). Not addressed in this session.
+
 ### Session 2025-10-26
 - [x] UX.1: Remove legacy alert banner + blocking progress dialog — NOTE: `src/intune_manager/ui/components/alerts.py` deleted, `src/intune_manager/ui/main/window.py` now routes banner calls to sticky toasts and dashboard refresh uses inline status instead of `ProgressDialog`.
 - [x] Data.1: Keep cache + status metrics scoped to the active tenant — NOTE: `src/intune_manager/ui/main/window.py` now passes `tenant_id` into `SyncService.refresh_all`, dashboard controller normalises string enum values, and compliance/assignment metrics no longer misreport stale caches.

@@ -103,15 +103,6 @@ def _format_datetime(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
-def enum_text(value: object | None) -> str | None:
-    """Return enum values as strings while tolerating plain values."""
-
-    if value is None:
-        return None
-    raw = getattr(value, "value", value)
-    return str(raw)
-
-
 class DeviceTableModel(QAbstractTableModel):
     """Table model projecting managed devices for the grid view."""
 

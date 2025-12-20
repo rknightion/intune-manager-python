@@ -44,7 +44,6 @@ from intune_manager.ui.components import (
     CommandAction,
     InlineStatusMessage,
     PageScaffold,
-    ProgressDialog,
     ToastLevel,
     UIContext,
     format_relative_timestamp,
@@ -53,7 +52,7 @@ from intune_manager.ui.components import (
 from intune_manager.utils import (
     CancellationError,
     CancellationTokenSource,
-    ProgressUpdate,
+    get_logger,
 )
 from intune_manager.utils.errors import ErrorSeverity, describe_exception
 
@@ -61,6 +60,9 @@ from .controller import DeviceController
 from .delegates import ComplianceBadgeDelegate, DeviceSummaryDelegate
 from .models import DeviceFilterProxyModel, DeviceTableModel, DeviceTimelineEntry
 from intune_manager.utils.enums import enum_text
+
+
+logger = get_logger(__name__)
 
 
 def _format_value(value: object | None) -> str:

@@ -59,7 +59,9 @@ class MobileApp(TimestampedResource):
     upload_state: int | None = Field(default=None, alias="uploadState")
     is_featured: bool | None = Field(default=None, alias="isFeatured")
     platform_type: MobileAppPlatform | None = Field(default=None, alias="platformType")
-    app_type: str | None = None  # Extracted from @odata.type (e.g., "Store", "LOB", "VPP")
+    app_type: str | None = (
+        None  # Extracted from @odata.type (e.g., "Store", "LOB", "VPP")
+    )
     is_hidden: bool | None = Field(default=None, alias="isHidden")
     dependent_app_count: int | None = Field(default=None, alias="dependentAppCount")
     superseded_app_count: int | None = Field(default=None, alias="supersededAppCount")
@@ -78,9 +80,7 @@ class MobileApp(TimestampedResource):
     large_icon: dict[str, Any] | None = Field(default=None, alias="largeIcon")
     is_assigned: bool | None = Field(default=None, alias="isAssigned")
     role_scope_tag_ids: list[str] | None = Field(default=None, alias="roleScopeTagIds")
-    superseding_app_count: int | None = Field(
-        default=None, alias="supersedingAppCount"
-    )
+    superseding_app_count: int | None = Field(default=None, alias="supersedingAppCount")
 
     # Priority 2: iOS VPP fields
     bundle_id: str | None = Field(default=None, alias="bundleId")
@@ -109,9 +109,7 @@ class MobileApp(TimestampedResource):
         default=None, alias="committedContentVersion"
     )
     file_name: str | None = Field(default=None, alias="fileName")
-    size: int | None = Field(
-        default=None, alias="size"
-    )  # bytes, read-only from Graph
+    size: int | None = Field(default=None, alias="size")  # bytes, read-only from Graph
 
     # Priority 4: Windows app fields
     applicable_architectures: str | None = Field(
@@ -211,7 +209,13 @@ class MobileApp(TimestampedResource):
             if data.get("platformType") is None:
                 if extension in {".pkg", ".dmg"}:
                     data["platformType"] = "macOS"
-                elif extension in {".msi", ".appx", ".appxbundle", ".xap", ".intunewin"}:
+                elif extension in {
+                    ".msi",
+                    ".appx",
+                    ".appxbundle",
+                    ".xap",
+                    ".intunewin",
+                }:
                     data["platformType"] = "windows"
                 elif extension == ".apk":
                     data["platformType"] = "android"
@@ -236,7 +240,10 @@ class MobileApp(TimestampedResource):
         if data.get("platformType") is None:
             app_type = data.get("app_type")
             compatible_platforms = PLATFORM_TYPE_COMPATIBILITY.get(app_type or "")
-            if isinstance(compatible_platforms, list) and len(compatible_platforms) == 1:
+            if (
+                isinstance(compatible_platforms, list)
+                and len(compatible_platforms) == 1
+            ):
                 data["platformType"] = compatible_platforms[0]
 
         return data

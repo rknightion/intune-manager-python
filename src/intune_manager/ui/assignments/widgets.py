@@ -65,7 +65,7 @@ from intune_manager.ui.components import (
     make_toolbar_button,
 )
 from intune_manager.utils import get_logger
-from intune_manager.utils.sanitize import sanitize_log_message, sanitize_search_text
+from intune_manager.utils.sanitize import sanitize_search_text
 
 from .bulk_wizard import BulkAssignmentPlan, BulkAssignmentWizard
 from .assignment_editor import AssignmentEditorDialog

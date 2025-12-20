@@ -50,7 +50,9 @@ APP_TYPE_MAPPING = {
     "managedMobileLobApp": "Managed LOB",
 }
 
-_APP_TYPE_MAPPING_LOWER = {key.lower(): value for key, value in APP_TYPE_MAPPING.items()}
+_APP_TYPE_MAPPING_LOWER = {
+    key.lower(): value for key, value in APP_TYPE_MAPPING.items()
+}
 
 # Platform compatibility: which app types are valid for which platforms
 # Key: app type, Value: list of compatible platforms

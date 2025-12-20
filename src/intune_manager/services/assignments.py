@@ -195,7 +195,9 @@ class AssignmentService:
             requests.append(mobile_app_assignment_delete_request(app_id, assignment.id))
 
         if not requests:
-            logger.debug("Assignment diff contained no actionable requests", app_id=app_id)
+            logger.debug(
+                "Assignment diff contained no actionable requests", app_id=app_id
+            )
             return
 
         await self._execute_batch_with_retry(
@@ -228,9 +230,11 @@ class AssignmentService:
             if diff.is_noop:
                 continue
             payload_assignments = [
-                _normalized_assignment_payload(assignment) for assignment in diff.to_create
+                _normalized_assignment_payload(assignment)
+                for assignment in diff.to_create
             ] + [
-                _normalized_assignment_payload(update.desired) for update in diff.to_update
+                _normalized_assignment_payload(update.desired)
+                for update in diff.to_update
             ]
             if payload_assignments:
                 req = mobile_app_assign_request(app_id, payload_assignments)
@@ -254,7 +258,7 @@ class AssignmentService:
             chunk = requests[idx : idx + 20]
             # Assign stable IDs for mapping responses to apps
             for offset, req in enumerate(chunk, start=1):
-                req_id = f"{idx+offset}"
+                req_id = f"{idx + offset}"
                 req.request_id = req_id
                 app_id = _app_id_from_request(req)
                 if app_id:
@@ -276,14 +280,21 @@ class AssignmentService:
                     app_id = app_by_request.get(req_id, "unknown app")
                     body = response.get("body")
                     message = f"{app_id} failed ({status}): {body or response}"
-                    logger.error("Assignment batch item failed", app_id=app_id, status=status, body=body)
+                    logger.error(
+                        "Assignment batch item failed",
+                        app_id=app_id,
+                        status=status,
+                        body=body,
+                    )
                     errors.append(message)
             idx += 20
 
         if errors:
             logger.error("Assignment batch failed", errors=errors)
             raise GraphAPIError(
-                message="; ".join(errors or last_error_messages or ["Batch assignment failed"]),
+                message="; ".join(
+                    errors or last_error_messages or ["Batch assignment failed"]
+                ),
                 category=GraphErrorCategory.UNKNOWN,
             )
 
@@ -318,7 +329,9 @@ class AssignmentService:
                 cancellation_token=cancellation_token,
             )
 
-            raw_responses = result.get("responses", []) if isinstance(result, dict) else []
+            raw_responses = (
+                result.get("responses", []) if isinstance(result, dict) else []
+            )
             responses = {resp.get("id"): resp for resp in raw_responses}
             retry: list[GraphRequest] = []
             retry_after_seconds = 0.0

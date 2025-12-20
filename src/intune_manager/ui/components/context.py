@@ -31,8 +31,7 @@ class ShowBannerCallable(Protocol):
         *,
         action_label: str | None = ...,
         on_action: Callable[[], None] | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 @dataclass(slots=True)

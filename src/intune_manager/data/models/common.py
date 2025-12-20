@@ -23,7 +23,12 @@ class GraphBaseModel(BaseModel):
 
     def to_graph(self) -> dict[str, Any]:
         """Serialize to a Graph-friendly payload."""
-        return self.model_dump(mode='json', by_alias=True, exclude_none=True)
+        return self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+            serialize_as_any=True,
+        )
 
 
 class GraphResource(GraphBaseModel):

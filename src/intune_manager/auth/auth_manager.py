@@ -250,7 +250,11 @@ class AuthManager:
         expires_on = result.get("expires_on")
         if expires_on is not None:
             # expires_on is an absolute Unix timestamp
-            expiry = int(expires_on) if isinstance(expires_on, (int, str)) else int(time.time()) + 3600
+            expiry = (
+                int(expires_on)
+                if isinstance(expires_on, (int, str))
+                else int(time.time()) + 3600
+            )
         else:
             # Fall back to expires_in (relative seconds from now)
             expires_in = result.get("expires_in")

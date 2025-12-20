@@ -39,9 +39,7 @@ def format_file_size(bytes_value: int | None) -> str:
     return f"{size:.1f} {units[unit_index]}"
 
 
-def format_license_count(
-    used: int | None, total: int | None
-) -> str:
+def format_license_count(used: int | None, total: int | None) -> str:
     """Format license usage as 'X / Y (Z%)' or '—'.
 
     Args:

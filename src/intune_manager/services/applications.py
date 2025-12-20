@@ -110,7 +110,11 @@ class ApplicationService:
             or app.app_type is None
             for app in cached
         )
-        if not force and not self.is_cache_stale(tenant_id=tenant_id) and not needs_metadata_refresh:
+        if (
+            not force
+            and not self.is_cache_stale(tenant_id=tenant_id)
+            and not needs_metadata_refresh
+        ):
             logger.info(
                 "Applications returning cached data",
                 tenant_id=tenant_id,
@@ -350,7 +354,10 @@ class ApplicationService:
                 "NotApplicableDeviceCount",
                 "NotApplicableDevices",
             ],
-            "notInstalledDeviceCount": ["NotInstalledDeviceCount", "NotInstalledDevices"],
+            "notInstalledDeviceCount": [
+                "NotInstalledDeviceCount",
+                "NotInstalledDevices",
+            ],
             "pendingInstallDeviceCount": [
                 "PendingInstallDeviceCount",
                 "PendingDevices",
@@ -388,7 +395,9 @@ class ApplicationService:
         return "".join(ch for ch in name.lower() if ch.isalnum())
 
     def _match_field(self, available: list[str], aliases: list[str]) -> str | None:
-        normalised = {self._normalize_field(field): field for field in available if field}
+        normalised = {
+            self._normalize_field(field): field for field in available if field
+        }
         for alias in aliases:
             key = self._normalize_field(alias)
             if key in normalised:
@@ -635,7 +644,11 @@ class ApplicationService:
     def _hydrate_missing_metadata(self, app: MobileApp) -> MobileApp:
         """Best-effort platform/type inference when Graph omits @odata.type."""
 
-        if app.platform_type and app.platform_type is not MobileAppPlatform.UNKNOWN and app.app_type:
+        if (
+            app.platform_type
+            and app.platform_type is not MobileAppPlatform.UNKNOWN
+            and app.app_type
+        ):
             return app
 
         inferred_platform: str | None = None
@@ -672,7 +685,10 @@ class ApplicationService:
             and app.app_type
         ):
             compatible_platforms = PLATFORM_TYPE_COMPATIBILITY.get(app.app_type)
-            if isinstance(compatible_platforms, list) and len(compatible_platforms) == 1:
+            if (
+                isinstance(compatible_platforms, list)
+                and len(compatible_platforms) == 1
+            ):
                 updates["platform_type"] = compatible_platforms[0]
 
         return app.model_copy(update=updates) if updates else app

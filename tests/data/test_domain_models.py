@@ -12,6 +12,7 @@ from intune_manager.data import (
     AssignmentFilterPlatform,
     AssignmentIntent,
     AssignmentSettings,
+    AssignmentFilterType,
     ConfigurationPlatform,
     ConfigurationProfile,
     DirectoryGroup,
@@ -21,6 +22,7 @@ from intune_manager.data import (
     MobileAppPlatform,
 )
 from intune_manager.data.validation import GraphResponseValidator
+from intune_manager.data.models.assignment import GroupAssignmentTarget
 
 
 def test_managed_device_round_trip_serialization() -> None:
@@ -55,6 +57,57 @@ def test_assignment_models_include_graph_aliases() -> None:
     assert payload["target"]["@odata.type"] == target.odata_type
     assert payload["intent"] == "required"
     assert "startDateTime" in payload["settings"]
+
+
+def test_mobile_app_assignment_parses_group_target_and_preserves_filter_fields() -> None:
+    payload = {
+        "id": "assignment-1",
+        "intent": "required",
+        "target": {
+            "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+            "groupId": "group-1",
+            "deviceAndAppManagementAssignmentFilterId": "filter-1",
+            "deviceAndAppManagementAssignmentFilterType": "include",
+        },
+    }
+    assignment = MobileAppAssignment.from_graph(payload)
+
+    assert isinstance(assignment.target, GroupAssignmentTarget)
+    assert assignment.target.group_id == "group-1"
+    assert assignment.target.assignment_filter_id == "filter-1"
+    assert assignment.target.assignment_filter_type == AssignmentFilterType.INCLUDE.value
+
+    serialized = assignment.to_graph()
+    assert serialized["target"]["groupId"] == "group-1"
+    assert serialized["target"]["deviceAndAppManagementAssignmentFilterId"] == "filter-1"
+    assert (
+        serialized["target"]["deviceAndAppManagementAssignmentFilterType"]
+        == AssignmentFilterType.INCLUDE.value
+    )
+
+
+def test_mobile_app_assignment_parses_all_devices_target_with_filter() -> None:
+    payload = {
+        "id": "assignment-2",
+        "intent": "available",
+        "target": {
+            "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget",
+            "deviceAndAppManagementAssignmentFilterId": "filter-2",
+            "deviceAndAppManagementAssignmentFilterType": "exclude",
+        },
+    }
+    assignment = MobileAppAssignment.from_graph(payload)
+
+    assert isinstance(assignment.target, AllDevicesAssignmentTarget)
+    assert assignment.target.assignment_filter_id == "filter-2"
+    assert assignment.target.assignment_filter_type == AssignmentFilterType.EXCLUDE.value
+
+    serialized = assignment.to_graph()
+    assert serialized["target"]["deviceAndAppManagementAssignmentFilterId"] == "filter-2"
+    assert (
+        serialized["target"]["deviceAndAppManagementAssignmentFilterType"]
+        == AssignmentFilterType.EXCLUDE.value
+    )
 
 
 def test_model_validation_errors_surface_fields() -> None:
