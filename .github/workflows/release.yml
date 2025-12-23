@@ -158,7 +158,7 @@ jobs:
       # Cache clcache for Windows (stable key per platform, clcache handles source changes internally)
       - name: Cache clcache (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/clcache
           key: clcache-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('pyproject.toml') }}
@@ -179,7 +179,7 @@ jobs:
 
       # Cache Nuitka build directory (stable key per platform, invalidates only when dependencies/config change)
       - name: Cache Nuitka build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             src/intune_manager.build
