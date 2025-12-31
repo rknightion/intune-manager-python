@@ -336,7 +336,7 @@ jobs:
       # Upload compilation report for debugging (short retention since it's for troubleshooting)
       - name: Upload compilation report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: compilation-report-${{ matrix.os }}-${{ matrix.arch }}
           path: compilation-report.xml
@@ -371,7 +371,7 @@ jobs:
 
       # Upload as workflow artifact for quick download during build (kept for 90 days)
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: IntuneManager-${{ steps.version.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ matrix.asset_name }}
