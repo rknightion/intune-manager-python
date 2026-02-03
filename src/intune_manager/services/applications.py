@@ -14,6 +14,7 @@ from intune_manager.data import (
     MobileAppAssignment,
     MobileAppRepository,
 )
+from intune_manager.data.repositories import CacheStatus
 from intune_manager.data.models.application import MobileAppPlatform
 from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph import GraphAPIError, GraphErrorCategory
@@ -83,6 +84,10 @@ class ApplicationService:
 
     def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
         return self._repository.last_refresh(tenant_id=tenant_id)
+
+    def cache_status(self, tenant_id: str | None = None) -> CacheStatus:
+        """Return cache status differentiating never-loaded from expired."""
+        return self._repository.cache_status(tenant_id=tenant_id)
 
     # ----------------------------------------------------------------- Actions
 

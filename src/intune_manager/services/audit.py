@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from intune_manager.data import AuditEvent, AuditEventRepository
+from intune_manager.data.repositories import CacheStatus
 from intune_manager.data.validation import GraphResponseValidator
 from intune_manager.graph.client import GraphClientFactory
 from intune_manager.graph.errors import RateLimitError
@@ -47,6 +48,10 @@ class AuditLogService:
 
     def last_refresh(self, tenant_id: str | None = None) -> datetime | None:
         return self._repository.last_refresh(tenant_id=tenant_id)
+
+    def cache_status(self, tenant_id: str | None = None) -> CacheStatus:
+        """Return cache status differentiating never-loaded from expired."""
+        return self._repository.cache_status(tenant_id=tenant_id)
 
     async def refresh(
         self,
