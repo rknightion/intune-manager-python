@@ -163,7 +163,7 @@ jobs:
 
       # Cache Nuitka build directory (stable key per platform, invalidates only when dependencies/config change)
       - name: Cache Nuitka build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             intune_manager.build
