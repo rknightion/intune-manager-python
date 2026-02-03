@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Generic, Sequence, TypeVar
 
 from sqlalchemy import delete, func
@@ -17,6 +18,19 @@ RecordT = TypeVar("RecordT", bound=SQLModel)
 logger = get_logger(__name__)
 
 DEFAULT_SCOPE = "__global__"
+
+
+class CacheStatus(str, Enum):
+    """Represents the status of a cache entry.
+
+    - NEVER_LOADED: No cache entry exists (first startup, never synced)
+    - FRESH: Cache entry exists and TTL has not expired
+    - EXPIRED: Cache entry exists but TTL has expired
+    """
+
+    NEVER_LOADED = "never_loaded"
+    FRESH = "fresh"
+    EXPIRED = "expired"
 
 
 def _utc_now() -> datetime:
@@ -140,6 +154,28 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
         assert expires_at is not None  # guarded by earlier check
         return current >= expires_at
 
+    def cache_status(
+        self, *, tenant_id: str | None = None, now: datetime | None = None
+    ) -> CacheStatus:
+        """Return the cache status differentiating never-loaded from expired.
+
+        Returns:
+            CacheStatus.NEVER_LOADED: No cache entry exists (first startup)
+            CacheStatus.FRESH: Cache entry exists and TTL has not expired
+            CacheStatus.EXPIRED: Cache entry exists but TTL has expired
+        """
+        entry = self.cache_entry(tenant_id=tenant_id)
+        if entry is None or entry.last_refresh is None:
+            return CacheStatus.NEVER_LOADED
+        if entry.expires_at is None:
+            return CacheStatus.FRESH
+        current = self._as_utc(now if now is not None else _utc_now())
+        expires_at = self._as_utc(entry.expires_at)
+        assert expires_at is not None  # guarded by earlier check
+        if current >= expires_at:
+            return CacheStatus.EXPIRED
+        return CacheStatus.FRESH
+
     # --------------------------------------------------------------- Internals
 
     def _replace_records(
@@ -209,4 +245,4 @@ class BaseCacheRepository(Generic[DomainT, RecordT]):
         raise NotImplementedError
 
 
-__all__ = ["BaseCacheRepository"]
+__all__ = ["BaseCacheRepository", "CacheStatus"]
