@@ -221,6 +221,24 @@ class ApplicationDetailPane(QWidget):
         self._tab_widget.addTab(self._install_tab, "Install status")
 
         self._current_install_summary: dict[str, object] | None = None
+        self._on_install_tab_selected: Callable[[], None] | None = None
+        self._current_app_id: str | None = None
+
+        # Connect tab change signal to handle auto-fetch
+        self._tab_widget.currentChanged.connect(self._handle_tab_changed)
+
+    # ----------------------------------------------------------------- Tab callback
+
+    def set_install_tab_callback(self, callback: Callable[[], None] | None) -> None:
+        """Set callback to be invoked when Install status tab is selected."""
+        self._on_install_tab_selected = callback
+
+    def _handle_tab_changed(self, index: int) -> None:
+        """Handle tab selection changes."""
+        # Index 2 is the "Install status" tab
+        if index == 2 and self._current_install_summary is None:
+            if self._on_install_tab_selected is not None:
+                self._on_install_tab_selected()
 
     # ----------------------------------------------------------------- Metadata helpers
 
@@ -390,7 +408,10 @@ class ApplicationDetailPane(QWidget):
             self._clear_metadata_fields()
             self._assignments_list.clear()
             self.update_install_summary(None)
+            self._current_app_id = None
             return
+
+        self._current_app_id = app.id
 
         self._title_label.setText(app.display_name)
         subtitle_parts = [app.owner or "", app.publisher or ""]
@@ -724,6 +745,7 @@ class ApplicationsWidget(PageScaffold):
         splitter.addWidget(table_container)
 
         self._detail_pane = ApplicationDetailPane(parent=splitter)
+        self._detail_pane.set_install_tab_callback(self._auto_fetch_install_summary)
         splitter.addWidget(self._detail_pane)
 
         self.body_layout.addWidget(splitter, stretch=1)
@@ -1000,6 +1022,24 @@ class ApplicationsWidget(PageScaffold):
                 f"Install summary failed: {exc}",
                 level=ToastLevel.ERROR,
             )
+
+    def _auto_fetch_install_summary(self) -> None:
+        """Auto-fetch install summary when Install status tab is selected."""
+        app = self._selected_app
+        if app is None or not app.id:
+            return
+        if self._services.applications is None:
+            return
+
+        # Check in-memory cache first
+        cached = self._install_summaries.get(app.id)
+        if cached:
+            self._detail_pane.update_install_summary(cached)
+            return
+
+        # Fetch from service
+        self._context.set_busy("Fetching install summary…", blocking=False)
+        self._context.run_async(self._fetch_install_summary_async(app.id, force=False))
 
     async def _background_fetch_icons_async(
         self, apps: list[MobileApp], *, tenant_id: str | None = None
