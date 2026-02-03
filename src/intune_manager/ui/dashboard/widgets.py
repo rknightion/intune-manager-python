@@ -43,6 +43,7 @@ from intune_manager.ui.components import (
     UIContext,
     format_relative_timestamp,
 )
+from intune_manager.data.repositories import CacheStatus
 from intune_manager.ui.dashboard.controller import (
     DashboardController,
     DashboardSnapshot,
@@ -116,7 +117,17 @@ class MetricCard(QFrame):
             self.status_label.setToolTip(metric.warning)
             return
 
-        if metric.stale:
+        # Use cache_status for richer state differentiation
+        if metric.cache_status == CacheStatus.NEVER_LOADED:
+            base_text = "Not yet loaded"
+            color = "#6b7280"  # Neutral gray
+            tooltip = "Data has not been synced yet. Refresh to load."
+            self.status_label.setText(base_text)
+            self.status_label.setStyleSheet(f"color: {color}; background: transparent;")
+            self.status_label.setToolTip(tooltip)
+            return
+
+        if metric.cache_status == CacheStatus.EXPIRED or metric.stale:
             base_text = "Refresh recommended"
             color = "#a84d0e"  # Warning orange, darkened for accessibility
         else:

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from intune_manager.config import DEFAULT_GRAPH_SCOPES, SettingsManager
 from intune_manager.auth import AuthManager, auth_manager
+from intune_manager.data.repositories import CacheStatus
 from intune_manager.services import ServiceRegistry
 from intune_manager.utils import CancellationToken
 
@@ -20,6 +21,7 @@ class ResourceMetric:
     available: bool
     last_refresh: datetime | None = None
     warning: str | None = None
+    cache_status: CacheStatus | None = None
 
 
 @dataclass(slots=True)
@@ -105,7 +107,17 @@ class DashboardController:
                 else:
                     items = service.list_cached(tenant_id=tenant_id)
                     count = len(items)
-                stale = service.is_cache_stale(tenant_id=tenant_id)
+
+                # Use cache_status() if available for richer state differentiation
+                status: CacheStatus | None = None
+                stale: bool | None = None
+                if hasattr(service, "cache_status"):
+                    status = service.cache_status(tenant_id=tenant_id)
+                    # Stale means expired, not never-loaded
+                    stale = status == CacheStatus.EXPIRED
+                else:
+                    stale = service.is_cache_stale(tenant_id=tenant_id)
+
                 last_refresh = (
                     service.last_refresh(tenant_id=tenant_id)
                     if hasattr(service, "last_refresh")
@@ -119,9 +131,14 @@ class DashboardController:
                         stale=stale,
                         available=True,
                         last_refresh=last_refresh,
+                        cache_status=status,
                     ),
                 )
-                if stale:
+                # Only add warning for EXPIRED status, not NEVER_LOADED
+                if status == CacheStatus.EXPIRED:
+                    snapshot.warnings.append(f"{label} cache is stale")
+                elif stale and status is None:
+                    # Fallback for services without cache_status
                     snapshot.warnings.append(f"{label} cache is stale")
             except Exception as exc:  # noqa: BLE001
                 warning = f"{label} unavailable: {exc}"
